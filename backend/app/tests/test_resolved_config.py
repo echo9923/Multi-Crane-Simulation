@@ -108,14 +108,15 @@ def test_hash_excludes_key_masked_and_full_api_key() -> None:
     )
 
 
-def test_manual_layout_preserves_crane_input() -> None:
+def test_manual_layout_preserves_input_and_generates_resolved_cranes() -> None:
     scenario = load_fixture("scenario_valid.yaml")
     scenario["layout"]["mode"] = "manual"
+    scenario["layout"]["num_cranes"] = 1
     scenario["cranes"] = [
         {
             "crane_id": "C1",
             "model_id": "generic_flat_top_55m",
-            "base": [0, 0, 0],
+            "base": [-60, -60, 0],
             "mast_height_m": 45,
             "theta_init_deg": 20,
             "slew": {"mode": "continuous"},
@@ -126,16 +127,18 @@ def test_manual_layout_preserves_crane_input() -> None:
 
     assert resolved.layout.mode == "manual"
     assert resolved.layout.manual_cranes[0]["crane_id"] == "C1"
-    assert resolved.layout.resolved_cranes is None
+    assert resolved.layout.resolved_cranes[0]["crane_id"] == "C1"
+    assert resolved.layout.layout_diagnostics["mode"] == "manual"
 
 
-def test_auto_layout_does_not_generate_cranes() -> None:
+def test_auto_layout_generates_resolved_cranes() -> None:
     resolved = _resolved_from_raw()
 
     assert resolved.layout.mode == "auto"
     assert resolved.layout.manual_cranes is None
-    assert resolved.layout.resolved_cranes is None
+    assert len(resolved.layout.resolved_cranes) == 4
     assert resolved.layout.auto_params["num_cranes"] == 4
+    assert resolved.layout.layout_diagnostics["mode"] == "auto"
 
 
 def test_defaults_applied_tracks_derived_seeds() -> None:

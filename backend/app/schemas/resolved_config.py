@@ -30,6 +30,8 @@ class ResolvedLayoutConfig(ResolvedBaseModel):
     auto_params: Optional[Dict[str, Any]] = None
     manual_cranes: Optional[List[Dict[str, Any]]] = None
     resolved_cranes: Optional[List[Dict[str, Any]]] = None
+    layout_diagnostics: Optional[Dict[str, Any]] = None
+    model_library_snapshot: Optional[Dict[str, Any]] = None
 
 
 class ResolvedTaskConfig(ResolvedBaseModel):

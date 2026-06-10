@@ -19,6 +19,13 @@ from backend.app.schemas.resolved_config import (
     ResolvedSeeds,
     ResolvedTaskConfig,
 )
+from backend.app.sim.crane_model import build_crane_model_library
+from backend.app.sim.auto_layout import generate_auto_layout
+from backend.app.sim.layout import (
+    build_crane_configs,
+    build_layout_diagnostics,
+    validate_manual_layout,
+)
 
 
 ConfigInput = Union[ScenarioConfig, ExperimentConfig, DatasetConfig, Dict[str, Any]]
@@ -44,7 +51,7 @@ def resolve_config(
     experiment_payload = _safe_dump(experiment_config)
     dataset_payload = _safe_dump(dataset_config) if dataset_config is not None else None
 
-    layout = _resolve_layout(scenario_config)
+    layout = _resolve_layout(scenario_config, seeds.layout)
     resolved = ResolvedConfig(
         schema_version=scenario_config.schema_version,
         scenario=scenario_payload,
@@ -136,20 +143,47 @@ def _stable_seed(base_seed: int, salt: int) -> int:
     return (base_seed * 1_000_003 + salt) % (2**31 - 1)
 
 
-def _resolve_layout(scenario_config: ScenarioConfig) -> ResolvedLayoutConfig:
+def _resolve_layout(scenario_config: ScenarioConfig, layout_seed: int) -> ResolvedLayoutConfig:
     layout_payload = _safe_dump(scenario_config.layout)
+    model_library = build_crane_model_library(scenario_config.crane_models)
+    model_snapshot = {
+        model_id: model.model_dump(mode="json")
+        for model_id, model in sorted(model_library.items())
+    }
     if scenario_config.layout.mode is LayoutMode.MANUAL:
+        validation = validate_manual_layout(scenario_config, model_library)
+        crane_configs = build_crane_configs(
+            validation.cranes,
+            model_library,
+            scenario_config,
+            source="manual",
+        )
+        diagnostics = build_layout_diagnostics(
+            crane_configs,
+            mode=LayoutMode.MANUAL.value,
+            warnings=validation.diagnostics.warnings,
+            quality_score=None,
+        )
         return ResolvedLayoutConfig(
             mode=LayoutMode.MANUAL.value,
             auto_params=None,
             manual_cranes=[_safe_dump(crane) for crane in scenario_config.cranes or []],
-            resolved_cranes=None,
+            resolved_cranes=[crane.model_dump(mode="json") for crane in crane_configs],
+            layout_diagnostics=diagnostics.model_dump(mode="json"),
+            model_library_snapshot=model_snapshot,
         )
+    crane_configs, diagnostics = generate_auto_layout(
+        scenario_config,
+        model_library,
+        seed=layout_seed,
+    )
     return ResolvedLayoutConfig(
         mode=LayoutMode.AUTO.value,
         auto_params=layout_payload,
         manual_cranes=None,
-        resolved_cranes=None,
+        resolved_cranes=[crane.model_dump(mode="json") for crane in crane_configs],
+        layout_diagnostics=diagnostics.model_dump(mode="json"),
+        model_library_snapshot=model_snapshot,
     )
 
 
