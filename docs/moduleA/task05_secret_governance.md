@@ -4,6 +4,8 @@
 
 定义并实现模块 A 对 LLM provider 配置和密钥的治理规则。系统必须支持 DeepSeek、MiniMax、mock、replay 四类 provider 配置，同时保证真实 API key 不会被写入 resolved config、日志、metadata、dataset summary 或前端/API payload。
 
+本任务不重新定义 provider schema；provider 字段结构由 Task 01 的 `LLMConfig` 定义，YAML 来源和 override 由 Task 02 处理。Task 05 只负责真实密钥解析、启动前 key 校验、脱敏和持久化安全摘要。
+
 权威来源：`群塔LLM仿真系统开发方案_v0.4_完整版.md` 中 `0.5.15`、`0.8.12` 和 `模块 A`。
 
 ## 任务范围
@@ -26,6 +28,7 @@
 - replay command 读取
 - LLM retry
 - structured output validation
+- provider/model/temperature 等普通字段的基础 schema 校验
 
 这些行为由模块 G 和 M2/M3 相关任务实现。
 
@@ -94,6 +97,26 @@ authorization
 
 如果代码中需要把真实 key 传递给模块 G，必须通过运行时 secret container 或 provider runtime config 传递，不写入任何持久化文件。
 
+Task 05 输出分为两类，必须隔离：
+
+```text
+ProviderRuntimeSecret:
+  full_api_key: runtime-only，不落盘，不进入 hash，不进入日志
+
+PersistedProviderSummary:
+  provider
+  model
+  base_url
+  temperature
+  timeout_s
+  max_retries
+  key_source
+  key_env_name
+  key_masked
+```
+
+`PersistedProviderSummary` 可被 Task 03 写入 `ResolvedConfig`，也可被 Task 04 写入 `run_metadata.json`；`ProviderRuntimeSecret` 只能在运行时传给模块 G 的 provider client。
+
 ## 输入与输出
 
 输入：
@@ -108,6 +131,7 @@ authorization
 - runtime-only secret 值
 - persisted-safe provider config
 - `key_source`
+- `key_env_name`
 - `key_masked`
 - 密钥诊断信息
 
@@ -136,6 +160,8 @@ authorization
 - logs、dataset summary、frontend/API payload 不得包含完整 key。
 - `api_key` 和 `api_key_env` 同时存在时，使用 `api_key`，并落盘 `key_source=inline`。
 - 使用环境变量时，落盘可记录 `key_env_name`，但不得记录环境变量值。
+- `key_masked` 不参与 `resolved_config_hash`，hash 规则由 Task 03 执行。
+- Task 01 的 `api_key` 字段应使用安全字段类型；Task 05 负责确保任何持久化 dump 都先经过安全摘要转换。
 
 ## 错误处理
 
@@ -143,6 +169,7 @@ authorization
 - `llm.enabled=true` 且 provider 为 `minimax`，但无法解析 key：startup error。
 - demo config 中出现疑似真实 inline key：配置安全 error。
 - 即将落盘内容包含完整 key：阻止写入并返回配置安全 error。
+- Task 05 的密钥错误属于 startup error，必须阻止 Task 03/Task 04 继续生成可启动运行产物。
 
 错误信息应说明：
 
@@ -163,6 +190,7 @@ authorization
 - `minimax` 缺 key 时失败。
 - `key_masked` 不等于原始 key。
 - `resolved_config_hash` 不因 `key_masked` 改变而改变。
+- `ProviderRuntimeSecret.full_api_key` 不会出现在 `ResolvedConfig`、`run_metadata.json`、日志或错误对象中。
 - `resolved_config.yaml` 和 `run_metadata.json` 中检索不到完整 key。
 
 ## 验收标准

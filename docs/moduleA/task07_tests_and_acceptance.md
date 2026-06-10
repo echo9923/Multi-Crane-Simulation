@@ -153,20 +153,20 @@ pytest backend/app/tests -k "config or secret or workspace"
 文档创建完成后运行：
 
 ```bash
-find docs/moduleA -maxdepth 2 -name "README.md" -print | sort
+find docs/moduleA -maxdepth 1 -name "*.md" -print | sort
 ```
 
 期望看到：
 
 ```text
 docs/moduleA/README.md
-docs/moduleA/task01_config_schema/README.md
-docs/moduleA/task02_config_loading/README.md
-docs/moduleA/task03_resolved_config/README.md
-docs/moduleA/task04_run_workspace/README.md
-docs/moduleA/task05_secret_governance/README.md
-docs/moduleA/task06_validation_errors/README.md
-docs/moduleA/task07_tests_and_acceptance/README.md
+docs/moduleA/task01_config_schema.md
+docs/moduleA/task02_config_loading.md
+docs/moduleA/task03_resolved_config.md
+docs/moduleA/task04_run_workspace.md
+docs/moduleA/task05_secret_governance.md
+docs/moduleA/task06_validation_errors.md
+docs/moduleA/task07_tests_and_acceptance.md
 ```
 
 检查无未完成标记：

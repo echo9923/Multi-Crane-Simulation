@@ -40,13 +40,13 @@
 
 | 顺序 | 文档 | 目标 |
 |---|---|---|
-| 1 | [task01_config_schema](task01_config_schema/README.md) | 定义配置 Pydantic schema、枚举、对象层级和校验边界 |
-| 2 | [task02_config_loading](task02_config_loading/README.md) | 定义 YAML 加载、单文件入口拆分、参数覆盖和安全路径处理 |
-| 3 | [task03_resolved_config](task03_resolved_config/README.md) | 定义 `ResolvedConfig`、默认值追踪和 `resolved_config_hash` |
-| 4 | [task04_run_workspace](task04_run_workspace/README.md) | 定义 run 目录结构、resolved config 落盘和运行元数据 |
-| 5 | [task05_secret_governance](task05_secret_governance/README.md) | 定义 provider 配置、密钥优先级、脱敏和密钥泄漏防护 |
-| 6 | [task06_validation_errors](task06_validation_errors/README.md) | 定义配置启动错误、错误对象和 no-startup 规则 |
-| 7 | [task07_tests_and_acceptance](task07_tests_and_acceptance/README.md) | 定义模块 A 的测试清单与验收标准 |
+| 1 | [task01_config_schema](task01_config_schema.md) | 定义配置 Pydantic schema、枚举、对象层级和校验边界 |
+| 2 | [task02_config_loading](task02_config_loading.md) | 定义 YAML 加载、单文件入口拆分、参数覆盖和安全路径处理 |
+| 3 | [task03_resolved_config](task03_resolved_config.md) | 定义 `ResolvedConfig`、默认值追踪和 `resolved_config_hash` |
+| 4 | [task04_run_workspace](task04_run_workspace.md) | 定义 run 目录结构、resolved config 落盘和运行元数据 |
+| 5 | [task05_secret_governance](task05_secret_governance.md) | 定义 provider 配置、密钥优先级、脱敏和密钥泄漏防护 |
+| 6 | [task06_validation_errors](task06_validation_errors.md) | 定义配置启动错误、错误对象和 no-startup 规则 |
+| 7 | [task07_tests_and_acceptance](task07_tests_and_acceptance.md) | 定义模块 A 的测试清单与验收标准 |
 
 ## 全局实现约束
 
