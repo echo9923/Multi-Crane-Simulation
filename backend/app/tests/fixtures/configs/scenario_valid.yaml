@@ -1,0 +1,151 @@
+schema_version: "1.0"
+scenario_id: "site_001"
+seed: 20260101
+
+site:
+  coordinate_system: "ENU"
+  boundary:
+    x_min: -100
+    x_max: 100
+    y_min: -100
+    y_max: 100
+    z_min: 0
+    z_max: 80
+  forbidden_zones:
+    - zone_id: "building_core"
+      type: "box"
+      center: [0, 0, 20]
+      size: [20, 20, 40]
+  material_zones:
+    - zone_id: "rebar_yard"
+      type: "polygon"
+      z_range_m: [0.0, 2.0]
+      load_types: ["rebar_bundle", "steel_beam"]
+      points:
+        - [-80, -80]
+        - [-40, -80]
+        - [-40, -40]
+        - [-80, -40]
+  work_zones:
+    - zone_id: "floor_10_workface"
+      type: "box"
+      center: [20, 20, 30]
+      size: [30, 30, 4]
+      z_range_m: [28, 32]
+      accepted_load_types: ["rebar_bundle", "formwork", "concrete_bucket"]
+  forbidden_zone_policy:
+    mode: "task_only"
+    record_violation: true
+
+load_types:
+  rebar_bundle:
+    display_name: "Rebar bundle"
+    weight_range_t: [1.0, 3.0]
+    size_m: [6.0, 1.0, 1.0]
+    shape: "box_long"
+  formwork:
+    display_name: "Formwork"
+    weight_range_t: [0.5, 2.0]
+    size_m: [4.0, 2.0, 0.3]
+    shape: "flat_box"
+  concrete_bucket:
+    display_name: "Concrete bucket"
+    weight_range_t: [1.5, 4.0]
+    size_m: [1.5, 1.5, 2.0]
+    shape: "cylinder"
+  steel_beam:
+    display_name: "Steel beam"
+    weight_range_t: [2.0, 5.0]
+    size_m: [8.0, 0.5, 0.5]
+    shape: "beam"
+
+crane_models:
+  - model_id: "generic_flat_top_55m"
+    jib_length_m: 55
+    counter_jib_length_m: 15
+    mast_height_range_m: [40, 65]
+    max_load_t: 6
+    max_load_radius_m: 15
+    tip_load_t: 1.5
+    rated_moment_t_m: 90
+    slew_speed_max_deg_s: 0.8
+    slew_acc_max_deg_s2: 0.3
+    trolley_r_min_m: 5
+    trolley_r_max_m: 50
+    trolley_speed_max_m_s: 0.5
+    cable_length_min_m: 2
+    cable_length_max_m: 60
+    hoist_speed_max_m_s: 0.6
+    min_clearance_below_jib_m: 2
+
+layout:
+  mode: "auto"
+  num_cranes: 4
+  overlap_level: "medium"
+  height_strategy: "mixed"
+  coverage_target: "balanced"
+  slew_mode_default: "continuous"
+  max_sampling_attempts: 500
+
+tasks:
+  assignment_mode: "per_crane_queue"
+  generation_mode: "auto"
+  num_tasks_per_crane: 5
+  queue_policy:
+    start_mode: "staggered"
+    initial_start_jitter_s: [0, 30]
+    inter_task_delay_s: [2, 10]
+  task_type_distribution:
+    easy_task: 0.4
+    overlap_task: 0.35
+    stress_task: 0.25
+  fallback_pickup_z_m: 1.5
+  fallback_dropoff_z_range_m: [10, 40]
+  attach_delay_s: [2, 5]
+  release_delay_s: [2, 5]
+  priority_distribution:
+    low: 0.3
+    medium: 0.5
+    high: 0.2
+  deadline_policy:
+    enabled: true
+    deadline_miss_is_task_failure: false
+  state_machine:
+    align_xy_threshold_m: 2.0
+    attach_xy_threshold_m: 0.8
+    attach_height_threshold_m: 0.5
+    release_xy_threshold_m: 1.0
+    release_height_threshold_m: 0.7
+    safe_transport_height_m: 8.0
+    lift_clearance_m: 5.0
+    attach_stage_timeout_s: 120
+    release_stage_timeout_s: 120
+    task_no_progress_timeout_s: 180
+    recovery_release_timeout_s: 180
+    stage_timeout_policy:
+      fail_current_task: true
+      terminate_episode: false
+
+weather:
+  mode: "schedule"
+  wind:
+    base_speed_m_s: 6
+    gust_speed_m_s: 12
+    direction_deg: 90
+  visibility:
+    base_level: "medium"
+
+risk:
+  geometry_envelope:
+    jib_radius_m: 0.75
+    hook_radius_m: 0.5
+    load_radius_m: 1.0
+  thresholds_m:
+    low: 8.0
+    medium: 5.0
+    high: 3.0
+    near_miss: 1.8
+  ttc_threshold_level: "high"
+  wind_safe_distance_factor:
+    enabled: true
+    extra_clearance_per_10m_s_wind_m: 0.5

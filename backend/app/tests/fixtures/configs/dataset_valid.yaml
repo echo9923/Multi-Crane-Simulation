@@ -1,0 +1,34 @@
+schema_version: "1.0"
+dataset_id: "tower_crane_llm_dataset_v1"
+run_root: "runs"
+
+sources:
+  - scenario_ref: "configs/scenario_site_001.yaml"
+    experiment_template_ref: "configs/experiment_llm_s1.yaml"
+    num_episodes: 50
+  - scenario_ref: "configs/scenario_site_002.yaml"
+    experiment_template_ref: "configs/experiment_rule_baseline.yaml"
+    num_episodes: 50
+
+split:
+  strategy: "by_scenario_and_episode"
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  holdout:
+    unseen_layout: true
+    unseen_num_cranes: true
+
+windows:
+  input_steps: 40
+  pred_steps: 60
+  stride_steps: 5
+  risk_label_horizons_s: [5, 10, 15]
+  negative_positive_sampling:
+    enabled: true
+    max_negative_to_positive_ratio: 5
+
+export:
+  format: "pt"
+  include_metadata: true
+  write_dataset_summary: true

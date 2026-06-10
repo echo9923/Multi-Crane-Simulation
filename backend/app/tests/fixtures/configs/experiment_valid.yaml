@@ -1,0 +1,74 @@
+schema_version: "1.0"
+experiment_id: "exp_2026_001"
+scenario_ref: "configs/scenario_site_001.yaml"
+seed: 20260101
+
+sim:
+  dt: 0.05
+  duration_s: 600
+  min_duration_s: 120
+  stop_when_all_tasks_done: true
+  completion_cooldown_s: 8
+  physics_hz: 20
+  controller_hz: 20
+  llm_decision_interval_s: 1.0
+
+risk_prompt_mode: "R1"
+safety_mode: "S1"
+
+runtime:
+  mode: "offline_batch"
+  replay_mode: false
+  replay_file: null
+  llm_cache_enabled: true
+
+operators:
+  assignment_mode: "random"
+  profile_distribution:
+    normal: 0.35
+    conservative: 0.2
+    aggressive: 0.2
+    novice: 0.15
+    fatigued: 0.1
+
+llm:
+  enabled: true
+  provider: "deepseek"
+  model: "deepseek-chat"
+  base_url: "https://api.deepseek.com"
+  api_key_env: "DEEPSEEK_API_KEY"
+  api_key: null
+  temperature: 0.4
+  timeout_s: 8
+  max_retries: 2
+  max_consecutive_failures: 3
+  fallback_policy: "neutral_stop"
+  command_duration:
+    default_s: 1.0
+    min_s: 0.5
+    max_s: 3.0
+  scheduling:
+    mode: "offline_wait"
+    stale_command_max_hold_s: 0.5
+  structured_output:
+    mode: "json_object"
+  context:
+    history_mode: "long"
+    recent_decisions_full: 30
+    include_task_history_summary: true
+    include_completed_task_summary: true
+    include_failed_request_history: true
+    include_risk_event_history: true
+    summarizer:
+      mode: "llm"
+      provider: "same_as_operator"
+      fallback: "rule"
+      trigger:
+        every_n_decisions: 20
+        context_over_tokens: 12000
+
+output:
+  run_root: "runs"
+  save_visual_frames: true
+  save_parquet: true
+  save_replay: true
