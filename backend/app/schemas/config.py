@@ -140,6 +140,11 @@ class LoadTypeConfig(ConfigBaseModel):
         return value
 
 
+class CraneModelLoadChartPointInput(ConfigBaseModel):
+    radius_m: float = Field(gt=0)
+    capacity_t: float = Field(gt=0)
+
+
 class CraneModelConfigInput(ConfigBaseModel):
     model_id: str
     jib_length_m: float = Field(gt=0)
@@ -158,6 +163,7 @@ class CraneModelConfigInput(ConfigBaseModel):
     cable_length_max_m: float = Field(gt=0)
     hoist_speed_max_m_s: float = Field(gt=0)
     min_clearance_below_jib_m: float = Field(ge=0)
+    load_chart_points: Optional[List[CraneModelLoadChartPointInput]] = None
 
     @field_validator("mast_height_range_m")
     @classmethod

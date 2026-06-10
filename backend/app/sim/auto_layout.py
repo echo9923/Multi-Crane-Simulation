@@ -158,8 +158,7 @@ def _candidate_inputs(
         )
 
     count = scenario.layout.num_cranes
-    center_x = (boundary.x_min + boundary.x_max) / 2.0
-    center_y = (boundary.y_min + boundary.y_max) / 2.0
+    center_x, center_y = _layout_anchor(scenario)
     model_id = sorted(model_library)[0]
     model = model_library[model_id]
     placement_radius = _placement_radius(scenario)
@@ -183,6 +182,38 @@ def _candidate_inputs(
             )
         )
     return cranes
+
+
+def _layout_anchor(scenario: ScenarioConfig) -> Tuple[float, float]:
+    boundary = scenario.site.boundary
+    anchors = [
+        anchor
+        for zone in [*scenario.site.material_zones, *scenario.site.work_zones]
+        for anchor in [_zone_xy_anchor(zone)]
+        if anchor is not None
+    ]
+    if not anchors:
+        return (
+            (boundary.x_min + boundary.x_max) / 2.0,
+            (boundary.y_min + boundary.y_max) / 2.0,
+        )
+    x = sum(anchor[0] for anchor in anchors) / len(anchors)
+    y = sum(anchor[1] for anchor in anchors) / len(anchors)
+    return (
+        min(max(x, boundary.x_min + 5.0), boundary.x_max - 5.0),
+        min(max(y, boundary.y_min + 5.0), boundary.y_max - 5.0),
+    )
+
+
+def _zone_xy_anchor(zone) -> Optional[Tuple[float, float]]:
+    if zone.center:
+        return float(zone.center[0]), float(zone.center[1])
+    if zone.points:
+        return (
+            sum(point[0] for point in zone.points) / len(zone.points),
+            sum(point[1] for point in zone.points) / len(zone.points),
+        )
+    return None
 
 
 def _placement_radius(scenario: ScenarioConfig) -> float:

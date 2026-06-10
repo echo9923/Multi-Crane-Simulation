@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence, Union
+from typing import Any, Dict, List, Sequence, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -183,27 +183,27 @@ def _load_type_report(
     load_type: str,
     load_config: Dict[str, Any],
     cranes: List[Dict[str, Any]],
-    reachable_radii_by_crane: Dict[str, List[float]],
+    reachable_radii_by_crane: Dict[str, Dict[str, List[float]]],
 ) -> Dict[str, Any]:
     max_weight = load_config["weight_range_t"][1]
-    reachable_ids = []
-    margins = []
-    for crane in cranes:
-        radii = reachable_radii_by_crane.get(crane["crane_id"], [])
-        if not radii:
-            continue
-        capacity = max(
-            _capacity_at_radius_from_payload(crane["model"], radius)
-            for radius in radii
-        )
-        margin = capacity - max_weight
-        margins.append(margin)
-        if margin >= 0:
-            reachable_ids.append(crane["crane_id"])
+    material_ids, material_margins = _side_capacity_report(
+        cranes,
+        reachable_radii_by_crane.get("material", {}),
+        max_weight,
+    )
+    work_ids, work_margins = _side_capacity_report(
+        cranes,
+        reachable_radii_by_crane.get("work", {}),
+        max_weight,
+    )
+    reachable_ids = sorted(set(material_ids) | set(work_ids)) if material_ids and work_ids else []
+    margins = material_margins + work_margins
     return {
         "load_type": load_type,
         "max_weight_t": max_weight,
         "reachable_by_crane_ids": reachable_ids,
+        "material_reachable_by_crane_ids": material_ids,
+        "work_reachable_by_crane_ids": work_ids,
         "min_capacity_margin_t": min(margins) if margins else None,
     }
 
@@ -216,17 +216,17 @@ def _add_reason(blocking: List[str], reason: str) -> None:
 def _reachable_radii_by_load_type(
     material_reports: List[Dict[str, Any]],
     work_reports: List[Dict[str, Any]],
-) -> Dict[str, Dict[str, List[float]]]:
-    result: Dict[str, Dict[str, List[float]]] = {}
+) -> Dict[str, Dict[str, Dict[str, List[float]]]]:
+    result: Dict[str, Dict[str, Dict[str, List[float]]]] = {}
     for material_report in material_reports:
         for work_report in work_reports:
             common_load_types = set(material_report["supported_load_types"]) & set(
                 work_report["supported_load_types"]
             )
             for load_type in common_load_types:
-                by_crane = result.setdefault(load_type, {})
+                by_side = result.setdefault(load_type, {"material": {}, "work": {}})
                 for crane_id in material_report["reachable_by_crane_ids"]:
-                    radii = by_crane.setdefault(crane_id, [])
+                    radii = by_side["material"].setdefault(crane_id, [])
                     radii.extend(
                         point["radius_m"]
                         for point in material_report["reachable_points_by_crane"].get(
@@ -234,7 +234,7 @@ def _reachable_radii_by_load_type(
                         )
                     )
                 for crane_id in work_report["reachable_by_crane_ids"]:
-                    radii = by_crane.setdefault(crane_id, [])
+                    radii = by_side["work"].setdefault(crane_id, [])
                     radii.extend(
                         point["radius_m"]
                         for point in work_report["reachable_points_by_crane"].get(
@@ -244,10 +244,36 @@ def _reachable_radii_by_load_type(
     return result
 
 
+def _side_capacity_report(
+    cranes: List[Dict[str, Any]],
+    reachable_radii_by_crane: Dict[str, List[float]],
+    max_weight: float,
+) -> Tuple[List[str], List[float]]:
+    capable_ids = []
+    margins = []
+    crane_by_id = {crane["crane_id"]: crane for crane in cranes}
+    for crane_id, radii in reachable_radii_by_crane.items():
+        if not radii or crane_id not in crane_by_id:
+            continue
+        crane = crane_by_id[crane_id]
+        capacity = max(
+            _capacity_at_radius_from_payload(crane["model"], radius)
+            for radius in radii
+        )
+        margin = capacity - max_weight
+        margins.append(margin)
+        if margin >= 0:
+            capable_ids.append(crane_id)
+    return capable_ids, margins
+
+
 def _capacity_at_radius_from_payload(model: Dict[str, Any], radius_m: float) -> float:
     if radius_m > model["jib_length_m"]:
         return 0.0
-    if radius_m <= model["max_load_radius_m"]:
+    chart_points = model.get("load_chart_points")
+    if chart_points:
+        chart_capacity = _interpolate_chart_from_payload(radius_m, chart_points)
+    elif radius_m <= model["max_load_radius_m"]:
         chart_capacity = model["max_load_t"]
     else:
         left_r = model["max_load_radius_m"]
@@ -261,3 +287,22 @@ def _capacity_at_radius_from_payload(model: Dict[str, Any], radius_m: float) -> 
         model["trolley_r_min_m"],
     )
     return max(0.0, min(chart_capacity, moment_capacity))
+
+
+def _interpolate_chart_from_payload(
+    radius_m: float,
+    chart_points: List[Dict[str, Any]],
+) -> float:
+    if radius_m <= chart_points[0]["radius_m"]:
+        return chart_points[0]["capacity_t"]
+    for left, right in zip(chart_points, chart_points[1:]):
+        left_r = left["radius_m"]
+        right_r = right["radius_m"]
+        if left_r <= radius_m <= right_r:
+            if right_r == left_r:
+                return min(left["capacity_t"], right["capacity_t"])
+            t = (radius_m - left_r) / (right_r - left_r)
+            return left["capacity_t"] + t * (
+                right["capacity_t"] - left["capacity_t"]
+            )
+    return chart_points[-1]["capacity_t"]
