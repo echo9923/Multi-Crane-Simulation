@@ -1,0 +1,251 @@
+scenario:
+  schema_version: "1.0"
+  scenario_id: "site_001"
+  seed: 20260101
+
+  site:
+    coordinate_system: "ENU"
+    boundary:
+      x_min: -100
+      x_max: 100
+      y_min: -100
+      y_max: 100
+      z_min: 0
+      z_max: 80
+    forbidden_zones:
+      - zone_id: "building_core"
+        type: "box"
+        center: [0, 0, 20]
+        size: [20, 20, 40]
+    material_zones:
+      - zone_id: "rebar_yard"
+        type: "polygon"
+        z_range_m: [0.0, 2.0]
+        load_types: ["rebar_bundle", "steel_beam"]
+        points:
+          - [-80, -80]
+          - [-40, -80]
+          - [-40, -40]
+          - [-80, -40]
+    work_zones:
+      - zone_id: "floor_10_workface"
+        type: "box"
+        center: [20, 20, 30]
+        size: [30, 30, 4]
+        z_range_m: [28, 32]
+        accepted_load_types: ["rebar_bundle", "formwork", "concrete_bucket"]
+    forbidden_zone_policy:
+      mode: "task_only"
+      record_violation: true
+
+  load_types:
+    rebar_bundle:
+      display_name: "Rebar bundle"
+      weight_range_t: [1.0, 3.0]
+      size_m: [6.0, 1.0, 1.0]
+      shape: "box_long"
+    formwork:
+      display_name: "Formwork"
+      weight_range_t: [0.5, 2.0]
+      size_m: [4.0, 2.0, 0.3]
+      shape: "flat_box"
+    concrete_bucket:
+      display_name: "Concrete bucket"
+      weight_range_t: [1.5, 4.0]
+      size_m: [1.5, 1.5, 2.0]
+      shape: "cylinder"
+    steel_beam:
+      display_name: "Steel beam"
+      weight_range_t: [2.0, 5.0]
+      size_m: [8.0, 0.5, 0.5]
+      shape: "beam"
+
+  crane_models:
+    - model_id: "generic_flat_top_55m"
+      jib_length_m: 55
+      counter_jib_length_m: 15
+      mast_height_range_m: [40, 65]
+      max_load_t: 6
+      max_load_radius_m: 15
+      tip_load_t: 1.5
+      rated_moment_t_m: 90
+      slew_speed_max_deg_s: 0.8
+      slew_acc_max_deg_s2: 0.3
+      trolley_r_min_m: 5
+      trolley_r_max_m: 50
+      trolley_speed_max_m_s: 0.5
+      cable_length_min_m: 2
+      cable_length_max_m: 60
+      hoist_speed_max_m_s: 0.6
+      min_clearance_below_jib_m: 2
+
+  layout:
+    mode: "auto"
+    num_cranes: 4
+    overlap_level: "medium"
+    height_strategy: "mixed"
+    coverage_target: "balanced"
+    slew_mode_default: "continuous"
+    max_sampling_attempts: 500
+
+  tasks:
+    assignment_mode: "per_crane_queue"
+    generation_mode: "auto"
+    num_tasks_per_crane: 5
+    queue_policy:
+      start_mode: "staggered"
+      initial_start_jitter_s: [0, 30]
+      inter_task_delay_s: [2, 10]
+    task_type_distribution:
+      easy_task: 0.4
+      overlap_task: 0.35
+      stress_task: 0.25
+    fallback_pickup_z_m: 1.5
+    fallback_dropoff_z_range_m: [10, 40]
+    attach_delay_s: [2, 5]
+    release_delay_s: [2, 5]
+    priority_distribution:
+      low: 0.3
+      medium: 0.5
+      high: 0.2
+    deadline_policy:
+      enabled: true
+      deadline_miss_is_task_failure: false
+    state_machine:
+      align_xy_threshold_m: 2.0
+      attach_xy_threshold_m: 0.8
+      attach_height_threshold_m: 0.5
+      release_xy_threshold_m: 1.0
+      release_height_threshold_m: 0.7
+      safe_transport_height_m: 8.0
+      lift_clearance_m: 5.0
+      attach_stage_timeout_s: 120
+      release_stage_timeout_s: 120
+      task_no_progress_timeout_s: 180
+      recovery_release_timeout_s: 180
+      stage_timeout_policy:
+        fail_current_task: true
+        terminate_episode: false
+
+  weather:
+    mode: "schedule"
+    wind:
+      base_speed_m_s: 6
+      gust_speed_m_s: 12
+      direction_deg: 90
+    visibility:
+      base_level: "medium"
+
+  risk:
+    geometry_envelope:
+      jib_radius_m: 0.75
+      hook_radius_m: 0.5
+      load_radius_m: 1.0
+    thresholds_m:
+      low: 8.0
+      medium: 5.0
+      high: 3.0
+      near_miss: 1.8
+    ttc_threshold_level: "high"
+    wind_safe_distance_factor:
+      enabled: true
+      extra_clearance_per_10m_s_wind_m: 0.5
+
+experiment:
+  schema_version: "1.0"
+  experiment_id: "exp_2026_001"
+  scenario_ref: "configs/scenario_site_001.yaml"
+  seed: 20260101
+  sim:
+    dt: 0.05
+    duration_s: 600
+    min_duration_s: 120
+    stop_when_all_tasks_done: true
+    completion_cooldown_s: 8
+    physics_hz: 20
+    controller_hz: 20
+    llm_decision_interval_s: 1.0
+  risk_prompt_mode: "R1"
+  safety_mode: "S1"
+  runtime:
+    mode: "offline_batch"
+    replay_mode: false
+    replay_file: null
+    llm_cache_enabled: true
+  operators:
+    assignment_mode: "random"
+    profile_distribution:
+      normal: 0.35
+      conservative: 0.2
+      aggressive: 0.2
+      novice: 0.15
+      fatigued: 0.1
+  llm:
+    enabled: true
+    provider: "deepseek"
+    model: "deepseek-chat"
+    base_url: "https://api.deepseek.com"
+    api_key_env: "DEEPSEEK_API_KEY"
+    api_key: null
+    temperature: 0.4
+    timeout_s: 8
+    max_retries: 2
+    max_consecutive_failures: 3
+    fallback_policy: "neutral_stop"
+    command_duration:
+      default_s: 1.0
+      min_s: 0.5
+      max_s: 3.0
+    scheduling:
+      mode: "offline_wait"
+      stale_command_max_hold_s: 0.5
+    structured_output:
+      mode: "json_object"
+    context:
+      history_mode: "long"
+      recent_decisions_full: 30
+      include_task_history_summary: true
+      include_completed_task_summary: true
+      include_failed_request_history: true
+      include_risk_event_history: true
+      summarizer:
+        mode: "llm"
+        provider: "same_as_operator"
+        fallback: "rule"
+        trigger:
+          every_n_decisions: 20
+          context_over_tokens: 12000
+  output:
+    run_root: "runs"
+    save_visual_frames: true
+    save_parquet: true
+    save_replay: true
+
+dataset:
+  schema_version: "1.0"
+  dataset_id: "tower_crane_llm_dataset_v1"
+  run_root: "runs"
+  sources:
+    - scenario_ref: "configs/scenario_site_001.yaml"
+      experiment_template_ref: "configs/experiment_llm_s1.yaml"
+      num_episodes: 50
+  split:
+    strategy: "by_scenario_and_episode"
+    train_ratio: 0.7
+    val_ratio: 0.15
+    test_ratio: 0.15
+    holdout:
+      unseen_layout: true
+      unseen_num_cranes: true
+  windows:
+    input_steps: 40
+    pred_steps: 60
+    stride_steps: 5
+    risk_label_horizons_s: [5, 10, 15]
+    negative_positive_sampling:
+      enabled: true
+      max_negative_to_positive_ratio: 5
+  export:
+    format: "pt"
+    include_metadata: true
+    write_dataset_summary: true
