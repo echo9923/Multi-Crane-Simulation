@@ -3,12 +3,12 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, Dict, Mapping, Optional, Tuple, Type, TypeVar
 
 import yaml
-from pydantic import PrivateAttr
 
 from backend.app.core.path_utils import PathLike, PathSecurityError
+from backend.app.core.secret_resolver import detect_inline_api_key_in_demo
 from backend.app.schemas.config import (
     DatasetConfig,
     ExperimentConfig,
@@ -156,6 +156,7 @@ def load_demo_config(
     path: PathLike, overrides: Optional[Mapping[str, Mapping[str, Any]]] = None
 ) -> Tuple[ScenarioConfig, Optional[ExperimentConfig], Optional[DatasetConfig]]:
     raw = _read_yaml_mapping(path)
+    detect_inline_api_key_in_demo(raw)
     resolved_path = Path(path).expanduser().resolve()
     if "scenario" not in raw:
         raise ConfigLoadError(

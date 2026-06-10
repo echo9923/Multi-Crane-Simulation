@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import SecretStr
-
 from backend.app.core.config_hash import compute_resolved_config_hash
+from backend.app.core.secret_resolver import (
+    mask_api_key,
+)
 from backend.app.schemas.config import DatasetConfig, ExperimentConfig, ScenarioConfig
 from backend.app.schemas.enums import LayoutMode
 from backend.app.schemas.resolved_config import (
@@ -78,7 +79,7 @@ def build_persisted_provider_summary(
     if api_key:
         key_source = "inline"
         key_env_name = None
-        key_masked = _mask_key(api_key)
+        key_masked = mask_api_key(api_key)
     elif llm.api_key_env:
         key_source = "env"
         key_env_name = llm.api_key_env
@@ -192,12 +193,4 @@ def _remove_secret_values(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_remove_secret_values(item) for item in value]
-    if isinstance(value, SecretStr):
-        return None
     return value
-
-
-def _mask_key(api_key: str) -> str:
-    if len(api_key) <= 8:
-        return "****"
-    return f"{api_key[:4]}****{api_key[-4:]}"
