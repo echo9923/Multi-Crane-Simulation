@@ -48,6 +48,26 @@ class VisibilityProfile(WeatherBaseModel):
     description_key: str
 
 
+class WeatherVisibilityContext(WeatherBaseModel):
+    schema_version: str = WEATHER_SCHEMA_VERSION
+    time_s: float = Field(ge=0)
+    visibility_level: VisibilityLevel
+    neighbor_visibility_radius_m: float = Field(gt=0)
+    distance_noise_m: float = Field(ge=0)
+    hide_hook_prob: float = Field(ge=0, le=1)
+    visibility_confidence: float = Field(ge=0, le=1)
+    distance_precision_m: float = Field(gt=0)
+    noise_seed: int
+    profile_source: str
+
+    @field_validator("profile_source")
+    @classmethod
+    def validate_profile_source(cls, value: str) -> str:
+        if value not in {"default", "config"}:
+            raise ValueError("profile_source must be default or config")
+        return value
+
+
 DEFAULT_VISIBILITY_PROFILES: Dict[VisibilityLevel, VisibilityProfile] = {
     VisibilityLevel.GOOD: VisibilityProfile(
         level=VisibilityLevel.GOOD,

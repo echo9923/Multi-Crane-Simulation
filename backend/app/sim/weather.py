@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import math
 import random
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.app.schemas.enums import VisibilityLevel
 from backend.app.schemas.enums import WeatherMode
 from backend.app.schemas.resolved_config import ResolvedConfig
 from backend.app.schemas.weather import (
+    DEFAULT_VISIBILITY_PROFILES,
     WeatherDiagnostic,
     WeatherGenerationReport,
     WeatherState,
+    WeatherVisibilityContext,
 )
 
 
@@ -307,3 +311,74 @@ def _failure_request(
         "details": details,
         "default_episode_status": "failed_invalid_state",
     }
+
+
+def build_weather_visibility_context(
+    weather_state: WeatherState,
+    *,
+    weather_seed: int,
+    decision_time_bucket: int,
+) -> WeatherVisibilityContext:
+    level = VisibilityLevel(weather_state.visibility_level)
+    default_profile = DEFAULT_VISIBILITY_PROFILES[level]
+    distance_precision_m = default_profile.distance_precision_m
+    profile_source = "default"
+    if (
+        not math.isclose(
+            weather_state.neighbor_visibility_radius_m,
+            default_profile.neighbor_visibility_radius_m,
+        )
+        or not math.isclose(weather_state.distance_noise_m, default_profile.distance_noise_m)
+        or not math.isclose(weather_state.hide_hook_prob, default_profile.hide_hook_prob)
+        or not math.isclose(
+            weather_state.visibility_confidence,
+            default_profile.visibility_confidence,
+        )
+    ):
+        profile_source = "config"
+
+    noise_seed = _stable_int_hash(
+        [
+            "weather_visibility_context",
+            str(weather_seed),
+            str(decision_time_bucket),
+            str(weather_state.visibility_level),
+        ]
+    )
+    return WeatherVisibilityContext(
+        time_s=weather_state.time_s,
+        visibility_level=weather_state.visibility_level,
+        neighbor_visibility_radius_m=weather_state.neighbor_visibility_radius_m,
+        distance_noise_m=weather_state.distance_noise_m,
+        hide_hook_prob=weather_state.hide_hook_prob,
+        visibility_confidence=weather_state.visibility_confidence,
+        distance_precision_m=distance_precision_m,
+        noise_seed=noise_seed,
+        profile_source=profile_source,
+    )
+
+
+def build_visibility_sampling_key(
+    *,
+    noise_seed: int,
+    observer_crane_id: str,
+    target_crane_id: str,
+    decision_time_bucket: int,
+    purpose: str,
+) -> int:
+    return _stable_int_hash(
+        [
+            "weather_visibility_sampling",
+            str(noise_seed),
+            observer_crane_id,
+            target_crane_id,
+            str(decision_time_bucket),
+            purpose,
+        ]
+    )
+
+
+def _stable_int_hash(parts: List[str]) -> int:
+    encoded = "\x1f".join(parts).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    return int(digest[:16], 16)
