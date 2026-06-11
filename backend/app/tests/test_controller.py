@@ -25,9 +25,12 @@ from backend.app.schemas.command import (
     ParsedCommand,
 )
 from backend.app.sim.controller import (
+    compute_stop_mode_target,
     direction_sign,
+    is_command_expired,
     map_axis_to_desired_velocity,
     map_command_to_desired_velocities,
+    resolve_controller_mode,
     smooth_axis_velocity,
     smooth_command_velocities,
 )
@@ -565,3 +568,105 @@ def test_smooth_axis_velocity_rejects_non_finite_current_velocity() -> None:
         )
 
     assert exc_info.value.field_path == "current_velocity"
+
+
+def test_is_command_expired_uses_strict_greater_than_boundary(executed_command) -> None:
+    command = executed_command(time_s=10.0, command_duration_s=1.0)
+
+    assert is_command_expired(command=command, now_s=None) is False
+    assert is_command_expired(command=command, now_s=11.0) is False
+    assert is_command_expired(command=command, now_s=11.0001) is True
+
+
+def test_resolve_controller_mode_prioritizes_emergency_stop(executed_command) -> None:
+    command = executed_command(
+        slew=("right", 5),
+        trolley=("out", 5),
+        hoist=("up", 5),
+        deadman_pressed=False,
+        emergency_stop=True,
+        time_s=10.0,
+        command_duration_s=1.0,
+    )
+
+    mode = resolve_controller_mode(command=command, now_s=12.0, hold_position=True)
+
+    assert mode == "emergency_stop"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "now_s", "hold_position", "expected"),
+    [
+        ({}, None, True, "hold_position"),
+        ({"deadman_pressed": False}, None, False, "deadman_stop"),
+        ({"time_s": 10.0, "command_duration_s": 1.0}, 12.0, False, "expired_neutral_stop"),
+        (
+            {"slew": ("neutral", 0), "trolley": ("neutral", 0), "hoist": ("neutral", 0)},
+            None,
+            False,
+            "neutral_stop",
+        ),
+        ({"slew": ("right", 1)}, None, False, "normal"),
+    ],
+)
+def test_resolve_controller_mode_covers_stop_modes(
+    executed_command, kwargs: dict, now_s: float | None, hold_position: bool, expected: str
+) -> None:
+    command = executed_command(**kwargs)
+
+    assert (
+        resolve_controller_mode(
+            command=command,
+            now_s=now_s,
+            hold_position=hold_position,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("command_kwargs", "now_s", "hold_position", "expected_mode", "emergency", "held"),
+    [
+        ({"deadman_pressed": False, "slew": ("right", 5)}, None, False, "deadman_stop", False, False),
+        ({"emergency_stop": True, "trolley": ("out", 5)}, None, False, "emergency_stop", True, False),
+        ({}, None, True, "hold_position", False, True),
+        ({"time_s": 10.0, "command_duration_s": 1.0, "hoist": ("up", 5)}, 12.0, False, "expired_neutral_stop", False, False),
+    ],
+)
+def test_compute_stop_mode_target_outputs_zero_desired_velocities_and_diagnostic(
+    executed_command,
+    command_kwargs: dict,
+    now_s: float | None,
+    hold_position: bool,
+    expected_mode: str,
+    emergency: bool,
+    held: bool,
+) -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane).model_copy(
+        update={
+            "theta_dot_rad_s": 0.1,
+            "trolley_v_m_s": 0.2,
+            "hoist_v_m_s": -0.2,
+        }
+    )
+    command = executed_command(**command_kwargs)
+
+    target, diagnostic = compute_stop_mode_target(
+        command=command,
+        state=state,
+        model=crane.model,
+        controller_config=ControllerConfig(controller_hz=10.0),
+        dt_s=0.1,
+        now_s=now_s,
+        hold_position=hold_position,
+    )
+
+    assert diagnostic.mode == expected_mode
+    assert diagnostic.command_expired is (expected_mode == "expired_neutral_stop")
+    assert target.emergency_stop is emergency
+    assert target.hold_position is held
+    assert target.source_command_id == command.command_id
+    assert abs(target.target_slew_velocity_rad_s) < abs(state.theta_dot_rad_s)
+    assert abs(target.target_trolley_velocity_m_s) < abs(state.trolley_v_m_s)
+    assert abs(target.target_hoist_velocity_m_s) < abs(state.hoist_v_m_s)

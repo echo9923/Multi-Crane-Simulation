@@ -1,19 +1,29 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Literal
+from typing import Dict, Literal, Optional
 
 from backend.app.schemas.command import ExecutedAxisCommand, ExecutedCommand
 from backend.app.schemas.control import (
     CTRL_E_INVALID_STATE,
     AxisControlDiagnostic,
+    ControlTarget,
     ControllerConfig,
+    ControllerDiagnostic,
     ControllerStateError,
 )
 from backend.app.schemas.crane import CraneModelSpec
 from backend.app.schemas.state import CraneState
 
 AxisName = Literal["slew", "trolley", "hoist"]
+ControllerMode = Literal[
+    "normal",
+    "neutral_stop",
+    "expired_neutral_stop",
+    "deadman_stop",
+    "emergency_stop",
+    "hold_position",
+]
 
 
 def direction_sign(axis: AxisName, direction: str) -> int:
@@ -72,6 +82,85 @@ def map_command_to_desired_velocities(
             controller_config=controller_config,
         ),
     }
+
+
+def is_command_expired(
+    *,
+    command: ExecutedCommand,
+    now_s: Optional[float],
+) -> bool:
+    if now_s is None:
+        return False
+    _validate_finite(now_s, field_path="now_s")
+    expires_at = command.time_s + command.command_duration_s
+    return now_s > expires_at
+
+
+def resolve_controller_mode(
+    *,
+    command: ExecutedCommand,
+    now_s: Optional[float],
+    hold_position: bool = False,
+) -> ControllerMode:
+    if command.emergency_stop:
+        return "emergency_stop"
+    if hold_position:
+        return "hold_position"
+    if not command.deadman_pressed:
+        return "deadman_stop"
+    if is_command_expired(command=command, now_s=now_s):
+        return "expired_neutral_stop"
+    if _is_all_axes_neutral(command):
+        return "neutral_stop"
+    return "normal"
+
+
+def compute_stop_mode_target(
+    *,
+    command: ExecutedCommand,
+    state: CraneState,
+    model: CraneModelSpec,
+    controller_config: ControllerConfig,
+    dt_s: float,
+    now_s: Optional[float],
+    hold_position: bool = False,
+) -> tuple[ControlTarget, ControllerDiagnostic]:
+    mode = resolve_controller_mode(
+        command=command,
+        now_s=now_s,
+        hold_position=hold_position,
+    )
+    if mode == "normal":
+        raise ControllerStateError(
+            "compute_stop_mode_target requires a stop mode",
+            error_code=CTRL_E_INVALID_STATE,
+            crane_id=command.crane_id,
+            field_path="mode",
+        )
+    targets, diagnostics = smooth_command_velocities(
+        desired_velocities={"slew": 0.0, "trolley": 0.0, "hoist": 0.0},
+        state=state,
+        model=model,
+        dt_s=dt_s,
+        controller_config=controller_config,
+    )
+    control_target = ControlTarget(
+        crane_id=command.crane_id,
+        target_slew_velocity_rad_s=targets["slew"],
+        target_trolley_velocity_m_s=targets["trolley"],
+        target_hoist_velocity_m_s=targets["hoist"],
+        emergency_stop=mode == "emergency_stop",
+        hold_position=mode == "hold_position",
+        source_command_id=command.command_id,
+    )
+    diagnostic = _build_controller_diagnostic(
+        command=command,
+        mode=mode,
+        dt_s=dt_s,
+        now_s=now_s,
+        axes=diagnostics,
+    )
+    return control_target, diagnostic
 
 
 def smooth_axis_velocity(
@@ -189,6 +278,41 @@ def _gear_speeds_for_axis(
         f"unknown controller axis: {axis}",
         error_code=CTRL_E_INVALID_STATE,
         field_path="axis",
+    )
+
+
+def _is_all_axes_neutral(command: ExecutedCommand) -> bool:
+    return all(
+        axis.direction == "neutral" or axis.gear == 0
+        for axis in (
+            command.left_joystick.slew,
+            command.left_joystick.trolley,
+            command.right_joystick.hoist,
+        )
+    )
+
+
+def _build_controller_diagnostic(
+    *,
+    command: ExecutedCommand,
+    mode: ControllerMode,
+    dt_s: float,
+    now_s: Optional[float],
+    axes: list[AxisControlDiagnostic],
+) -> ControllerDiagnostic:
+    return ControllerDiagnostic(
+        diagnostic_id=f"CTRL_DIAG_{command.command_id}",
+        crane_id=command.crane_id,
+        source_command_id=command.command_id,
+        mode=mode,
+        controller_dt_s=dt_s,
+        command_time_s=command.time_s,
+        now_s=now_s,
+        command_duration_s=command.command_duration_s,
+        command_expired=is_command_expired(command=command, now_s=now_s),
+        deadman_pressed=command.deadman_pressed,
+        emergency_stop_requested=command.emergency_stop,
+        axes=axes,
     )
 
 
