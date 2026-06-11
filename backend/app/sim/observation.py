@@ -310,7 +310,12 @@ def build_visible_neighbors(
     decision_time_bucket: int,
 ) -> list[VisibleNeighbor]:
     neighbors: list[VisibleNeighbor] = []
+    seen_neighbor_ids: set[str] = set()
     for neighbor_id in neighbor_ids:
+        if neighbor_id in seen_neighbor_ids:
+            continue
+        seen_neighbor_ids.add(neighbor_id)
+
         try:
             neighbor_state = states_by_id[neighbor_id]
         except KeyError as exc:

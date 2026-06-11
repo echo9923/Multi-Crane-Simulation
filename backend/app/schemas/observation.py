@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.app.schemas.enums import (
     FogLevel,
@@ -92,6 +92,16 @@ class VisibleNeighbor(ObservationBaseModel):
     task_stage: Optional[str] = None
     in_overlap_zone: bool
 
+    @model_validator(mode="after")
+    def validate_hidden_hook_fields(self) -> "VisibleNeighbor":
+        if not self.hook_visible and (
+            self.hook_height_m is not None or self.load_attached is not None
+        ):
+            raise ValueError(
+                "hidden hook must not include hook_height_m or load_attached"
+            )
+        return self
+
 
 class WeatherObservationSummary(ObservationBaseModel):
     schema_version: str = OBSERVATION_SCHEMA_VERSION
@@ -177,3 +187,9 @@ class Observation(ObservationBaseModel):
     safety_hint: Optional[SafetyHint] = None
     available_actions: AvailableActions = Field(default_factory=AvailableActions)
     memory: MemorySummary = Field(default_factory=MemorySummary)
+
+    @model_validator(mode="after")
+    def validate_risk_prompt_contract(self) -> "Observation":
+        if self.risk_prompt_mode is RiskPromptMode.R0 and self.safety_hint is not None:
+            raise ValueError("R0 observation must not include safety_hint")
+        return self
