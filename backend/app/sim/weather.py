@@ -475,7 +475,7 @@ def compare_weather_replay_row(
         weather_state,
         episode_id=str(historical_row.get("episode_id", "")),
         scenario_id=str(historical_row.get("scenario_id", "")),
-        frame_index=int(historical_row.get("frame", weather_state.generation_step)),
+        frame_index=weather_state.generation_step,
     )
     fields = [
         "frame",
