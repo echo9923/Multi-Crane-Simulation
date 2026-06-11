@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 from backend.app.schemas.config import ScenarioConfig
 from backend.app.schemas.control import ControlTarget
 from backend.app.schemas.observation import OnlineRiskHint
@@ -18,6 +21,9 @@ from backend.app.sim.task_observation import TaskObservationContext
 from backend.app.sim.task_queue import IdleObservationContext
 from backend.app.sim.weather import build_weather_visibility_context
 from backend.app.tests.test_config_schema import load_fixture
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _cranes():
@@ -282,3 +288,87 @@ def test_build_observation_rejects_missing_task_context() -> None:
     else:
         raise AssertionError("missing task context should fail")
 
+
+def test_observation_memory_sanitizes_forbidden_history_keys() -> None:
+    snapshot = _snapshot().model_copy(
+        update={
+            "recent_decisions": {
+                "C1": [
+                    {
+                        "time_s": 41.0,
+                        "command_summary": "slew right gear1",
+                        "result": "closer_to_pickup",
+                        "future_min_distance": 0.1,
+                        "offline_ttc": 2.0,
+                        "planned_start_s": 99.0,
+                    }
+                ]
+            },
+            "recent_events": {
+                "C1": [
+                    {
+                        "event_type": "task_failed",
+                        "time_s": 40.0,
+                        "summary": "task failed",
+                        "details": {"source_failed_task_id": "T_C1_001"},
+                    }
+                ]
+            },
+        }
+    )
+
+    observation = build_observation(
+        snapshot=snapshot,
+        crane_id="C1",
+        risk_prompt_mode="R0",
+        operator_profile="normal",
+    )
+    payload_text = str(observation.model_dump(mode="json"))
+
+    assert "command_summary" in payload_text
+    for forbidden in [
+        "future_min_distance",
+        "offline_ttc",
+        "planned_start_s",
+        "source_failed_task_id",
+    ]:
+        assert forbidden not in payload_text
+
+
+def test_module_f_boundaries_remain_static() -> None:
+    banned_imports = (
+        "backend.app.llm",
+        "backend.app.recorder",
+        "backend.app.risk",
+        "backend.app.sim.risk",
+        "backend.app.sim.physics",
+        "backend.app.sim.task_state_machine",
+        "backend.app.sim.task_failure",
+    )
+    banned_names = {
+        "RawLLMResponse",
+        "TaskQueue",
+        "step_task_state_machine",
+        "near_miss",
+        "collision",
+        "offline_label",
+        "future_min_distance",
+        "offline_ttc",
+        "ParquetWriter",
+    }
+
+    for relative_path in [
+        "backend/app/sim/observation.py",
+        "backend/app/schemas/observation.py",
+    ]:
+        tree = ast.parse((REPO_ROOT / relative_path).read_text(encoding="utf-8"))
+        imported = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.append(node.module)
+
+        assert not [module for module in imported if module.startswith(banned_imports)]
+        names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        assert banned_names.isdisjoint(names)

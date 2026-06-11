@@ -211,8 +211,8 @@ def build_memory_summary(
 ) -> MemorySummary:
     return MemorySummary(
         task_history_summary=_task_history_summary(recent_decisions, recent_events),
-        recent_decisions=[dict(decision) for decision in recent_decisions],
-        event_summary=[_event_summary(event) for event in recent_events],
+        recent_decisions=[_safe_decision(decision) for decision in recent_decisions],
+        event_summary=[_event_summary(_safe_event(event)) for event in recent_events],
     )
 
 
@@ -646,6 +646,16 @@ def _task_history_summary(
     if recent_events:
         parts.append(f"最近已有 {len(recent_events)} 条任务事件。")
     return "".join(parts) if parts else None
+
+
+def _safe_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
+    allowed_keys = {"time_s", "command_summary", "result"}
+    return {key: decision[key] for key in allowed_keys if key in decision}
+
+
+def _safe_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    allowed_keys = {"event_type", "time_s", "summary", "reason"}
+    return {key: event[key] for key in allowed_keys if key in event}
 
 
 def _event_summary(event: Dict[str, Any]) -> str:
