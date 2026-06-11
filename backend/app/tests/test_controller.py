@@ -25,6 +25,7 @@ from backend.app.schemas.command import (
     ParsedCommand,
 )
 from backend.app.sim.controller import (
+    Controller,
     compute_stop_mode_target,
     direction_sign,
     is_command_expired,
@@ -139,6 +140,26 @@ def _crane_config(crane_id: str = "C1"):
     scenario = ScenarioConfig.model_validate(raw)
     library = build_crane_model_library(scenario.crane_models)
     return build_crane_configs(scenario.cranes, library, scenario, source="manual")[0]
+
+
+def _crane_configs(count: int = 2):
+    raw = load_fixture("scenario_valid.yaml")
+    raw["layout"]["mode"] = "manual"
+    raw["layout"]["num_cranes"] = count
+    raw["cranes"] = [
+        {
+            "crane_id": f"C{index + 1}",
+            "model_id": "generic_flat_top_55m",
+            "base": [index * 40.0, 0.0, 0.0],
+            "mast_height_m": 45.0 + index * 5.0,
+            "theta_init_deg": 0.0,
+            "slew": {"mode": "continuous"},
+        }
+        for index in range(count)
+    ]
+    scenario = ScenarioConfig.model_validate(raw)
+    library = build_crane_model_library(scenario.crane_models)
+    return build_crane_configs(scenario.cranes, library, scenario, source="manual")
 
 
 def test_controller_config_defaults_match_module_i_tables() -> None:
@@ -670,3 +691,173 @@ def test_compute_stop_mode_target_outputs_zero_desired_velocities_and_diagnostic
     assert abs(target.target_slew_velocity_rad_s) < abs(state.theta_dot_rad_s)
     assert abs(target.target_trolley_velocity_m_s) < abs(state.trolley_v_m_s)
     assert abs(target.target_hoist_velocity_m_s) < abs(state.hoist_v_m_s)
+
+
+def test_controller_from_config_accepts_dict_and_controller_config() -> None:
+    from_controller_config = Controller.from_config(ControllerConfig(controller_hz=25.0))
+    from_dict = Controller.from_config({"sim": {"controller_hz": 10.0}})
+
+    assert from_controller_config.config.controller_hz == pytest.approx(25.0)
+    assert from_dict.config.controller_dt_s == pytest.approx(0.1)
+
+
+def test_compute_target_outputs_control_target_and_diagnostic(executed_command) -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane)
+    command = executed_command(
+        slew=("right", 5),
+        trolley=("out", 5),
+        hoist=("down", 5),
+        command_id="cmd-normal",
+        crane_id=crane.crane_id,
+    )
+    controller = Controller(ControllerConfig(controller_hz=10.0))
+
+    target, diagnostic = controller.compute_target(
+        command=command,
+        state=state,
+        model=crane.model,
+        dt_s=0.1,
+        now_s=5.05,
+    )
+
+    assert target.crane_id == crane.crane_id
+    assert target.source_command_id == command.command_id
+    assert target.target_slew_velocity_rad_s == pytest.approx(
+        crane.model.slew_acc_max_rad_s2 * 0.1
+    )
+    assert target.target_trolley_velocity_m_s == pytest.approx(
+        crane.model.trolley_acc_max_m_s2 * 0.1
+    )
+    assert target.target_hoist_velocity_m_s == pytest.approx(
+        -crane.model.hoist_acc_max_m_s2 * 0.1
+    )
+    assert diagnostic.mode == "normal"
+    assert diagnostic.source_command_id == command.command_id
+    assert {axis.axis for axis in diagnostic.axes} == {"slew", "trolley", "hoist"}
+
+
+def test_compute_target_uses_stop_mode_for_deadman_and_emergency(executed_command) -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane).model_copy(
+        update={"theta_dot_rad_s": 0.1, "trolley_v_m_s": 0.2, "hoist_v_m_s": 0.2}
+    )
+    controller = Controller(ControllerConfig(controller_hz=10.0))
+    deadman = executed_command(
+        slew=("right", 5),
+        deadman_pressed=False,
+        command_id="cmd-deadman",
+        crane_id=crane.crane_id,
+    )
+    emergency = executed_command(
+        trolley=("out", 5),
+        emergency_stop=True,
+        command_id="cmd-emergency",
+        crane_id=crane.crane_id,
+    )
+
+    deadman_target, deadman_diagnostic = controller.compute_target(
+        command=deadman,
+        state=state,
+        model=crane.model,
+        dt_s=0.1,
+    )
+    emergency_target, emergency_diagnostic = controller.compute_target(
+        command=emergency,
+        state=state,
+        model=crane.model,
+        dt_s=0.1,
+    )
+
+    assert deadman_diagnostic.mode == "deadman_stop"
+    assert deadman_target.emergency_stop is False
+    assert emergency_diagnostic.mode == "emergency_stop"
+    assert emergency_target.emergency_stop is True
+
+
+def test_compute_batch_aligns_by_crane_id_and_preserves_command_order(
+    executed_command,
+) -> None:
+    cranes = _crane_configs(2)
+    states = [initialize_crane_state(cranes[1]), initialize_crane_state(cranes[0])]
+    commands = [
+        executed_command(
+            command_id="cmd-C2",
+            crane_id="C2",
+            trolley=("out", 5),
+        ),
+        executed_command(
+            command_id="cmd-C1",
+            crane_id="C1",
+            slew=("right", 5),
+        ),
+    ]
+    controller = Controller(ControllerConfig(controller_hz=10.0))
+
+    targets, diagnostics = controller.compute_batch(
+        commands=commands,
+        states=states,
+        models={crane.crane_id: crane.model for crane in cranes},
+        dt_s=0.1,
+    )
+
+    assert [target.crane_id for target in targets] == ["C2", "C1"]
+    assert [diagnostic.crane_id for diagnostic in diagnostics] == ["C2", "C1"]
+    assert targets[0].target_trolley_velocity_m_s > 0
+    assert targets[1].target_slew_velocity_rad_s > 0
+
+
+def test_compute_batch_rejects_identity_mismatch_and_duplicate_ids(
+    executed_command,
+) -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane)
+    command = executed_command(crane_id="C2")
+    controller = Controller(ControllerConfig(controller_hz=10.0))
+
+    with pytest.raises(ControllerStateError) as exc_info:
+        controller.compute_target(command=command, state=state, model=crane.model)
+
+    assert exc_info.value.field_path == "crane_id"
+
+    with pytest.raises(ControllerStateError) as exc_info:
+        controller.compute_batch(
+            commands=[executed_command(command_id="cmd-a"), executed_command(command_id="cmd-b")],
+            states=[state],
+            models={"C1": crane.model},
+        )
+
+    assert exc_info.value.field_path == "commands"
+
+
+def test_rule_and_llm_commands_share_same_controller_interface(executed_command) -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane)
+    controller = Controller(ControllerConfig(controller_hz=10.0))
+    rule_command = executed_command(
+        command_id="cmd-rule",
+        crane_id=crane.crane_id,
+        trolley=("out", 4),
+    )
+    llm_command = executed_command(
+        command_id="cmd-llm",
+        crane_id=crane.crane_id,
+        trolley=("out", 4),
+    )
+
+    rule_target, _ = controller.compute_target(
+        command=rule_command,
+        state=state,
+        model=crane.model,
+        dt_s=0.1,
+    )
+    llm_target, _ = controller.compute_target(
+        command=llm_command,
+        state=state,
+        model=crane.model,
+        dt_s=0.1,
+    )
+
+    assert rule_target.model_copy(update={"source_command_id": None}) == llm_target.model_copy(
+        update={"source_command_id": None}
+    )

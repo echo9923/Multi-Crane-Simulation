@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Literal, Optional
+from typing import Dict, Literal, Mapping, Optional, Sequence
 
 from backend.app.schemas.command import ExecutedAxisCommand, ExecutedCommand
 from backend.app.schemas.control import (
@@ -24,6 +24,131 @@ ControllerMode = Literal[
     "emergency_stop",
     "hold_position",
 ]
+
+
+class Controller:
+    def __init__(self, config: ControllerConfig) -> None:
+        self.config = config
+
+    @classmethod
+    def from_config(cls, config: object) -> "Controller":
+        if isinstance(config, ControllerConfig):
+            return cls(config)
+        if isinstance(config, dict):
+            sim_config = config.get("sim", {})
+            if not isinstance(sim_config, dict):
+                raise ControllerStateError(
+                    "config.sim must be a mapping",
+                    error_code=CTRL_E_INVALID_STATE,
+                    field_path="sim",
+                )
+            return cls(ControllerConfig(controller_hz=sim_config["controller_hz"]))
+        sim = getattr(config, "sim", None)
+        if sim is None:
+            raise ControllerStateError(
+                "config must provide sim.controller_hz",
+                error_code=CTRL_E_INVALID_STATE,
+                field_path="sim.controller_hz",
+            )
+        return cls(ControllerConfig(controller_hz=getattr(sim, "controller_hz")))
+
+    def compute_target(
+        self,
+        *,
+        command: ExecutedCommand,
+        state: CraneState,
+        model: CraneModelSpec,
+        dt_s: Optional[float] = None,
+        now_s: Optional[float] = None,
+        hold_position: bool = False,
+    ) -> tuple[ControlTarget, ControllerDiagnostic]:
+        _validate_target_identity(command=command, state=state)
+        controller_dt_s = dt_s if dt_s is not None else self.config.controller_dt_s
+        mode = resolve_controller_mode(
+            command=command,
+            now_s=now_s,
+            hold_position=hold_position,
+        )
+        if mode != "normal":
+            return compute_stop_mode_target(
+                command=command,
+                state=state,
+                model=model,
+                controller_config=self.config,
+                dt_s=controller_dt_s,
+                now_s=now_s,
+                hold_position=hold_position,
+            )
+
+        desired = map_command_to_desired_velocities(
+            command=command,
+            controller_config=self.config,
+        )
+        targets, diagnostics = smooth_command_velocities(
+            desired_velocities=desired,
+            state=state,
+            model=model,
+            dt_s=controller_dt_s,
+            controller_config=self.config,
+        )
+        diagnostics = _apply_command_axis_metadata(command, diagnostics)
+        control_target = ControlTarget(
+            crane_id=command.crane_id,
+            target_slew_velocity_rad_s=targets["slew"],
+            target_trolley_velocity_m_s=targets["trolley"],
+            target_hoist_velocity_m_s=targets["hoist"],
+            emergency_stop=False,
+            hold_position=False,
+            source_command_id=command.command_id,
+        )
+        diagnostic = _build_controller_diagnostic(
+            command=command,
+            mode=mode,
+            dt_s=controller_dt_s,
+            now_s=now_s,
+            axes=diagnostics,
+        )
+        return control_target, diagnostic
+
+    def compute_batch(
+        self,
+        *,
+        commands: Sequence[ExecutedCommand],
+        states: Sequence[CraneState],
+        models: Mapping[str, CraneModelSpec] | Sequence[CraneModelSpec],
+        dt_s: Optional[float] = None,
+        now_s: Optional[float] = None,
+    ) -> tuple[list[ControlTarget], list[ControllerDiagnostic]]:
+        command_by_id = _index_unique(commands, field_path="commands")
+        state_by_id = _index_unique(states, field_path="states")
+        model_by_id = _models_by_id(models)
+        targets: list[ControlTarget] = []
+        diagnostics: list[ControllerDiagnostic] = []
+        for command in commands:
+            if command.crane_id not in state_by_id:
+                raise ControllerStateError(
+                    f"missing state for crane_id: {command.crane_id}",
+                    error_code=CTRL_E_INVALID_STATE,
+                    crane_id=command.crane_id,
+                    field_path="states",
+                )
+            if command.crane_id not in model_by_id:
+                raise ControllerStateError(
+                    f"missing model for crane_id: {command.crane_id}",
+                    error_code=CTRL_E_INVALID_STATE,
+                    crane_id=command.crane_id,
+                    field_path="models",
+                )
+            target, diagnostic = self.compute_target(
+                command=command_by_id[command.crane_id],
+                state=state_by_id[command.crane_id],
+                model=model_by_id[command.crane_id],
+                dt_s=dt_s,
+                now_s=now_s,
+            )
+            targets.append(target)
+            diagnostics.append(diagnostic)
+        return targets, diagnostics
 
 
 def direction_sign(axis: AxisName, direction: str) -> int:
@@ -314,6 +439,90 @@ def _build_controller_diagnostic(
         emergency_stop_requested=command.emergency_stop,
         axes=axes,
     )
+
+
+def _validate_target_identity(
+    *,
+    command: ExecutedCommand,
+    state: CraneState,
+) -> None:
+    if command.crane_id != state.crane_id:
+        raise ControllerStateError(
+            "command and state crane_id must match",
+            error_code=CTRL_E_INVALID_STATE,
+            crane_id=command.crane_id,
+            field_path="crane_id",
+        )
+
+
+def _index_unique(items: Sequence[object], *, field_path: str) -> Dict[str, object]:
+    indexed: Dict[str, object] = {}
+    for item in items:
+        crane_id = getattr(item, "crane_id", None)
+        if not isinstance(crane_id, str) or not crane_id:
+            raise ControllerStateError(
+                f"{field_path} item missing crane_id",
+                error_code=CTRL_E_INVALID_STATE,
+                field_path=field_path,
+            )
+        if crane_id in indexed:
+            raise ControllerStateError(
+                f"duplicate crane_id in {field_path}: {crane_id}",
+                error_code=CTRL_E_INVALID_STATE,
+                crane_id=crane_id,
+                field_path=field_path,
+            )
+        indexed[crane_id] = item
+    return indexed
+
+
+def _models_by_id(
+    models: Mapping[str, CraneModelSpec] | Sequence[CraneModelSpec],
+) -> Dict[str, CraneModelSpec]:
+    if isinstance(models, Mapping):
+        return dict(models)
+    indexed: Dict[str, CraneModelSpec] = {}
+    for model in models:
+        crane_id = getattr(model, "crane_id", None)
+        if not isinstance(crane_id, str) or not crane_id:
+            raise ControllerStateError(
+                "model sequence items must provide crane_id; use a mapping instead",
+                error_code=CTRL_E_INVALID_STATE,
+                field_path="models",
+            )
+        if crane_id in indexed:
+            raise ControllerStateError(
+                f"duplicate crane_id in models: {crane_id}",
+                error_code=CTRL_E_INVALID_STATE,
+                crane_id=crane_id,
+                field_path="models",
+            )
+        indexed[crane_id] = model
+    return indexed
+
+
+def _apply_command_axis_metadata(
+    command: ExecutedCommand,
+    diagnostics: list[AxisControlDiagnostic],
+) -> list[AxisControlDiagnostic]:
+    axis_commands = {
+        "slew": command.left_joystick.slew,
+        "trolley": command.left_joystick.trolley,
+        "hoist": command.right_joystick.hoist,
+    }
+    updated: list[AxisControlDiagnostic] = []
+    for diagnostic in diagnostics:
+        axis_command = axis_commands[diagnostic.axis]
+        updated.append(
+            diagnostic.model_copy(
+                update={
+                    "direction": axis_command.direction,
+                    "gear": axis_command.gear,
+                    "speed_scale": axis_command.speed_scale,
+                }
+            )
+        )
+    return updated
 
 
 def _max_velocity_for_axis(axis: AxisName, model: CraneModelSpec) -> float:
