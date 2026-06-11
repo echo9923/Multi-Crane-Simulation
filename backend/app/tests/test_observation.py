@@ -5,11 +5,40 @@ import math
 import pytest
 from pydantic import ValidationError
 
+from backend.app.schemas.config import ScenarioConfig
+from backend.app.schemas.control import ControlTarget
 from backend.app.schemas.observation import (
     OBSERVATION_SCHEMA_VERSION,
     AvailableActions,
     Observation,
 )
+from backend.app.sim.crane_model import build_crane_model_library
+from backend.app.sim.layout import build_crane_configs
+from backend.app.sim.observation import (
+    ObservationBuildError,
+    build_self_state_summary,
+)
+from backend.app.sim.physics import initialize_crane_state
+from backend.app.tests.test_config_schema import load_fixture
+
+
+def _crane_config():
+    raw = load_fixture("scenario_valid.yaml")
+    raw["layout"]["mode"] = "manual"
+    raw["layout"]["num_cranes"] = 1
+    raw["cranes"] = [
+        {
+            "crane_id": "C1",
+            "model_id": "generic_flat_top_55m",
+            "base": [0.0, 0.0, 0.0],
+            "mast_height_m": 50.0,
+            "theta_init_deg": 45.0,
+            "slew": {"mode": "continuous"},
+        }
+    ]
+    scenario = ScenarioConfig.model_validate(raw)
+    library = build_crane_model_library(scenario.crane_models)
+    return build_crane_configs(scenario.cranes, library, scenario, source="manual")[0]
 
 
 def _valid_observation_payload() -> dict:
@@ -195,3 +224,80 @@ def test_observation_schema_does_not_define_forbidden_fields() -> None:
     for field_name in forbidden:
         assert field_name not in schema_text
 
+
+def test_build_self_state_summary_rounds_values_and_maps_current_command() -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane).model_copy(
+        update={
+            "theta_rad": math.radians(45.0),
+            "theta_dot_rad_s": -0.2,
+            "trolley_r_m": 24.26,
+            "trolley_v_m_s": 0.5,
+            "hook_h_m": 30.74,
+            "hoist_v_m_s": -0.25,
+            "load_attached": True,
+            "load_type": "rebar_bundle",
+            "load_weight_t": 2.5,
+        }
+    )
+    current_command = ControlTarget(
+        crane_id="C1",
+        target_slew_velocity_rad_s=-0.2,
+        target_trolley_velocity_m_s=0.5,
+        target_hoist_velocity_m_s=-0.25,
+    )
+
+    summary = build_self_state_summary(
+        state=state,
+        crane_config=crane,
+        current_command=current_command,
+        distance_precision_m=0.5,
+    )
+
+    assert summary.slew_angle_deg == 45.0
+    assert summary.slew_motion == "slow_right"
+    assert summary.trolley_r_m == 24.5
+    assert summary.hook_h_m == 30.5
+    assert summary.load_attached is True
+    assert summary.load_type == "rebar_bundle"
+    assert summary.load_weight_t == 2.5
+    assert summary.current_command.left_joystick.slew.direction == "right"
+    assert summary.current_command.left_joystick.slew.gear == 1
+    assert summary.current_command.left_joystick.trolley.direction == "out"
+    assert summary.current_command.right_joystick.hoist.direction == "down"
+
+
+def test_build_self_state_summary_defaults_to_neutral_command() -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane)
+
+    summary = build_self_state_summary(
+        state=state,
+        crane_config=crane,
+        current_command=None,
+        distance_precision_m=1.0,
+    )
+
+    assert summary.slew_motion == "hold"
+    assert summary.current_command.left_joystick.slew.direction == "neutral"
+    assert summary.current_command.left_joystick.trolley.direction == "neutral"
+    assert summary.current_command.right_joystick.hoist.direction == "neutral"
+    assert summary.current_command.left_joystick.slew.gear == 0
+    assert summary.current_command.deadman_pressed is True
+    assert summary.current_command.emergency_stop is False
+
+
+def test_build_self_state_summary_rejects_mismatched_identity() -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane).model_copy(update={"crane_id": "OTHER"})
+
+    with pytest.raises(ObservationBuildError) as exc_info:
+        build_self_state_summary(
+            state=state,
+            crane_config=crane,
+            current_command=None,
+            distance_precision_m=1.0,
+        )
+
+    assert exc_info.value.error_code == "OBSERVATION_E_INVALID_STATE"
+    assert exc_info.value.episode_status == "failed_invalid_state"
