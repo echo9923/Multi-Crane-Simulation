@@ -10,17 +10,21 @@ from backend.app.schemas.command import (
     ExecutedRightJoystickCommand,
     ParsedCommand,
 )
-from backend.app.schemas.config import ForbiddenZonePolicyConfig, ZoneConfig
+from backend.app.schemas.config import ForbiddenZonePolicyConfig, RiskConfig, ZoneConfig
 from backend.app.schemas.crane import CraneConfig
-from backend.app.schemas.enums import ForbiddenZonePolicyMode
+from backend.app.schemas.enums import ForbiddenZonePolicyMode, SafetyMode
 from backend.app.schemas.risk import (
     SAFETY_E_INVALID_STATE,
+    SAFETY_E_SNAPSHOT_MISMATCH,
     SAFETY_E_UNSUPPORTED_ZONE,
     ForbiddenZoneResult,
+    InterventionRecord,
     MechanicalLimitResult,
     SafetyEvent,
+    SafetyPipelineResult,
 )
 from backend.app.schemas.state import CraneState
+from backend.app.schemas.weather import WeatherState
 
 GEAR_TO_SPEED_SCALE = {
     0: 0.0,
@@ -327,6 +331,221 @@ def apply_forbidden_zone_policy(
     return updated_command, result
 
 
+def apply_safety_pipeline(
+    *,
+    commands: list[ParsedCommand],
+    crane_states: list[CraneState],
+    crane_configs: list[CraneConfig],
+    risk_config: RiskConfig,
+    weather_state: WeatherState,
+    safety_mode: SafetyMode,
+    forbidden_zones: list[ZoneConfig],
+    forbidden_zone_policy: ForbiddenZonePolicyConfig,
+    source_snapshot_id: str,
+    time_s: float,
+    dt_s: float,
+) -> SafetyPipelineResult:
+    _validate_pipeline_inputs(
+        commands=commands,
+        crane_states=crane_states,
+        crane_configs=crane_configs,
+        source_snapshot_id=source_snapshot_id,
+    )
+    states_by_id = {state.crane_id: state for state in crane_states}
+    configs_by_id = {config.crane_id: config for config in crane_configs}
+
+    executed_commands: list[ExecutedCommand] = []
+    for command in commands:
+        mechanical_command, _ = apply_mechanical_safety(
+            command=command,
+            state=states_by_id[command.crane_id],
+            config=configs_by_id[command.crane_id],
+            dt_s=dt_s,
+        )
+        forbidden_command, _ = apply_forbidden_zone_policy(
+            command=mechanical_command,
+            state=states_by_id[command.crane_id],
+            config=configs_by_id[command.crane_id],
+            forbidden_zones=forbidden_zones,
+            policy=forbidden_zone_policy,
+            dt_s=dt_s,
+        )
+        executed_commands.append(forbidden_command)
+
+    proposed = {command.crane_id: command for command in executed_commands}
+    from backend.app.sim.risk import evaluate_online_risk
+
+    online_risk = evaluate_online_risk(
+        crane_states=crane_states,
+        crane_configs=crane_configs,
+        risk_config=risk_config,
+        weather_state=weather_state,
+        proposed_commands=proposed,
+    )
+    intervened_commands, interventions = apply_risk_interventions(
+        commands=executed_commands,
+        online_risk=online_risk,
+        safety_mode=safety_mode,
+    )
+    events = [
+        SafetyEvent(
+            event_id=f"INTERVENTION_{intervention.intervention_id}",
+            event_type="intervention_applied",
+            time_s=time_s,
+            crane_id=intervention.crane_id,
+            reason="intervention_applied",
+            details={
+                "action": intervention.action,
+                "risk_level": intervention.risk_level,
+                "pair_ids": intervention.pair_ids,
+            },
+        )
+        for intervention in interventions
+        if intervention.modified and safety_mode in {SafetyMode.S2, SafetyMode.S3}
+    ]
+    return SafetyPipelineResult(
+        source_snapshot_id=source_snapshot_id,
+        time_s=time_s,
+        executed_commands=intervened_commands,
+        online_risk=online_risk,
+        episode_status="running",
+        events=events,
+    )
+
+
+def apply_risk_interventions(
+    *,
+    commands: list[ExecutedCommand],
+    online_risk,
+    safety_mode: SafetyMode,
+) -> tuple[list[ExecutedCommand], list[InterventionRecord]]:
+    risky_pairs_by_crane = _risky_pairs_by_crane(online_risk)
+    updated_commands: list[ExecutedCommand] = []
+    interventions: list[InterventionRecord] = []
+    for command in commands:
+        risky_pairs = risky_pairs_by_crane.get(command.crane_id, [])
+        if not risky_pairs:
+            updated_commands.append(command)
+            continue
+        highest_level = _highest_pair_level(risky_pairs)
+        if safety_mode is SafetyMode.S0:
+            updated_commands.append(command)
+            continue
+        if safety_mode is SafetyMode.S1:
+            intervention = _intervention_record(
+                command=command,
+                safety_mode=safety_mode,
+                action="ignored_risk_hint",
+                risk_level=highest_level,
+                modified=False,
+                pair_ids=[pair.pair_id for pair in risky_pairs],
+            )
+            interventions.append(intervention)
+            updated_commands.append(
+                command.model_copy(update={"interventions": command.interventions + [intervention]})
+            )
+            continue
+        if safety_mode is SafetyMode.S2 and highest_level in {
+            "high",
+            "near_miss",
+            "collision",
+        }:
+            intervention = _intervention_record(
+                command=command,
+                safety_mode=safety_mode,
+                action="limit_speed_on_high_risk",
+                risk_level=highest_level,
+                modified=True,
+                pair_ids=[pair.pair_id for pair in risky_pairs],
+            )
+            interventions.append(intervention)
+            updated_commands.append(
+                limit_speed_on_high_risk(
+                    command=command,
+                    reason="risk_intervention",
+                    intervention=intervention,
+                )
+            )
+            continue
+        if safety_mode is SafetyMode.S3 and highest_level in {
+            "high",
+            "near_miss",
+            "collision",
+        }:
+            intervention = _intervention_record(
+                command=command,
+                safety_mode=safety_mode,
+                action="force_stop_on_high_risk",
+                risk_level=highest_level,
+                modified=True,
+                pair_ids=[pair.pair_id for pair in risky_pairs],
+            )
+            interventions.append(intervention)
+            updated_commands.append(
+                force_stop_on_high_risk(
+                    command=command,
+                    reason="risk_intervention",
+                    intervention=intervention,
+                )
+            )
+            continue
+        updated_commands.append(command)
+    return updated_commands, interventions
+
+
+def limit_speed_on_high_risk(
+    *,
+    command: ExecutedCommand,
+    speed_scale: float = 0.5,
+    reason: str,
+    intervention: InterventionRecord | None = None,
+) -> ExecutedCommand:
+    reasons = _with_reason(command.modification_reasons, "risk_intervention")
+    interventions = command.interventions + (
+        [intervention] if intervention is not None else []
+    )
+    return command.model_copy(
+        update={
+            "left_joystick": ExecutedLeftJoystickCommand(
+                slew=_scale_axis(command.left_joystick.slew, speed_scale),
+                trolley=_scale_axis(command.left_joystick.trolley, speed_scale),
+            ),
+            "right_joystick": ExecutedRightJoystickCommand(
+                hoist=_scale_axis(command.right_joystick.hoist, speed_scale)
+            ),
+            "modified": True,
+            "modification_reasons": reasons,
+            "interventions": interventions,
+        }
+    )
+
+
+def force_stop_on_high_risk(
+    *,
+    command: ExecutedCommand,
+    reason: str,
+    intervention: InterventionRecord | None = None,
+) -> ExecutedCommand:
+    reasons = _with_reason(command.modification_reasons, "risk_intervention")
+    interventions = command.interventions + (
+        [intervention] if intervention is not None else []
+    )
+    return command.model_copy(
+        update={
+            "left_joystick": ExecutedLeftJoystickCommand(
+                slew=_neutral_axis(source="risk_intervention"),
+                trolley=_neutral_axis(source="risk_intervention"),
+            ),
+            "right_joystick": ExecutedRightJoystickCommand(
+                hoist=_neutral_axis(source="risk_intervention")
+            ),
+            "modified": True,
+            "modification_reasons": reasons,
+            "interventions": interventions,
+        }
+    )
+
+
 def predict_next_hook_position(
     *,
     command: ExecutedCommand,
@@ -466,6 +685,67 @@ def _point_on_segment_2d(
     ) - 1e-9 <= y <= max(y1, y2) + 1e-9
 
 
+def _risky_pairs_by_crane(online_risk) -> dict[str, list[object]]:
+    result: dict[str, list[object]] = {}
+    for pair in online_risk.pairs:
+        if pair.risk_level not in {"high", "near_miss", "collision"}:
+            continue
+        result.setdefault(pair.crane_id_a, []).append(pair)
+        result.setdefault(pair.crane_id_b, []).append(pair)
+    return result
+
+
+def _highest_pair_level(pairs: list[object]) -> str:
+    ranks = {
+        "safe": 0,
+        "low": 1,
+        "medium": 2,
+        "high": 3,
+        "near_miss": 4,
+        "collision": 5,
+    }
+    return max((pair.risk_level for pair in pairs), key=lambda level: ranks[level])
+
+
+def _intervention_record(
+    *,
+    command: ExecutedCommand,
+    safety_mode: SafetyMode,
+    action: str,
+    risk_level: str,
+    modified: bool,
+    pair_ids: list[str],
+) -> InterventionRecord:
+    return InterventionRecord(
+        intervention_id=f"{command.command_id}_{action}",
+        crane_id=command.crane_id,
+        safety_mode=safety_mode,
+        risk_level=risk_level,
+        action=action,
+        modified=modified,
+        reason="risk_intervention",
+        pair_ids=pair_ids,
+    )
+
+
+def _scale_axis(axis: ExecutedAxisCommand, speed_scale: float) -> ExecutedAxisCommand:
+    if axis.direction == "neutral":
+        return axis
+    return axis.model_copy(
+        update={
+            "speed_scale": min(axis.speed_scale, speed_scale),
+            "source": "risk_intervention",
+        }
+    )
+
+
+def _with_reason(reasons: list[str], reason: str) -> list[str]:
+    updated = list(reasons)
+    if reason not in updated:
+        updated.append(reason)
+    return updated
+
+
 def _direction_sign(direction: str) -> float:
     if direction in {"right", "out", "up"}:
         return 1.0
@@ -523,4 +803,29 @@ def _validate_forbidden_zone_inputs(
             "command, state, and config crane_id must match",
             crane_id=command.crane_id,
             field_path="crane_id",
+        )
+
+
+def _validate_pipeline_inputs(
+    *,
+    commands: list[ParsedCommand],
+    crane_states: list[CraneState],
+    crane_configs: list[CraneConfig],
+    source_snapshot_id: str,
+) -> None:
+    command_ids = [command.crane_id for command in commands]
+    state_ids = [state.crane_id for state in crane_states]
+    config_ids = [config.crane_id for config in crane_configs]
+    if len(command_ids) != len(set(command_ids)):
+        raise MechanicalSafetyError("duplicate command crane_id", field_path="commands")
+    if set(command_ids) != set(state_ids) or set(command_ids) != set(config_ids):
+        raise MechanicalSafetyError(
+            "commands, states, and configs must contain the same crane ids",
+            field_path="crane_id",
+        )
+    if any(command.source_snapshot_id != source_snapshot_id for command in commands):
+        raise MechanicalSafetyError(
+            "command snapshot id mismatch",
+            error_code=SAFETY_E_SNAPSHOT_MISMATCH,
+            field_path="source_snapshot_id",
         )
