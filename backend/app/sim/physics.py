@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from typing import Sequence
 
+from backend.app.schemas.control import ControlTarget
 from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.state import CraneState
 
@@ -95,3 +96,88 @@ def recompute_state_geometry(
             "load_position": load_position,
         }
     )
+
+
+def step_crane_state(
+    crane_config: CraneConfig,
+    previous_state: CraneState,
+    control_target: ControlTarget,
+    dt: float,
+) -> CraneState:
+    target_slew = control_target.target_slew_velocity_rad_s
+    target_trolley = control_target.target_trolley_velocity_m_s
+    target_hoist = control_target.target_hoist_velocity_m_s
+    if control_target.emergency_stop or control_target.hold_position:
+        target_slew = 0.0
+        target_trolley = 0.0
+        target_hoist = 0.0
+
+    theta_dot = _approach(
+        previous_state.theta_dot_rad_s,
+        _clip(
+            target_slew,
+            -crane_config.model.slew_speed_max_rad_s,
+            crane_config.model.slew_speed_max_rad_s,
+        ),
+        crane_config.model.slew_acc_max_rad_s2 * dt,
+    )
+    theta_dot = _clip(
+        theta_dot,
+        -crane_config.model.slew_speed_max_rad_s,
+        crane_config.model.slew_speed_max_rad_s,
+    )
+    theta_ddot = (theta_dot - previous_state.theta_dot_rad_s) / dt
+    theta = previous_state.theta_rad + theta_dot * dt
+
+    trolley_v = _clip(
+        target_trolley,
+        -crane_config.model.trolley_speed_max_m_s,
+        crane_config.model.trolley_speed_max_m_s,
+    )
+    trolley_r = previous_state.trolley_r_m + trolley_v * dt
+    trolley_r_clamped = _clip(
+        trolley_r,
+        crane_config.trolley_r_min_m,
+        crane_config.trolley_r_max_m,
+    )
+    if trolley_r_clamped != trolley_r:
+        trolley_v = 0.0
+
+    hoist_v = _clip(
+        target_hoist,
+        -crane_config.model.hoist_speed_max_m_s,
+        crane_config.model.hoist_speed_max_m_s,
+    )
+    hook_h = previous_state.hook_h_m + hoist_v * dt
+    hook_h_clamped = _clip(
+        hook_h,
+        crane_config.hook_h_min_world_m,
+        crane_config.hook_h_max_world_m,
+    )
+    if hook_h_clamped != hook_h:
+        hoist_v = 0.0
+
+    next_state = previous_state.model_copy(
+        update={
+            "theta_rad": theta,
+            "theta_dot_rad_s": theta_dot,
+            "theta_ddot_rad_s2": theta_ddot,
+            "trolley_r_m": trolley_r_clamped,
+            "trolley_v_m_s": trolley_v,
+            "hook_h_m": hook_h_clamped,
+            "hoist_v_m_s": hoist_v,
+        }
+    )
+    return recompute_state_geometry(crane_config, next_state)
+
+
+def _approach(current: float, target: float, max_delta: float) -> float:
+    if current < target:
+        return min(current + max_delta, target)
+    if current > target:
+        return max(current - max_delta, target)
+    return current
+
+
+def _clip(value: float, lower: float, upper: float) -> float:
+    return min(max(value, lower), upper)
