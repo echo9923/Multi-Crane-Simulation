@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Optional, Sequence, TypeVar
+from typing import Any, Dict, Optional, Sequence, TypeVar
 
 from backend.app.schemas.control import ControlTarget
 from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.state import CraneState
 
 T = TypeVar("T")
+NUMERIC_TOLERANCE = 1e-6
 
 
 class PhysicsWorldError(ValueError):
@@ -23,6 +24,25 @@ class PhysicsWorldError(ValueError):
         self.reason = reason
         self.crane_id = crane_id
         self.field_path = field_path
+
+
+class PhysicsStateError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str,
+        crane_id: str,
+        field_path: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.category = "episode_failed"
+        self.episode_status = "failed_invalid_state"
+        self.crane_id = crane_id
+        self.field_path = field_path
+        self.details = details or {}
 
 
 def initialize_crane_state(crane_config: CraneConfig) -> CraneState:
@@ -121,6 +141,9 @@ def step_crane_state(
     control_target: ControlTarget,
     dt: float,
 ) -> CraneState:
+    _validate_dt(crane_config, dt)
+    validate_crane_state(crane_config, previous_state)
+
     target_slew = control_target.target_slew_velocity_rad_s
     target_trolley = control_target.target_trolley_velocity_m_s
     target_hoist = control_target.target_hoist_velocity_m_s
@@ -151,6 +174,13 @@ def step_crane_state(
         -crane_config.model.trolley_speed_max_m_s,
         crane_config.model.trolley_speed_max_m_s,
     )
+    _validate_requested_axis_delta(
+        crane_config,
+        previous_state.crane_id,
+        field_path="trolley_r_m",
+        requested_delta=abs(trolley_v * dt),
+        span=crane_config.trolley_r_max_m - crane_config.trolley_r_min_m,
+    )
     trolley_r = previous_state.trolley_r_m + trolley_v * dt
     trolley_r_clamped = _clip(
         trolley_r,
@@ -164,6 +194,13 @@ def step_crane_state(
         target_hoist,
         -crane_config.model.hoist_speed_max_m_s,
         crane_config.model.hoist_speed_max_m_s,
+    )
+    _validate_requested_axis_delta(
+        crane_config,
+        previous_state.crane_id,
+        field_path="hook_h_m",
+        requested_delta=abs(hoist_v * dt),
+        span=crane_config.hook_h_max_world_m - crane_config.hook_h_min_world_m,
     )
     hook_h = previous_state.hook_h_m + hoist_v * dt
     hook_h_clamped = _clip(
@@ -185,7 +222,10 @@ def step_crane_state(
             "hoist_v_m_s": hoist_v,
         }
     )
-    return recompute_state_geometry(crane_config, next_state)
+    next_state = recompute_state_geometry(crane_config, next_state)
+    validate_crane_state(crane_config, next_state)
+    _validate_state_jump(crane_config, previous_state, next_state, dt)
+    return next_state
 
 
 def step_world(
@@ -258,6 +298,211 @@ def _approach(current: float, target: float, max_delta: float) -> float:
 
 def _clip(value: float, lower: float, upper: float) -> float:
     return min(max(value, lower), upper)
+
+
+def validate_crane_state(
+    crane_config: CraneConfig,
+    state: CraneState,
+    *,
+    tolerance: float = NUMERIC_TOLERANCE,
+) -> None:
+    numeric_fields = {
+        "theta_rad": state.theta_rad,
+        "theta_dot_rad_s": state.theta_dot_rad_s,
+        "theta_ddot_rad_s2": state.theta_ddot_rad_s2,
+        "theta_sin": state.theta_sin,
+        "theta_cos": state.theta_cos,
+        "trolley_r_m": state.trolley_r_m,
+        "trolley_v_m_s": state.trolley_v_m_s,
+        "hook_h_m": state.hook_h_m,
+        "hoist_v_m_s": state.hoist_v_m_s,
+        "cable_length_m": state.cable_length_m,
+    }
+    for field, values in {
+        "root_position": state.root_position,
+        "tip_position": state.tip_position,
+        "hook_position": state.hook_position,
+        "load_position": state.load_position or [],
+        "load_size_m": state.load_size_m or [],
+    }.items():
+        for index, value in enumerate(values):
+            numeric_fields[f"{field}[{index}]"] = value
+
+    for field_path, value in numeric_fields.items():
+        if not math.isfinite(value):
+            raise _state_error(
+                "PHYS_E_001",
+                state.crane_id,
+                field_path,
+                value=value,
+                reason="non_finite",
+            )
+
+    _validate_range(
+        state,
+        "trolley_r_m",
+        state.trolley_r_m,
+        crane_config.trolley_r_min_m,
+        crane_config.trolley_r_max_m,
+        tolerance,
+    )
+    if state.hook_h_m > crane_config.root[2] + tolerance:
+        raise _state_error(
+            "PHYS_E_002",
+            state.crane_id,
+            "hook_h_m",
+            value=state.hook_h_m,
+            limit=crane_config.root[2],
+            reason="hook_above_root",
+        )
+    _validate_range(
+        state,
+        "hook_h_m",
+        state.hook_h_m,
+        crane_config.hook_h_min_world_m,
+        crane_config.hook_h_max_world_m,
+        tolerance,
+    )
+    _validate_range(
+        state,
+        "cable_length_m",
+        state.cable_length_m,
+        crane_config.cable_length_min_m,
+        crane_config.cable_length_max_m,
+        tolerance,
+    )
+    expected_cable = crane_config.root[2] - state.hook_h_m
+    if abs(state.cable_length_m - expected_cable) > tolerance:
+        raise _state_error(
+            "PHYS_E_002",
+            state.crane_id,
+            "cable_length_m",
+            value=state.cable_length_m,
+            expected=expected_cable,
+            reason="cable_length_inconsistent",
+        )
+    if abs(state.theta_sin - math.sin(state.theta_rad)) > tolerance:
+        raise _state_error(
+            "PHYS_E_002",
+            state.crane_id,
+            "theta_sin",
+            value=state.theta_sin,
+            expected=math.sin(state.theta_rad),
+            reason="theta_trig_inconsistent",
+        )
+    if abs(state.theta_cos - math.cos(state.theta_rad)) > tolerance:
+        raise _state_error(
+            "PHYS_E_002",
+            state.crane_id,
+            "theta_cos",
+            value=state.theta_cos,
+            expected=math.cos(state.theta_rad),
+            reason="theta_trig_inconsistent",
+        )
+
+
+def _validate_dt(crane_config: CraneConfig, dt: float) -> None:
+    if not math.isfinite(dt):
+        raise _state_error(
+            "PHYS_E_001",
+            crane_config.crane_id,
+            "dt",
+            value=dt,
+            reason="non_finite",
+        )
+    if dt <= 0:
+        raise _state_error(
+            "PHYS_E_002",
+            crane_config.crane_id,
+            "dt",
+            value=dt,
+            reason="non_positive_dt",
+        )
+
+
+def _validate_range(
+    state: CraneState,
+    field_path: str,
+    value: float,
+    lower: float,
+    upper: float,
+    tolerance: float,
+) -> None:
+    if value < lower - tolerance or value > upper + tolerance:
+        raise _state_error(
+            "PHYS_E_002",
+            state.crane_id,
+            field_path,
+            value=value,
+            limit=[lower, upper],
+            reason="out_of_range",
+        )
+
+
+def _validate_state_jump(
+    crane_config: CraneConfig,
+    previous_state: CraneState,
+    next_state: CraneState,
+    dt: float,
+) -> None:
+    max_trolley_delta = crane_config.model.trolley_speed_max_m_s * dt + NUMERIC_TOLERANCE
+    trolley_delta = abs(next_state.trolley_r_m - previous_state.trolley_r_m)
+    if trolley_delta > max_trolley_delta:
+        raise _state_error(
+            "PHYS_E_002",
+            next_state.crane_id,
+            "trolley_r_m",
+            value=trolley_delta,
+            limit=max_trolley_delta,
+            reason="abnormal_state_jump",
+        )
+
+    max_hook_delta = crane_config.model.hoist_speed_max_m_s * dt + NUMERIC_TOLERANCE
+    hook_delta = abs(next_state.hook_h_m - previous_state.hook_h_m)
+    if hook_delta > max_hook_delta:
+        raise _state_error(
+            "PHYS_E_002",
+            next_state.crane_id,
+            "hook_h_m",
+            value=hook_delta,
+            limit=max_hook_delta,
+            reason="abnormal_state_jump",
+        )
+
+
+def _validate_requested_axis_delta(
+    crane_config: CraneConfig,
+    crane_id: str,
+    *,
+    field_path: str,
+    requested_delta: float,
+    span: float,
+) -> None:
+    if requested_delta > span + NUMERIC_TOLERANCE:
+        raise _state_error(
+            "PHYS_E_002",
+            crane_id,
+            field_path,
+            value=requested_delta,
+            limit=span,
+            reason="abnormal_state_jump",
+        )
+
+
+def _state_error(
+    error_code: str,
+    crane_id: str,
+    field_path: str,
+    **details: Any,
+) -> PhysicsStateError:
+    reason = details.get("reason", "invalid_state")
+    return PhysicsStateError(
+        f"{error_code} {field_path}: {reason}",
+        error_code=error_code,
+        crane_id=crane_id,
+        field_path=field_path,
+        details=details,
+    )
 
 
 def _index_by_crane_id(

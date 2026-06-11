@@ -8,7 +8,11 @@ from backend.app.schemas.config import ScenarioConfig
 from backend.app.schemas.control import ControlTarget
 from backend.app.sim.crane_model import build_crane_model_library
 from backend.app.sim.layout import build_crane_configs
-from backend.app.sim.physics import initialize_crane_state, step_crane_state
+from backend.app.sim.physics import (
+    initialize_crane_state,
+    recompute_state_geometry,
+    step_crane_state,
+)
 from backend.app.tests.test_config_schema import load_fixture
 
 
@@ -138,8 +142,11 @@ def test_trolley_velocity_is_limited_and_radius_is_clamped() -> None:
 
 def test_hoist_velocity_is_limited_and_hook_height_is_clamped() -> None:
     crane = _crane_config()
-    state = initialize_crane_state(crane).model_copy(
-        update={"hook_h_m": crane.hook_h_min_world_m + 0.1}
+    state = recompute_state_geometry(
+        crane,
+        initialize_crane_state(crane).model_copy(
+            update={"hook_h_m": crane.hook_h_min_world_m + 0.1}
+        ),
     )
     dt = 10.0
 
