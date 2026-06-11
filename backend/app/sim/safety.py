@@ -403,12 +403,34 @@ def apply_safety_pipeline(
         for intervention in interventions
         if intervention.modified and safety_mode in {SafetyMode.S2, SafetyMode.S3}
     ]
+    from backend.app.sim.collision import detect_collisions
+
+    collision = detect_collisions(
+        crane_states=crane_states,
+        crane_configs=crane_configs,
+        risk_config=risk_config,
+        source_snapshot_id=source_snapshot_id,
+        time_s=time_s,
+    )
+    if collision is not None:
+        events.append(
+            SafetyEvent(
+                event_id=collision.event_id,
+                event_type="collision",
+                time_s=time_s,
+                crane_id=collision.crane_id_a,
+                pair_id=f"{collision.crane_id_a}-{collision.crane_id_b}",
+                reason="collision",
+                details=collision.model_dump(mode="json"),
+            )
+        )
     return SafetyPipelineResult(
         source_snapshot_id=source_snapshot_id,
         time_s=time_s,
         executed_commands=intervened_commands,
         online_risk=online_risk,
-        episode_status="running",
+        collision=collision,
+        episode_status="failed_collision" if collision is not None else "running",
         events=events,
     )
 
