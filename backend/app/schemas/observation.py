@@ -143,10 +143,17 @@ class AvailableActions(ObservationBaseModel):
         return value
 
 
+class RecentDecisionSummary(ObservationBaseModel):
+    schema_version: str = OBSERVATION_SCHEMA_VERSION
+    time_s: float = Field(ge=0)
+    command_summary: str
+    result: Optional[str] = None
+
+
 class MemorySummary(ObservationBaseModel):
     schema_version: str = OBSERVATION_SCHEMA_VERSION
     task_history_summary: Optional[str] = None
-    recent_decisions: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_decisions: List[RecentDecisionSummary] = Field(default_factory=list)
     event_summary: List[str] = Field(default_factory=list)
 
 
@@ -170,4 +177,3 @@ class Observation(ObservationBaseModel):
     safety_hint: Optional[SafetyHint] = None
     available_actions: AvailableActions = Field(default_factory=AvailableActions)
     memory: MemorySummary = Field(default_factory=MemorySummary)
-

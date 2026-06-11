@@ -199,6 +199,18 @@ def test_observation_schema_forbids_extra_fields_recursively() -> None:
     ]
 
 
+def test_observation_schema_forbids_extra_memory_decision_fields() -> None:
+    payload = _valid_observation_payload()
+    payload["memory"]["recent_decisions"][0]["future_min_distance"] = 0.1
+
+    with pytest.raises(ValidationError) as exc_info:
+        Observation.model_validate(payload)
+
+    assert ("memory", "recent_decisions", 0, "future_min_distance") in [
+        tuple(error["loc"]) for error in exc_info.value.errors()
+    ]
+
+
 def test_observation_schema_rejects_nan_and_inf_values() -> None:
     payload = _valid_observation_payload()
     payload["self_state"]["hook_h_m"] = math.nan
