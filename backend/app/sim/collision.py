@@ -22,6 +22,8 @@ def detect_collisions(
     configs_by_id = {config.crane_id: config for config in crane_configs}
     if len(states_by_id) != len(crane_states) or len(configs_by_id) != len(crane_configs):
         raise ValueError("duplicate crane ids")
+    if set(states_by_id) != set(configs_by_id):
+        raise ValueError("crane states and configs must match")
     for crane_id_a, crane_id_b in combinations(sorted(states_by_id), 2):
         event = detect_pair_collision(
             state_a=states_by_id[crane_id_a],

@@ -248,10 +248,12 @@ def test_module_g_acceptance_multi_crane_retry_idle_risk_and_failure_paths() -> 
 
 
 def test_module_g_boundaries_remain_static() -> None:
+    shared_command_schema = Path("backend/app/schemas/command.py").read_text(
+        encoding="utf-8"
+    )
     module_sources = "\n".join(
         Path(path).read_text(encoding="utf-8")
         for path in [
-            "backend/app/schemas/command.py",
             "backend/app/sim/prompt_builder.py",
             "backend/app/sim/llm_provider.py",
             "backend/app/sim/command_parser.py",
@@ -270,3 +272,5 @@ def test_module_g_boundaries_remain_static() -> None:
         "commands.jsonl",
     ]:
         assert forbidden not in module_sources
+        if forbidden != "ExecutedCommand":
+            assert forbidden not in shared_command_schema
