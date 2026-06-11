@@ -35,7 +35,7 @@ class Controller:
         if isinstance(config, ControllerConfig):
             return cls(config)
         if isinstance(config, dict):
-            sim_config = config.get("sim", {})
+            sim_config = config.get("sim") or config.get("runtime", {}).get("sim", {})
             if not isinstance(sim_config, dict):
                 raise ControllerStateError(
                     "config.sim must be a mapping",
@@ -45,11 +45,18 @@ class Controller:
             return cls(ControllerConfig(controller_hz=sim_config["controller_hz"]))
         sim = getattr(config, "sim", None)
         if sim is None:
+            runtime = getattr(config, "runtime", None)
+            sim = getattr(runtime, "sim", None) if runtime is not None else None
+            if sim is None and isinstance(runtime, dict):
+                sim = runtime.get("sim")
+        if sim is None:
             raise ControllerStateError(
                 "config must provide sim.controller_hz",
                 error_code=CTRL_E_INVALID_STATE,
                 field_path="sim.controller_hz",
             )
+        if isinstance(sim, dict):
+            return cls(ControllerConfig(controller_hz=sim["controller_hz"]))
         return cls(ControllerConfig(controller_hz=getattr(sim, "controller_hz")))
 
     def compute_target(
@@ -283,7 +290,7 @@ def compute_stop_mode_target(
         mode=mode,
         dt_s=dt_s,
         now_s=now_s,
-        axes=diagnostics,
+        axes=_apply_command_axis_metadata(command, diagnostics),
     )
     return control_target, diagnostic
 
@@ -484,6 +491,7 @@ def _models_by_id(
     indexed: Dict[str, CraneModelSpec] = {}
     for model in models:
         crane_id = getattr(model, "crane_id", None)
+        actual_model = getattr(model, "model", model)
         if not isinstance(crane_id, str) or not crane_id:
             raise ControllerStateError(
                 "model sequence items must provide crane_id; use a mapping instead",
@@ -497,7 +505,7 @@ def _models_by_id(
                 crane_id=crane_id,
                 field_path="models",
             )
-        indexed[crane_id] = model
+        indexed[crane_id] = actual_model
     return indexed
 
 
