@@ -239,3 +239,26 @@ def test_overlap_task_without_overlap_region_reports_reason() -> None:
 
     assert exc_info.value.error_code == "TASK_E_001"
     assert exc_info.value.reason == "no_task_overlap_region"
+
+
+def test_mixed_distribution_without_overlap_region_resamples_to_easy_task() -> None:
+    raw = _scenario_raw()
+    raw["cranes"] = [
+        {
+            **deepcopy(raw["cranes"][0]),
+            "crane_id": "C1",
+            "base": [-30.0, -20.0, 0.0],
+        }
+    ]
+    raw["layout"]["num_cranes"] = 1
+    raw["tasks"]["num_tasks_per_crane"] = 1
+    raw["tasks"]["task_type_distribution"] = {
+        "easy_task": 0.5,
+        "overlap_task": 0.5,
+        "stress_task": 0.0,
+    }
+    scenario, cranes = _scenario_and_cranes(raw)
+
+    result = generate_task_queues(scenario, cranes, seed=0)
+
+    assert [task.task_type for task in result.tasks] == ["easy_task"]

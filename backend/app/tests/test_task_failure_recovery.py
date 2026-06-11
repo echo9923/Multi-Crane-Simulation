@@ -281,6 +281,33 @@ def test_recovery_timeout_returns_episode_failure_request_without_clearing_load(
     assert result.events[-1].details["error_code"] == "TASK_E_104"
 
 
+def test_blocked_recovery_target_returns_task_e_105_without_clearing_load() -> None:
+    scenario, crane = _scenario_and_crane()
+    blocked_task = _task().model_copy(
+        update={
+            "dropoff": _task().dropoff.model_copy(update={"x": 80.0}),
+        }
+    )
+    state = _state(crane, stage="release_pending", load_attached=True, x=25.0, z=30.0)
+
+    result = handle_task_timing_and_failures(
+        blocked_task,
+        state,
+        scenario,
+        crane,
+        time_s=200.0,
+        runtime=TaskFailureRuntimeState(
+            release_stage_started_at_s=70.0,
+            last_progress_at_s=190.0,
+        ),
+    )
+
+    assert result.recovery_task is None
+    assert result.state.load_attached is True
+    assert result.episode_failure_request == "failed_recovery_blocked"
+    assert result.events[-1].details["error_code"] == "TASK_E_105"
+
+
 def test_no_progress_timeout_fails_without_load_or_enters_recovery_with_load() -> None:
     scenario, crane = _scenario_and_crane()
     scenario = scenario.model_copy(

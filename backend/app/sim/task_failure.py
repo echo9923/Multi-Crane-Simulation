@@ -8,6 +8,11 @@ from backend.app.schemas.config import ScenarioConfig
 from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.state import CraneState
 from backend.app.schemas.task import Task, TaskEventPayload, TaskPoint, TaskQueue
+from backend.app.sim.layout_geometry import (
+    horizontal_distance,
+    point_in_boundary,
+    point_in_zone,
+)
 
 
 class TaskFailureRuntimeState(BaseModel):
@@ -143,6 +148,7 @@ def handle_task_timing_and_failures(
                 runtime,
                 events,
                 time_s,
+                scenario,
                 crane,
                 failure_reason="failed_release_timeout",
                 error_code="TASK_E_103",
@@ -171,6 +177,7 @@ def handle_task_timing_and_failures(
                 runtime,
                 events,
                 time_s,
+                scenario,
                 crane,
                 failure_reason="failed_no_progress_timeout",
                 error_code="TASK_E_103",
@@ -277,6 +284,7 @@ def _enter_recovery(
     runtime: TaskFailureRuntimeState,
     events: List[TaskEventPayload],
     time_s: float,
+    scenario: ScenarioConfig,
     crane: CraneConfig,
     *,
     failure_reason: str,
@@ -291,6 +299,25 @@ def _enter_recovery(
         }
     )
     next_state = state.model_copy(update={"task_stage": "recovery_release"})
+    if not _recovery_target_available(failed.dropoff, scenario, crane):
+        events.append(
+            _event(
+                "recovery_release_failed",
+                time_s,
+                next_state,
+                failed,
+                reason="failed_recovery_blocked",
+                details={"error_code": "TASK_E_105", "load_attached": state.load_attached},
+            )
+        )
+        return _result(
+            failed,
+            next_state,
+            runtime,
+            events,
+            queue=queue,
+            episode_failure_request="failed_recovery_blocked",
+        )
     recovery = _create_recovery_task(failed, state, crane, time_s)
     next_runtime = runtime.model_copy(update={"recovery_started_at_s": time_s})
     events.append(
@@ -362,6 +389,24 @@ def _create_recovery_task(
         generation_seed=failed_task.generation_seed,
         generation_attempt=0,
     )
+
+
+def _recovery_target_available(
+    target: TaskPoint,
+    scenario: ScenarioConfig,
+    crane: CraneConfig,
+) -> bool:
+    radius = horizontal_distance(crane.base, target.as_xyz())
+    if radius < crane.trolley_r_min_m or radius > crane.trolley_r_max_m:
+        return False
+    if target.z < crane.hook_h_min_world_m or target.z > crane.hook_h_max_world_m:
+        return False
+    if not point_in_boundary(target.as_xyz(), scenario.site.boundary):
+        return False
+    for zone in scenario.site.forbidden_zones:
+        if point_in_zone(target.as_xyz(), zone):
+            return False
+    return True
 
 
 def _replace_task_in_queue(queue: TaskQueue, task: Task) -> TaskQueue:

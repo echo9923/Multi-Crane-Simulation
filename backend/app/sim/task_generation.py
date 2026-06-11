@@ -193,11 +193,14 @@ def _generate_auto_task(
     max_attempts = scenario.layout.max_sampling_attempts
     task_type = _sample_weighted(rng, scenario.tasks.task_type_distribution)
     if task_type in {"overlap_task", "stress_task"} and not overlap_regions:
-        raise TaskGenerationError(
-            "overlap task requested but no overlap region is available",
-            error_code="TASK_E_001",
-            reason="no_task_overlap_region",
-        )
+        if _task_type_weight(scenario, "easy_task") > 0:
+            task_type = "easy_task"
+        else:
+            raise TaskGenerationError(
+                "overlap task requested but no overlap region is available",
+                error_code="TASK_E_001",
+                reason="no_task_overlap_region",
+            )
     if task_type == "stress_task":
         task_type = "stress_task"
 
@@ -609,6 +612,14 @@ def _requires_overlap_only(scenario: ScenarioConfig) -> bool:
         distribution.get("overlap_task", 0.0) > 0
         or distribution.get("stress_task", 0.0) > 0
     )
+
+
+def _task_type_weight(scenario: ScenarioConfig, task_type: str) -> float:
+    for key, value in scenario.tasks.task_type_distribution.items():
+        key_value = key.value if hasattr(key, "value") else str(key)
+        if key_value == task_type:
+            return value
+    return 0.0
 
 
 def _zone_center(zone: ZoneConfig) -> Optional[List[float]]:
