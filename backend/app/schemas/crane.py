@@ -30,9 +30,11 @@ class CraneModelSpec(CraneBaseModel):
     trolley_r_min_m: float = Field(ge=0)
     trolley_r_max_m: float = Field(gt=0)
     trolley_speed_max_m_s: float = Field(gt=0)
+    trolley_acc_max_m_s2: float = Field(gt=0)
     cable_length_min_m: float = Field(ge=0)
     cable_length_max_m: float = Field(gt=0)
     hoist_speed_max_m_s: float = Field(gt=0)
+    hoist_acc_max_m_s2: float = Field(gt=0)
     min_clearance_below_jib_m: float = Field(ge=0)
     load_chart_points: Optional[List[LoadChartPoint]] = None
     source: Literal["builtin", "yaml_override", "yaml_new"]

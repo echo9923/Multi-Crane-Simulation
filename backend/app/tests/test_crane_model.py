@@ -67,6 +67,8 @@ def test_speed_fields_convert_from_deg_to_rad() -> None:
 
     assert model.slew_speed_max_rad_s == pytest.approx(math.radians(0.8))
     assert model.slew_acc_max_rad_s2 == pytest.approx(math.radians(0.3))
+    assert model.trolley_acc_max_m_s2 == pytest.approx(0.4)
+    assert model.hoist_acc_max_m_s2 == pytest.approx(0.5)
 
 
 def test_capacity_at_radius_uses_chart_and_moment_limits() -> None:

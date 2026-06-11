@@ -5,6 +5,7 @@ import math
 import pytest
 from pydantic import ValidationError
 
+from backend.app.schemas.config import ScenarioConfig
 from backend.app.schemas.control import (
     CONTROLLER_SCHEMA_VERSION,
     DEFAULT_HOIST_GEAR_SPEEDS_M_S,
@@ -27,7 +28,13 @@ from backend.app.sim.controller import (
     direction_sign,
     map_axis_to_desired_velocity,
     map_command_to_desired_velocities,
+    smooth_axis_velocity,
+    smooth_command_velocities,
 )
+from backend.app.sim.crane_model import build_crane_model_library
+from backend.app.sim.layout import build_crane_configs
+from backend.app.sim.physics import initialize_crane_state
+from backend.app.tests.test_config_schema import load_fixture
 
 
 @pytest.fixture
@@ -110,6 +117,25 @@ def executed_command():
         )
 
     return factory
+
+
+def _crane_config(crane_id: str = "C1"):
+    raw = load_fixture("scenario_valid.yaml")
+    raw["layout"]["mode"] = "manual"
+    raw["layout"]["num_cranes"] = 1
+    raw["cranes"] = [
+        {
+            "crane_id": crane_id,
+            "model_id": "generic_flat_top_55m",
+            "base": [0.0, 0.0, 0.0],
+            "mast_height_m": 45.0,
+            "theta_init_deg": 0.0,
+            "slew": {"mode": "continuous"},
+        }
+    ]
+    scenario = ScenarioConfig.model_validate(raw)
+    library = build_crane_model_library(scenario.crane_models)
+    return build_crane_configs(scenario.cranes, library, scenario, source="manual")[0]
 
 
 def test_controller_config_defaults_match_module_i_tables() -> None:
@@ -394,3 +420,148 @@ def test_controller_module_does_not_reuse_safety_generic_gear_scale() -> None:
     source = inspect.getsource(controller_module)
 
     assert "GEAR_TO_SPEED_SCALE" not in source
+
+
+def test_crane_model_spec_exposes_three_axis_acceleration_limits() -> None:
+    model = _crane_config().model
+
+    assert model.slew_acc_max_rad_s2 == pytest.approx(math.radians(0.3))
+    assert model.trolley_acc_max_m_s2 == pytest.approx(0.4)
+    assert model.hoist_acc_max_m_s2 == pytest.approx(0.5)
+
+
+def test_smooth_axis_velocity_limits_acceleration_and_records_diagnostic() -> None:
+    model = _crane_config().model
+
+    target, diagnostic = smooth_axis_velocity(
+        axis="trolley",
+        direction="out",
+        gear=5,
+        speed_scale=1.0,
+        current_velocity=0.0,
+        desired_velocity=0.5,
+        model=model,
+        dt_s=0.1,
+        controller_config=ControllerConfig(controller_hz=10.0),
+    )
+
+    assert target == pytest.approx(model.trolley_acc_max_m_s2 * 0.1)
+    assert diagnostic.axis == "trolley"
+    assert diagnostic.acceleration_limited is True
+    assert diagnostic.speed_clamped is False
+    assert diagnostic.desired_velocity_after_speed_clamp == pytest.approx(0.5)
+
+
+def test_smooth_axis_velocity_clamps_speed_before_transition() -> None:
+    model = _crane_config().model
+
+    target, diagnostic = smooth_axis_velocity(
+        axis="slew",
+        direction="right",
+        gear=5,
+        speed_scale=1.0,
+        current_velocity=0.0,
+        desired_velocity=model.slew_speed_max_rad_s * 10.0,
+        model=model,
+        dt_s=0.5,
+        controller_config=ControllerConfig(controller_hz=2.0),
+    )
+
+    assert target <= model.slew_speed_max_rad_s
+    assert target == pytest.approx(model.slew_acc_max_rad_s2 * 0.5)
+    assert diagnostic.speed_clamped is True
+    assert diagnostic.acceleration_limited is True
+    assert diagnostic.desired_velocity_after_speed_clamp == pytest.approx(
+        model.slew_speed_max_rad_s
+    )
+
+
+def test_smooth_axis_velocity_handles_deceleration_and_reversal() -> None:
+    model = _crane_config().model
+
+    target, diagnostic = smooth_axis_velocity(
+        axis="hoist",
+        direction="down",
+        gear=5,
+        speed_scale=1.0,
+        current_velocity=0.2,
+        desired_velocity=-0.6,
+        model=model,
+        dt_s=0.2,
+        controller_config=ControllerConfig(controller_hz=5.0),
+    )
+
+    assert target == pytest.approx(0.2 - model.hoist_acc_max_m_s2 * 0.2)
+    assert diagnostic.acceleration_limited is True
+
+
+def test_smooth_command_velocities_reads_state_current_velocities() -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane).model_copy(
+        update={
+            "theta_dot_rad_s": 0.0,
+            "trolley_v_m_s": 0.2,
+            "hoist_v_m_s": -0.2,
+        }
+    )
+
+    velocities, diagnostics = smooth_command_velocities(
+        desired_velocities={"slew": 0.8, "trolley": 0.0, "hoist": 0.6},
+        state=state,
+        model=crane.model,
+        dt_s=0.1,
+        controller_config=ControllerConfig(controller_hz=10.0),
+    )
+
+    assert velocities["slew"] == pytest.approx(crane.model.slew_acc_max_rad_s2 * 0.1)
+    assert velocities["trolley"] == pytest.approx(
+        0.2 - crane.model.trolley_acc_max_m_s2 * 0.1
+    )
+    assert velocities["hoist"] == pytest.approx(
+        -0.2 + crane.model.hoist_acc_max_m_s2 * 0.1
+    )
+    assert {diagnostic.axis for diagnostic in diagnostics} == {
+        "slew",
+        "trolley",
+        "hoist",
+    }
+
+
+@pytest.mark.parametrize("dt_s", [0.0, -0.1, math.inf, math.nan])
+def test_smooth_axis_velocity_rejects_invalid_dt(dt_s: float) -> None:
+    model = _crane_config().model
+
+    with pytest.raises(ControllerStateError) as exc_info:
+        smooth_axis_velocity(
+            axis="slew",
+            direction="right",
+            gear=1,
+            speed_scale=1.0,
+            current_velocity=0.0,
+            desired_velocity=0.15,
+            model=model,
+            dt_s=dt_s,
+            controller_config=ControllerConfig(controller_hz=20.0),
+        )
+
+    assert exc_info.value.episode_status == "failed_invalid_state"
+    assert exc_info.value.field_path == "dt_s"
+
+
+def test_smooth_axis_velocity_rejects_non_finite_current_velocity() -> None:
+    model = _crane_config().model
+
+    with pytest.raises(ControllerStateError) as exc_info:
+        smooth_axis_velocity(
+            axis="slew",
+            direction="right",
+            gear=1,
+            speed_scale=1.0,
+            current_velocity=math.nan,
+            desired_velocity=0.15,
+            model=model,
+            dt_s=0.1,
+            controller_config=ControllerConfig(controller_hz=20.0),
+        )
+
+    assert exc_info.value.field_path == "current_velocity"

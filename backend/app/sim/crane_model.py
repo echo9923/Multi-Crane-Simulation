@@ -27,9 +27,11 @@ BUILTIN_CRANE_MODELS: Dict[str, Dict[str, Any]] = {
         "trolley_r_min_m": 5.0,
         "trolley_r_max_m": 50.0,
         "trolley_speed_max_m_s": 0.5,
+        "trolley_acc_max_m_s2": 0.4,
         "cable_length_min_m": 2.0,
         "cable_length_max_m": 60.0,
         "hoist_speed_max_m_s": 0.6,
+        "hoist_acc_max_m_s2": 0.5,
         "min_clearance_below_jib_m": 2.0,
     }
 }
