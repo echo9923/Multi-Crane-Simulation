@@ -1,11 +1,28 @@
 from __future__ import annotations
 
 import math
-from typing import Sequence
+from typing import Dict, Optional, Sequence, TypeVar
 
 from backend.app.schemas.control import ControlTarget
 from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.state import CraneState
+
+T = TypeVar("T")
+
+
+class PhysicsWorldError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        crane_id: Optional[str] = None,
+        field_path: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.crane_id = crane_id
+        self.field_path = field_path
 
 
 def initialize_crane_state(crane_config: CraneConfig) -> CraneState:
@@ -171,6 +188,66 @@ def step_crane_state(
     return recompute_state_geometry(crane_config, next_state)
 
 
+def step_world(
+    crane_configs: Sequence[CraneConfig],
+    previous_states: Sequence[CraneState],
+    control_targets: Sequence[ControlTarget],
+    dt: float,
+) -> list[CraneState]:
+    state_by_id = _index_by_crane_id(
+        previous_states,
+        item_name="previous_state",
+        field_path="previous_states",
+    )
+    target_by_id = _index_by_crane_id(
+        control_targets,
+        item_name="control_target",
+        field_path="control_targets",
+    )
+
+    config_ids = {crane_config.crane_id for crane_config in crane_configs}
+    for crane_id in state_by_id:
+        if crane_id not in config_ids:
+            raise PhysicsWorldError(
+                f"unknown previous state crane_id: {crane_id}",
+                reason="unknown_previous_state",
+                crane_id=crane_id,
+                field_path="previous_states",
+            )
+    for crane_id in target_by_id:
+        if crane_id not in config_ids:
+            raise PhysicsWorldError(
+                f"unknown control target crane_id: {crane_id}",
+                reason="unknown_control_target",
+                crane_id=crane_id,
+                field_path="control_targets",
+            )
+
+    next_states: list[CraneState] = []
+    for crane_config in crane_configs:
+        crane_id = crane_config.crane_id
+        previous_state = state_by_id.get(crane_id)
+        if previous_state is None:
+            raise PhysicsWorldError(
+                f"missing previous state for crane_id: {crane_id}",
+                reason="missing_previous_state",
+                crane_id=crane_id,
+                field_path="previous_states",
+            )
+        control_target = target_by_id.get(crane_id)
+        if control_target is None:
+            raise PhysicsWorldError(
+                f"missing control target for crane_id: {crane_id}",
+                reason="missing_control_target",
+                crane_id=crane_id,
+                field_path="control_targets",
+            )
+        next_states.append(
+            step_crane_state(crane_config, previous_state, control_target, dt)
+        )
+    return next_states
+
+
 def _approach(current: float, target: float, max_delta: float) -> float:
     if current < target:
         return min(current + max_delta, target)
@@ -181,3 +258,23 @@ def _approach(current: float, target: float, max_delta: float) -> float:
 
 def _clip(value: float, lower: float, upper: float) -> float:
     return min(max(value, lower), upper)
+
+
+def _index_by_crane_id(
+    items: Sequence[T],
+    *,
+    item_name: str,
+    field_path: str,
+) -> Dict[str, T]:
+    indexed: Dict[str, T] = {}
+    for item in items:
+        crane_id = getattr(item, "crane_id")
+        if crane_id in indexed:
+            raise PhysicsWorldError(
+                f"duplicate {item_name} crane_id: {crane_id}",
+                reason=f"duplicate_{item_name}",
+                crane_id=crane_id,
+                field_path=field_path,
+            )
+        indexed[crane_id] = item
+    return indexed
