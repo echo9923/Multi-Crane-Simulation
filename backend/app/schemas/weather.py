@@ -68,6 +68,18 @@ class WeatherVisibilityContext(WeatherBaseModel):
         return value
 
 
+class WindAdvisory(WeatherBaseModel):
+    schema_version: str = WEATHER_SCHEMA_VERSION
+    time_s: float = Field(ge=0)
+    level: WindAdvisoryLevel
+    wind_speed_m_s: float = Field(ge=0)
+    wind_gust_m_s: float = Field(ge=0)
+    wind_direction_deg: float = Field(ge=0, le=360)
+    wind_for_safety_m_s: float = Field(ge=0)
+    message_key: str
+    recommended_behavior_keys: List[str] = Field(default_factory=list)
+
+
 DEFAULT_VISIBILITY_PROFILES: Dict[VisibilityLevel, VisibilityProfile] = {
     VisibilityLevel.GOOD: VisibilityProfile(
         level=VisibilityLevel.GOOD,

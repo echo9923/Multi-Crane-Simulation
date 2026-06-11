@@ -17,6 +17,7 @@ from backend.app.schemas.weather import (
     WeatherGenerationReport,
     WeatherState,
     WeatherVisibilityContext,
+    WindAdvisory,
 )
 
 
@@ -382,3 +383,40 @@ def _stable_int_hash(parts: List[str]) -> int:
     encoded = "\x1f".join(parts).encode("utf-8")
     digest = hashlib.sha256(encoded).hexdigest()
     return int(digest[:16], 16)
+
+
+def build_wind_advisory(weather_state: WeatherState) -> WindAdvisory:
+    level = weather_state.wind_advisory_level
+    level_value = level.value if hasattr(level, "value") else str(level)
+    behavior_keys = _recommended_behavior_keys(level)
+    return WindAdvisory(
+        time_s=weather_state.time_s,
+        level=level,
+        wind_speed_m_s=weather_state.wind_speed_m_s,
+        wind_gust_m_s=weather_state.wind_gust_m_s,
+        wind_direction_deg=weather_state.wind_direction_deg,
+        wind_for_safety_m_s=weather_state.wind_for_safety_m_s,
+        message_key=f"weather.wind.{level_value}",
+        recommended_behavior_keys=behavior_keys,
+    )
+
+
+def _recommended_behavior_keys(level: str) -> List[str]:
+    if level == "normal":
+        return []
+    if level == "caution":
+        return ["increase_observation"]
+    if level == "gusty":
+        return [
+            "reduce_gear",
+            "slow_hoist",
+            "avoid_sudden_slew",
+            "increase_observation",
+        ]
+    return [
+        "reduce_gear",
+        "slow_hoist",
+        "avoid_sudden_slew",
+        "increase_observation",
+        "pause_if_gusty",
+    ]
