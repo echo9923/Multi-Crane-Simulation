@@ -199,6 +199,7 @@ def step_crane_state(
     control_target: ControlTarget,
     dt: float,
 ) -> CraneState:
+    _validate_step_identity(crane_config, previous_state, control_target)
     _validate_dt(crane_config, dt)
     validate_crane_state(crane_config, previous_state)
 
@@ -292,6 +293,11 @@ def step_world(
     control_targets: Sequence[ControlTarget],
     dt: float,
 ) -> list[CraneState]:
+    config_by_id = _index_by_crane_id(
+        crane_configs,
+        item_name="crane_config",
+        field_path="crane_configs",
+    )
     state_by_id = _index_by_crane_id(
         previous_states,
         item_name="previous_state",
@@ -303,7 +309,7 @@ def step_world(
         field_path="control_targets",
     )
 
-    config_ids = {crane_config.crane_id for crane_config in crane_configs}
+    config_ids = set(config_by_id)
     for crane_id in state_by_id:
         if crane_id not in config_ids:
             raise PhysicsWorldError(
@@ -463,6 +469,32 @@ def validate_crane_state(
             expected=math.cos(state.theta_rad),
             reason="theta_trig_inconsistent",
         )
+    _validate_geometry_vector(
+        state,
+        "root_position",
+        state.root_position,
+        crane_config.root,
+        tolerance,
+    )
+    _validate_geometry_vector(
+        state,
+        "tip_position",
+        state.tip_position,
+        compute_tip_position(crane_config, state.theta_rad),
+        tolerance,
+    )
+    _validate_geometry_vector(
+        state,
+        "hook_position",
+        state.hook_position,
+        compute_hook_position(
+            crane_config,
+            state.theta_rad,
+            trolley_r_m=state.trolley_r_m,
+            hook_h_m=state.hook_h_m,
+        ),
+        tolerance,
+    )
 
 
 def _validate_dt(crane_config: CraneConfig, dt: float) -> None:
@@ -484,6 +516,27 @@ def _validate_dt(crane_config: CraneConfig, dt: float) -> None:
         )
 
 
+def _validate_step_identity(
+    crane_config: CraneConfig,
+    previous_state: CraneState,
+    control_target: ControlTarget,
+) -> None:
+    if previous_state.crane_id != crane_config.crane_id:
+        raise PhysicsWorldError(
+            "previous state crane_id does not match crane config",
+            reason="state_crane_id_mismatch",
+            crane_id=previous_state.crane_id,
+            field_path="previous_state.crane_id",
+        )
+    if control_target.crane_id != crane_config.crane_id:
+        raise PhysicsWorldError(
+            "control target crane_id does not match crane config",
+            reason="target_crane_id_mismatch",
+            crane_id=control_target.crane_id,
+            field_path="control_target.crane_id",
+        )
+
+
 def _validate_range(
     state: CraneState,
     field_path: str,
@@ -500,6 +553,24 @@ def _validate_range(
             value=value,
             limit=[lower, upper],
             reason="out_of_range",
+        )
+
+
+def _validate_geometry_vector(
+    state: CraneState,
+    field_path: str,
+    value: Sequence[float],
+    expected: Sequence[float],
+    tolerance: float,
+) -> None:
+    if any(abs(left - right) > tolerance for left, right in zip(value, expected)):
+        raise _state_error(
+            "PHYS_E_002",
+            state.crane_id,
+            field_path,
+            value=list(value),
+            expected=list(expected),
+            reason="geometry_inconsistent",
         )
 
 

@@ -128,7 +128,10 @@ def test_trolley_velocity_is_limited_and_radius_is_clamped() -> None:
         crane.trolley_r_min_m + crane.model.trolley_speed_max_m_s * dt
     )
 
-    near_limit = next_state.model_copy(update={"trolley_r_m": crane.trolley_r_max_m - 0.1})
+    near_limit = recompute_state_geometry(
+        crane,
+        next_state.model_copy(update={"trolley_r_m": crane.trolley_r_max_m - 0.1}),
+    )
     clamped = step_crane_state(
         crane,
         near_limit,

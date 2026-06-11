@@ -11,6 +11,7 @@ from backend.app.sim.layout import build_crane_configs
 from backend.app.sim.physics import (
     PhysicsStateError,
     initialize_crane_state,
+    recompute_state_geometry,
     step_crane_state,
     validate_crane_state,
 )
@@ -118,8 +119,11 @@ def test_validate_crane_state_rejects_inconsistent_trig_cache() -> None:
 
 def test_step_crane_state_reports_abnormal_jump() -> None:
     crane = _crane_config()
-    state = initialize_crane_state(crane).model_copy(
-        update={"trolley_r_m": crane.trolley_r_max_m - 0.01}
+    state = recompute_state_geometry(
+        crane,
+        initialize_crane_state(crane).model_copy(
+            update={"trolley_r_m": crane.trolley_r_max_m - 0.01}
+        ),
     )
     target = ControlTarget(
         crane_id="TC_ERR",
