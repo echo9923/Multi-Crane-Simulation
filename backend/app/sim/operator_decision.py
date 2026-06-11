@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import List, Optional
+import json
+from typing import Dict, List, Optional, Sequence
 
 from backend.app.schemas.command import (
     CommandValidationError,
     LLMCallRecord,
+    LLMMessage,
     OperatorDecisionResult,
     OperatorSession,
     ParsedCommand,
@@ -12,6 +14,7 @@ from backend.app.schemas.command import (
     build_neutral_stop_command as build_schema_neutral_stop_command,
 )
 from backend.app.schemas.config import LLMConfig
+from backend.app.schemas.enums import LLMHistoryMode, OperatorProfile
 from backend.app.schemas.observation import Observation
 from backend.app.sim.command_parser import (
     CommandParseError,
@@ -27,12 +30,17 @@ from backend.app.sim.llm_provider import (
 from backend.app.sim.prompt_builder import build_operator_messages
 
 
+class OperatorDecisionOrchestratorError(RuntimeError):
+    pass
+
+
 def decide_with_retry(
     observation: Observation,
     *,
     provider: LLMProvider,
     config: LLMConfig,
     session: OperatorSession,
+    context_messages: Optional[List[LLMMessage]] = None,
 ) -> OperatorDecisionResult:
     validation_errors: List[CommandValidationError] = []
     call_records: List[LLMCallRecord] = []
@@ -49,6 +57,8 @@ def decide_with_retry(
             command_duration_default_s=config.command_duration.default_s,
             retry_errors=retry_errors,
         )
+        if context_messages:
+            messages = [messages[0], *context_messages, *messages[1:]]
         raw_response: Optional[RawLLMResponse] = None
         parsed_command: Optional[ParsedCommand] = None
         attempt_errors: List[CommandValidationError] = []
@@ -163,3 +173,158 @@ def _fallback_reason(errors: List[CommandValidationError]) -> str:
     if first.field_path:
         return f"{first.field_path}: {first.message}"
     return first.message
+
+
+class OperatorDecisionOrchestrator:
+    def __init__(
+        self,
+        *,
+        config: LLMConfig,
+        provider: LLMProvider,
+        operator_profiles: Dict[str, OperatorProfile],
+    ) -> None:
+        self.config = config
+        self.provider = provider
+        self.operator_profiles = dict(operator_profiles)
+        self._sessions: Dict[tuple[str, str], OperatorSession] = {}
+        self._last_decision_time_by_crane: Dict[str, float] = {}
+
+    def should_decide(
+        self,
+        *,
+        crane_id: str,
+        time_s: float,
+        llm_decision_interval_s: float,
+    ) -> bool:
+        if llm_decision_interval_s <= 0:
+            raise OperatorDecisionOrchestratorError(
+                "llm_decision_interval_s must be positive"
+            )
+        last_decision_time = self._last_decision_time_by_crane.get(crane_id)
+        if last_decision_time is None:
+            return True
+        return time_s - last_decision_time >= llm_decision_interval_s
+
+    def decide(
+        self,
+        observations: Sequence[Observation],
+        *,
+        llm_decision_interval_s: float,
+    ) -> List[OperatorDecisionResult]:
+        self._validate_observation_batch(observations, llm_decision_interval_s)
+        results: List[OperatorDecisionResult] = []
+        for observation in observations:
+            session = self.get_session(observation.crane_id, observation.operator_id)
+            result = decide_with_retry(
+                observation,
+                provider=self.provider,
+                config=self.config,
+                session=session,
+                context_messages=self._history_context_messages(observation, session),
+            )
+            session.history.extend(
+                _summary_messages_from_result(result, limit=self.config.context.recent_decisions_full)
+            )
+            if self.config.context.recent_decisions_full >= 0:
+                session.history = session.history[
+                    -self.config.context.recent_decisions_full :
+                ]
+            self._last_decision_time_by_crane[observation.crane_id] = observation.time_s
+            results.append(result)
+        return results
+
+    def get_session(self, crane_id: str, operator_id: str) -> OperatorSession:
+        profile = self.operator_profiles.get(crane_id)
+        if profile is None:
+            raise OperatorDecisionOrchestratorError(
+                f"missing operator profile assignment for crane {crane_id}"
+            )
+        key = (crane_id, operator_id)
+        if key not in self._sessions:
+            self._sessions[key] = OperatorSession(
+                operator_id=operator_id,
+                crane_id=crane_id,
+                profile=profile,
+            )
+        return self._sessions[key]
+
+    def _validate_observation_batch(
+        self,
+        observations: Sequence[Observation],
+        llm_decision_interval_s: float,
+    ) -> None:
+        if llm_decision_interval_s <= 0:
+            raise OperatorDecisionOrchestratorError(
+                "llm_decision_interval_s must be positive"
+            )
+        seen_cranes = set()
+        snapshot_ids = {observation.source_snapshot_id for observation in observations}
+        if len(snapshot_ids) > 1:
+            raise OperatorDecisionOrchestratorError(
+                "all observations in one decision batch must share source_snapshot_id"
+            )
+        for observation in observations:
+            if observation.crane_id in seen_cranes:
+                raise OperatorDecisionOrchestratorError(
+                    f"duplicate observation for crane {observation.crane_id}"
+                )
+            seen_cranes.add(observation.crane_id)
+            if observation.crane_id not in self.operator_profiles:
+                raise OperatorDecisionOrchestratorError(
+                    f"missing operator profile assignment for crane {observation.crane_id}"
+                )
+
+    def _history_context_messages(
+        self,
+        observation: Observation,
+        session: OperatorSession,
+    ) -> List[LLMMessage]:
+        history_mode = self.config.context.history_mode
+        if history_mode is LLMHistoryMode.NONE:
+            return []
+        payload: Dict[str, object] = {"history_mode": history_mode.value}
+        if history_mode is LLMHistoryMode.SHORT:
+            payload["recent_decisions"] = [
+                decision.model_dump(mode="json")
+                for decision in observation.memory.recent_decisions
+            ]
+            payload["session_history"] = [
+                message.content for message in session.history
+            ]
+        elif history_mode is LLMHistoryMode.LONG:
+            payload["task_history_summary"] = observation.memory.task_history_summary
+            payload["recent_decisions"] = [
+                decision.model_dump(mode="json")
+                for decision in observation.memory.recent_decisions
+            ]
+            payload["event_summary"] = list(observation.memory.event_summary)
+            payload["session_history"] = [
+                message.content for message in session.history
+            ]
+        else:
+            return []
+        return [
+            LLMMessage(
+                role="user",
+                content=(
+                    "以下是仅包含已发生信息的 session_history，上下文不得包含未来真值：\n"
+                    f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}"
+                ),
+            )
+        ]
+
+
+def _summary_messages_from_result(
+    result: OperatorDecisionResult,
+    *,
+    limit: int,
+) -> List[LLMMessage]:
+    if limit == 0:
+        return []
+    command = result.parsed_command
+    content = (
+        f"time_s={command.time_s}; command_id={command.command_id}; "
+        f"attention_target={command.attention_target}; "
+        f"fallback={result.fallback_applied}"
+    )
+    return [LLMMessage(role="assistant", content=content)]
