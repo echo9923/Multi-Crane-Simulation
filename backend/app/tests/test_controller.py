@@ -14,7 +14,102 @@ from backend.app.schemas.control import (
     ControlTarget,
     ControllerConfig,
     ControllerDiagnostic,
+    ControllerStateError,
 )
+from backend.app.schemas.command import (
+    ExecutedAxisCommand,
+    ExecutedCommand,
+    ExecutedLeftJoystickCommand,
+    ExecutedRightJoystickCommand,
+    ParsedCommand,
+)
+from backend.app.sim.controller import (
+    direction_sign,
+    map_axis_to_desired_velocity,
+    map_command_to_desired_velocities,
+)
+
+
+@pytest.fixture
+def executed_command():
+    def factory(
+        *,
+        slew: tuple[str, int] = ("neutral", 0),
+        trolley: tuple[str, int] = ("neutral", 0),
+        hoist: tuple[str, int] = ("neutral", 0),
+        speed_scales: tuple[float, float, float] = (1.0, 1.0, 1.0),
+        sources: tuple[str, str, str] = ("raw", "raw", "raw"),
+        deadman_pressed: bool = True,
+        emergency_stop: bool = False,
+        command_id: str = "cmd-001",
+        crane_id: str = "C1",
+        time_s: float = 5.0,
+        command_duration_s: float = 1.0,
+    ) -> ExecutedCommand:
+        raw_command = ParsedCommand(
+            command_id=command_id,
+            response_id=f"resp-{command_id}",
+            observation_id=f"obs-{command_id}",
+            source_snapshot_id=f"snap-{command_id}",
+            operator_id="op-001",
+            crane_id=crane_id,
+            time_s=time_s,
+            left_joystick={
+                "slew": {"direction": slew[0], "gear": slew[1]},
+                "trolley": {"direction": trolley[0], "gear": trolley[1]},
+            },
+            right_joystick={"hoist": {"direction": hoist[0], "gear": hoist[1]}},
+            deadman_pressed=deadman_pressed,
+            emergency_stop=emergency_stop,
+            horn=False,
+            command_duration_s=max(command_duration_s, 0.5),
+            task_action="none",
+            attention_target="controller_fixture",
+            confidence=0.8,
+            reason="controller test fixture",
+        )
+        modified = sources != ("raw", "raw", "raw") or speed_scales != (1.0, 1.0, 1.0)
+        return ExecutedCommand(
+            command_id=f"EXEC_{command_id}",
+            raw_command_id=command_id,
+            observation_id=raw_command.observation_id,
+            source_snapshot_id=raw_command.source_snapshot_id,
+            operator_id=raw_command.operator_id,
+            crane_id=crane_id,
+            time_s=time_s,
+            raw_command=raw_command,
+            left_joystick=ExecutedLeftJoystickCommand(
+                slew=ExecutedAxisCommand(
+                    direction=slew[0],
+                    gear=slew[1],
+                    speed_scale=speed_scales[0],
+                    source=sources[0],
+                ),
+                trolley=ExecutedAxisCommand(
+                    direction=trolley[0],
+                    gear=trolley[1],
+                    speed_scale=speed_scales[1],
+                    source=sources[1],
+                ),
+            ),
+            right_joystick=ExecutedRightJoystickCommand(
+                hoist=ExecutedAxisCommand(
+                    direction=hoist[0],
+                    gear=hoist[1],
+                    speed_scale=speed_scales[2],
+                    source=sources[2],
+                )
+            ),
+            deadman_pressed=deadman_pressed,
+            emergency_stop=emergency_stop,
+            horn=False,
+            command_duration_s=command_duration_s,
+            task_action="none",
+            modified=modified,
+            modification_reasons=["controller_fixture"] if modified else [],
+        )
+
+    return factory
 
 
 def test_controller_config_defaults_match_module_i_tables() -> None:
@@ -167,3 +262,135 @@ def test_control_target_keeps_pure_numeric_contract() -> None:
             target_hoist_velocity_m_s=0.0,
             task_id="task-001",
         )
+
+
+@pytest.mark.parametrize(
+    ("axis", "direction", "expected"),
+    [
+        ("slew", "left", -1),
+        ("slew", "neutral", 0),
+        ("slew", "right", 1),
+        ("trolley", "in", -1),
+        ("trolley", "neutral", 0),
+        ("trolley", "out", 1),
+        ("hoist", "down", -1),
+        ("hoist", "neutral", 0),
+        ("hoist", "up", 1),
+    ],
+)
+def test_direction_signs_are_axis_specific(
+    axis: str, direction: str, expected: int
+) -> None:
+    assert direction_sign(axis, direction) == expected
+
+
+@pytest.mark.parametrize(
+    ("axis", "direction", "gear", "expected"),
+    [
+        ("slew", "right", 1, 0.15),
+        ("slew", "left", 5, -0.8),
+        ("trolley", "out", 1, 0.08),
+        ("trolley", "in", 5, -0.5),
+        ("hoist", "up", 1, 0.1),
+        ("hoist", "down", 5, -0.6),
+    ],
+)
+def test_map_axis_to_desired_velocity_uses_module_i_axis_tables(
+    axis: str, direction: str, gear: int, expected: float
+) -> None:
+    velocity = map_axis_to_desired_velocity(
+        axis=axis,
+        axis_command=ExecutedAxisCommand(
+            direction=direction,
+            gear=gear,
+            speed_scale=1.0,
+            source="raw",
+        ),
+        controller_config=ControllerConfig(controller_hz=20.0),
+    )
+
+    assert velocity == pytest.approx(expected)
+
+
+def test_speed_scale_multiplies_desired_velocity() -> None:
+    velocity = map_axis_to_desired_velocity(
+        axis="trolley",
+        axis_command=ExecutedAxisCommand(
+            direction="out",
+            gear=4,
+            speed_scale=0.5,
+            source="risk_intervention",
+        ),
+        controller_config=ControllerConfig(controller_hz=20.0),
+    )
+
+    assert velocity == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize(
+    ("axis", "direction", "gear"),
+    [
+        ("slew", "neutral", 0),
+        ("trolley", "neutral", 0),
+        ("hoist", "neutral", 0),
+        ("hoist", "up", 1),
+    ],
+)
+def test_zero_gear_neutral_and_zero_speed_scale_map_to_zero(
+    axis: str, direction: str, gear: int
+) -> None:
+    scale = 0.0 if direction != "neutral" else 1.0
+
+    velocity = map_axis_to_desired_velocity(
+        axis=axis,
+        axis_command=ExecutedAxisCommand(
+            direction=direction,
+            gear=gear,
+            speed_scale=scale,
+            source="raw",
+        ),
+        controller_config=ControllerConfig(controller_hz=20.0),
+    )
+
+    assert velocity == pytest.approx(0.0)
+
+
+def test_map_command_to_desired_velocities_reads_all_three_axes(executed_command) -> None:
+    command = executed_command(
+        slew=("right", 3),
+        trolley=("in", 2),
+        hoist=("up", 4),
+    )
+
+    velocities = map_command_to_desired_velocities(
+        command=command,
+        controller_config=ControllerConfig(controller_hz=20.0),
+    )
+
+    assert velocities == {
+        "slew": pytest.approx(0.5),
+        "trolley": pytest.approx(-0.15),
+        "hoist": pytest.approx(0.5),
+    }
+
+
+def test_unknown_axis_or_direction_raises_controller_state_error() -> None:
+    with pytest.raises(ControllerStateError) as exc_info:
+        direction_sign("boom", "out")
+
+    assert exc_info.value.episode_status == "failed_invalid_state"
+    assert exc_info.value.field_path == "axis"
+
+    with pytest.raises(ControllerStateError) as exc_info:
+        direction_sign("slew", "up")
+
+    assert exc_info.value.field_path == "direction"
+
+
+def test_controller_module_does_not_reuse_safety_generic_gear_scale() -> None:
+    import inspect
+    import backend.app.sim.controller as controller_module
+
+    source = inspect.getsource(controller_module)
+
+    assert "GEAR_TO_SPEED_SCALE" not in source
