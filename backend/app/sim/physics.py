@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, Sequence, TypeVar
 
 from backend.app.schemas.control import ControlTarget
 from backend.app.schemas.crane import CraneConfig
-from backend.app.schemas.state import CraneState
+from backend.app.schemas.state import PHYSICS_SCHEMA_VERSION, CraneState
 
 T = TypeVar("T")
 NUMERIC_TOLERANCE = 1e-6
@@ -85,6 +85,64 @@ def initialize_crane_state(crane_config: CraneConfig) -> CraneState:
 
 def initialize_world_state(crane_configs: Sequence[CraneConfig]) -> list[CraneState]:
     return [initialize_crane_state(crane_config) for crane_config in crane_configs]
+
+
+def build_physics_frame(
+    *,
+    frame_index: int,
+    time_s: float,
+    states: Sequence[CraneState],
+) -> dict[str, object]:
+    return {
+        "schema_version": PHYSICS_SCHEMA_VERSION,
+        "frame_index": frame_index,
+        "time_s": time_s,
+        "states": [state.model_dump(mode="json") for state in states],
+    }
+
+
+def crane_state_to_trajectory_row(
+    state: CraneState,
+    *,
+    frame_index: int,
+    time_s: float,
+) -> dict[str, object]:
+    load_x, load_y, load_z = _optional_xyz(state.load_position)
+    return {
+        "schema_version": PHYSICS_SCHEMA_VERSION,
+        "frame_index": frame_index,
+        "time_s": time_s,
+        "crane_id": state.crane_id,
+        "theta_rad": state.theta_rad,
+        "theta_dot_rad_s": state.theta_dot_rad_s,
+        "theta_ddot_rad_s2": state.theta_ddot_rad_s2,
+        "theta_sin": state.theta_sin,
+        "theta_cos": state.theta_cos,
+        "trolley_r_m": state.trolley_r_m,
+        "trolley_v_m_s": state.trolley_v_m_s,
+        "hook_h_m": state.hook_h_m,
+        "hoist_v_m_s": state.hoist_v_m_s,
+        "root_x_m": state.root_position[0],
+        "root_y_m": state.root_position[1],
+        "root_z_m": state.root_position[2],
+        "tip_x_m": state.tip_position[0],
+        "tip_y_m": state.tip_position[1],
+        "tip_z_m": state.tip_position[2],
+        "hook_x_m": state.hook_position[0],
+        "hook_y_m": state.hook_position[1],
+        "hook_z_m": state.hook_position[2],
+        "cable_length_m": state.cable_length_m,
+        "load_x_m": load_x,
+        "load_y_m": load_y,
+        "load_z_m": load_z,
+        "load_attached": state.load_attached,
+        "load_type": state.load_type,
+        "load_weight_t": state.load_weight_t,
+        "swing_angle_rad": state.swing_angle_rad,
+        "swing_velocity_rad_s": state.swing_velocity_rad_s,
+        "task_id": state.task_id,
+        "task_stage": state.task_stage,
+    }
 
 
 def compute_tip_position(crane_config: CraneConfig, theta_rad: float) -> list[float]:
@@ -298,6 +356,12 @@ def _approach(current: float, target: float, max_delta: float) -> float:
 
 def _clip(value: float, lower: float, upper: float) -> float:
     return min(max(value, lower), upper)
+
+
+def _optional_xyz(value: Optional[Sequence[float]]) -> tuple[object, object, object]:
+    if value is None:
+        return None, None, None
+    return value[0], value[1], value[2]
 
 
 def validate_crane_state(

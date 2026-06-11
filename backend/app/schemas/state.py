@@ -4,13 +4,15 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+PHYSICS_SCHEMA_VERSION = "1.0"
+
 
 class StateBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
 class CraneState(StateBaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = PHYSICS_SCHEMA_VERSION
     crane_id: str
 
     theta_rad: float
