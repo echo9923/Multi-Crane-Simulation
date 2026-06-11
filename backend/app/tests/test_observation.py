@@ -10,13 +10,16 @@ from backend.app.schemas.control import ControlTarget
 from backend.app.schemas.observation import (
     OBSERVATION_SCHEMA_VERSION,
     AvailableActions,
+    OnlineRiskHint,
     Observation,
 )
+from backend.app.schemas.weather import WeatherVisibilityContext
 from backend.app.schemas.task import TaskPoint
 from backend.app.sim.crane_model import build_crane_model_library
 from backend.app.sim.layout import build_crane_configs
 from backend.app.sim.observation import (
     ObservationBuildError,
+    build_safety_hint,
     build_task_summary,
     build_self_state_summary,
 )
@@ -43,6 +46,22 @@ def _crane_config():
     scenario = ScenarioConfig.model_validate(raw)
     library = build_crane_model_library(scenario.crane_models)
     return build_crane_configs(scenario.cranes, library, scenario, source="manual")[0]
+
+
+def _visibility_context(**overrides) -> WeatherVisibilityContext:
+    payload = {
+        "time_s": 42.0,
+        "visibility_level": "poor",
+        "neighbor_visibility_radius_m": 45.0,
+        "distance_noise_m": 5.0,
+        "hide_hook_prob": 0.5,
+        "visibility_confidence": 0.4,
+        "distance_precision_m": 5.0,
+        "noise_seed": 123,
+        "profile_source": "default",
+    }
+    payload.update(overrides)
+    return WeatherVisibilityContext.model_validate(payload)
 
 
 def _valid_observation_payload() -> dict:
@@ -424,3 +443,65 @@ def test_build_task_summary_rejects_mismatched_context_identity() -> None:
         )
 
     assert exc_info.value.field_path == "task_context.crane_id"
+
+
+def test_build_safety_hint_suppresses_online_risk_in_r0_mode() -> None:
+    risk = OnlineRiskHint(
+        source="online_risk",
+        risk_level="high",
+        nearest_neighbor="C2",
+        nearest_object_type="jib-hook",
+        clearance_now_m=4.2,
+        estimated_clearance_next_5s_m=3.1,
+        relative_motion="closing",
+        confidence=0.9,
+        suggestion="hold",
+    )
+
+    hint = build_safety_hint(
+        risk_prompt_mode="R0",
+        online_risk=risk,
+        visibility=_visibility_context(),
+        distance_precision_m=1.0,
+    )
+
+    assert hint is None
+
+
+def test_build_safety_hint_rounds_clearance_and_caps_visibility_confidence() -> None:
+    risk = OnlineRiskHint(
+        source="online_risk",
+        risk_level="medium",
+        nearest_neighbor="C2",
+        nearest_object_type="jib-hook",
+        clearance_now_m=4.2,
+        estimated_clearance_next_5s_m=3.1,
+        relative_motion="closing",
+        confidence=0.9,
+        suggestion="slow_down_or_hold",
+    )
+
+    hint = build_safety_hint(
+        risk_prompt_mode="R1",
+        online_risk=risk,
+        visibility=_visibility_context(visibility_confidence=0.4),
+        distance_precision_m=1.0,
+    )
+
+    assert hint is not None
+    assert hint.nearest_neighbor == "C2"
+    assert hint.clearance_now_m == 4.0
+    assert hint.estimated_clearance_next_5s_m == 3.0
+    assert hint.confidence == 0.4
+    assert hint.suggestion == "slow_down_or_hold"
+
+
+def test_build_safety_hint_returns_none_when_r1_has_no_online_risk() -> None:
+    hint = build_safety_hint(
+        risk_prompt_mode="R1",
+        online_risk=None,
+        visibility=_visibility_context(),
+        distance_precision_m=1.0,
+    )
+
+    assert hint is None

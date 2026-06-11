@@ -10,11 +10,14 @@ from backend.app.schemas.observation import (
     AxisCommand,
     JoystickCommandSummary,
     LeftJoystickCommand,
+    OnlineRiskHint,
     RightJoystickCommand,
+    SafetyHint,
     SelfStateSummary,
     TaskObservationSummary,
     VisibleNeighbor,
 )
+from backend.app.schemas.enums import RiskPromptMode
 from backend.app.schemas.state import CraneState
 from backend.app.schemas.task import TaskPoint
 from backend.app.schemas.weather import WeatherVisibilityContext
@@ -199,6 +202,36 @@ def build_visible_neighbors(
             )
         )
     return neighbors
+
+
+def build_safety_hint(
+    *,
+    risk_prompt_mode: RiskPromptMode,
+    online_risk: Optional[OnlineRiskHint],
+    visibility: WeatherVisibilityContext,
+    distance_precision_m: float,
+) -> Optional[SafetyHint]:
+    mode = RiskPromptMode(risk_prompt_mode)
+    if mode is RiskPromptMode.R0 or online_risk is None:
+        return None
+
+    return SafetyHint(
+        source=online_risk.source,
+        risk_level=online_risk.risk_level,
+        nearest_neighbor=online_risk.nearest_neighbor,
+        nearest_object_type=online_risk.nearest_object_type,
+        clearance_now_m=_optional_round(
+            online_risk.clearance_now_m,
+            distance_precision_m,
+        ),
+        estimated_clearance_next_5s_m=_optional_round(
+            online_risk.estimated_clearance_next_5s_m,
+            distance_precision_m,
+        ),
+        relative_motion=online_risk.relative_motion,
+        confidence=min(online_risk.confidence, visibility.visibility_confidence),
+        suggestion=online_risk.suggestion,
+    )
 
 
 def _command_summary(current_command: Optional[ControlTarget]) -> JoystickCommandSummary:
