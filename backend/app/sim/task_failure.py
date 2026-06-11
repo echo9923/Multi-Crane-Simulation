@@ -92,8 +92,9 @@ def handle_task_timing_and_failures(
                 episode_failure_request="failed_recovery_timeout",
             )
 
-    updated_task, deadline_events = _update_deadline(updated_task, state, time_s)
-    events.extend(deadline_events)
+    if scenario.tasks.deadline_policy.enabled:
+        updated_task, deadline_events = _update_deadline(updated_task, state, time_s)
+        events.extend(deadline_events)
 
     attach_timeout = scenario.tasks.state_machine.attach_stage_timeout_s
     release_timeout = scenario.tasks.state_machine.release_stage_timeout_s

@@ -43,8 +43,9 @@ def step_task_state_machine(
     runtime_state = runtime or TaskRuntimeState()
     events: List[TaskEventPayload] = []
     current_stage = state.task_stage
+    task_action = signal.task_action if signal.crane_id == state.crane_id else "none"
 
-    if signal.task_action == "request_attach" and current_stage != "lower_for_attach":
+    if task_action == "request_attach" and current_stage != "lower_for_attach":
         events.append(
             _event(
                 "attach_request_rejected",
@@ -56,7 +57,7 @@ def step_task_state_machine(
         )
         return _result(task, state, runtime_state, events)
 
-    if signal.task_action == "request_release" and current_stage not in {
+    if task_action == "request_release" and current_stage not in {
         "lower_for_release",
         "recovery_release",
     }:
@@ -82,7 +83,7 @@ def step_task_state_machine(
         return _stage_changed(task, state, runtime_state, events, "lower_for_attach", time_s)
 
     if current_stage == "lower_for_attach":
-        if signal.task_action == "request_attach":
+        if task_action == "request_attach":
             reason = _attach_rejection_reason(task, crane, state, config)
             if reason is None:
                 next_state = state.model_copy(update={"task_stage": "attach_pending"})
@@ -177,7 +178,7 @@ def step_task_state_machine(
         return _stage_changed(task, state, runtime_state, events, "lower_for_release", time_s)
 
     if current_stage in {"lower_for_release", "recovery_release"}:
-        if signal.task_action == "request_release":
+        if task_action == "request_release":
             reason = _release_rejection_reason(task, state, config)
             if reason is None:
                 next_state = state.model_copy(update={"task_stage": "release_pending"})
