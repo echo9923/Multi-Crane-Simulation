@@ -12,13 +12,17 @@ from backend.app.schemas.observation import (
     AvailableActions,
     Observation,
 )
+from backend.app.schemas.task import TaskPoint
 from backend.app.sim.crane_model import build_crane_model_library
 from backend.app.sim.layout import build_crane_configs
 from backend.app.sim.observation import (
     ObservationBuildError,
+    build_task_summary,
     build_self_state_summary,
 )
 from backend.app.sim.physics import initialize_crane_state
+from backend.app.sim.task_observation import TaskObservationContext
+from backend.app.sim.task_queue import IdleObservationContext
 from backend.app.tests.test_config_schema import load_fixture
 
 
@@ -301,3 +305,122 @@ def test_build_self_state_summary_rejects_mismatched_identity() -> None:
 
     assert exc_info.value.error_code == "OBSERVATION_E_INVALID_STATE"
     assert exc_info.value.episode_status == "failed_invalid_state"
+
+
+def test_build_task_summary_uses_active_context_relative_to_own_hook() -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane).model_copy(
+        update={"hook_position": [10.0, 10.0, 30.0]}
+    )
+    context = TaskObservationContext(
+        crane_id="C1",
+        time_s=42.0,
+        has_active_task=True,
+        task_id="T_C1_001",
+        task_type="overlap_task",
+        task_stage="move_to_pickup",
+        priority="high",
+        deadline_s=180.0,
+        deadline_missed=False,
+        overtime_s=0.0,
+        pickup=TaskPoint(
+            x=30.0,
+            y=40.0,
+            z=10.0,
+            zone_id="mat",
+            zone_type="material",
+        ),
+        dropoff=TaskPoint(
+            x=-10.0,
+            y=20.0,
+            z=32.0,
+            zone_id="work",
+            zone_type="work",
+        ),
+        current_target=TaskPoint(
+            x=30.0,
+            y=40.0,
+            z=10.0,
+            zone_id="mat",
+            zone_type="material",
+        ),
+        load_type="rebar_bundle",
+        load_weight_t=2.25,
+        load_size_m=[2.0, 1.0, 1.0],
+        load_attached=False,
+        ground_signal_hint="吊钩在目标点西侧，请进行局部微调。",
+    )
+
+    summary = build_task_summary(
+        task_context=context,
+        observer_state=state,
+        distance_precision_m=5.0,
+    )
+
+    assert summary.stage == "move_to_pickup"
+    assert summary.has_active_task is True
+    assert summary.type == "overlap_task"
+    assert summary.priority == "high"
+    assert summary.deadline_s == 180.0
+    assert summary.pickup_relative_direction == "right_front"
+    assert summary.pickup_distance_m == 35.0
+    assert summary.pickup_height_delta_m == -20.0
+    assert summary.dropoff_relative_direction == "left_front"
+    assert summary.dropoff_distance_m == 20.0
+    assert summary.dropoff_height_delta_m == 0.0
+    assert summary.current_target_relative_direction == "right_front"
+    assert summary.load_type == "rebar_bundle"
+    assert summary.load_weight_t == 2.25
+    assert summary.signal_hint == "吊钩在目标点西侧，请进行局部微调。"
+
+
+def test_build_task_summary_idle_context_does_not_leak_next_task() -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane)
+    context = IdleObservationContext(
+        crane_id="C1",
+        time_s=12.0,
+        has_active_task=False,
+        task_id=None,
+        task_stage="idle",
+        current_target=None,
+        ground_signal_hint="当前无任务，请保持塔吊安全静止并观察现场。",
+    )
+
+    summary = build_task_summary(
+        task_context=context,
+        observer_state=state,
+        distance_precision_m=1.0,
+    )
+    payload = summary.model_dump(mode="json")
+
+    assert summary.has_active_task is False
+    assert summary.stage == "idle"
+    assert summary.type is None
+    assert summary.pickup_relative_direction is None
+    assert summary.dropoff_relative_direction is None
+    assert summary.current_target_distance_m is None
+    assert "planned_start_s" not in str(payload)
+
+
+def test_build_task_summary_rejects_mismatched_context_identity() -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane)
+    context = IdleObservationContext(
+        crane_id="OTHER",
+        time_s=12.0,
+        has_active_task=False,
+        task_id=None,
+        task_stage="idle",
+        current_target=None,
+        ground_signal_hint="当前无任务，请保持塔吊安全静止并观察现场。",
+    )
+
+    with pytest.raises(ObservationBuildError) as exc_info:
+        build_task_summary(
+            task_context=context,
+            observer_state=state,
+            distance_precision_m=1.0,
+        )
+
+    assert exc_info.value.field_path == "task_context.crane_id"

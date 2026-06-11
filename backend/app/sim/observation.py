@@ -11,8 +11,13 @@ from backend.app.schemas.observation import (
     LeftJoystickCommand,
     RightJoystickCommand,
     SelfStateSummary,
+    TaskObservationSummary,
 )
 from backend.app.schemas.state import CraneState
+from backend.app.schemas.task import TaskPoint
+from backend.app.sim.layout_geometry import horizontal_distance
+from backend.app.sim.task_observation import TaskObservationContext
+from backend.app.sim.task_queue import IdleObservationContext
 
 
 class ObservationBuildError(ValueError):
@@ -61,6 +66,59 @@ def build_self_state_summary(
         load_type=state.load_type,
         load_weight_t=_round_to_precision(state.load_weight_t, 0.1),
         current_command=_command_summary(current_command),
+    )
+
+
+def build_task_summary(
+    *,
+    task_context: TaskObservationContext | IdleObservationContext,
+    observer_state: CraneState,
+    distance_precision_m: float,
+) -> TaskObservationSummary:
+    if task_context.crane_id != observer_state.crane_id:
+        raise ObservationBuildError(
+            "task_context crane_id must match observer_state crane_id",
+            crane_id=observer_state.crane_id,
+            field_path="task_context.crane_id",
+        )
+
+    pickup = _relative_point_summary(
+        observer_state=observer_state,
+        point=getattr(task_context, "pickup", None),
+        distance_precision_m=distance_precision_m,
+    )
+    dropoff = _relative_point_summary(
+        observer_state=observer_state,
+        point=getattr(task_context, "dropoff", None),
+        distance_precision_m=distance_precision_m,
+    )
+    current_target = _relative_point_summary(
+        observer_state=observer_state,
+        point=task_context.current_target,
+        distance_precision_m=distance_precision_m,
+    )
+
+    return TaskObservationSummary(
+        stage=task_context.task_stage,
+        has_active_task=task_context.has_active_task,
+        type=getattr(task_context, "task_type", None),
+        priority=getattr(task_context, "priority", None),
+        deadline_s=_optional_round(getattr(task_context, "deadline_s", None), 0.1),
+        deadline_missed=getattr(task_context, "deadline_missed", False),
+        overtime_s=_round_to_precision(getattr(task_context, "overtime_s", 0.0), 0.1),
+        pickup_relative_direction=pickup.relative_direction,
+        pickup_distance_m=pickup.distance_m,
+        pickup_height_delta_m=pickup.height_delta_m,
+        dropoff_relative_direction=dropoff.relative_direction,
+        dropoff_distance_m=dropoff.distance_m,
+        dropoff_height_delta_m=dropoff.height_delta_m,
+        current_target_relative_direction=current_target.relative_direction,
+        current_target_distance_m=current_target.distance_m,
+        current_target_height_delta_m=current_target.height_delta_m,
+        load_attached=getattr(task_context, "load_attached", False),
+        load_type=getattr(task_context, "load_type", None),
+        load_weight_t=getattr(task_context, "load_weight_t", None),
+        signal_hint=task_context.ground_signal_hint,
     )
 
 
@@ -141,3 +199,71 @@ def _round_to_precision(value: float, precision: float) -> float:
         raise ObservationBuildError("observation value must be finite")
     return round(value / precision) * precision
 
+
+def _optional_round(value: Optional[float], precision: float) -> Optional[float]:
+    if value is None:
+        return None
+    return _round_to_precision(value, precision)
+
+
+class _RelativePointSummary:
+    def __init__(
+        self,
+        *,
+        relative_direction: Optional[str],
+        distance_m: Optional[float],
+        height_delta_m: Optional[float],
+    ) -> None:
+        self.relative_direction = relative_direction
+        self.distance_m = distance_m
+        self.height_delta_m = height_delta_m
+
+
+def _relative_point_summary(
+    *,
+    observer_state: CraneState,
+    point: Optional[TaskPoint],
+    distance_precision_m: float,
+) -> _RelativePointSummary:
+    if point is None:
+        return _RelativePointSummary(
+            relative_direction=None,
+            distance_m=None,
+            height_delta_m=None,
+        )
+
+    hook = observer_state.hook_position
+    target = point.as_xyz()
+    dx = target[0] - hook[0]
+    dy = target[1] - hook[1]
+    dz = target[2] - hook[2]
+    return _RelativePointSummary(
+        relative_direction=_relative_direction(dx, dy),
+        distance_m=_round_to_precision(
+            horizontal_distance(hook, target),
+            distance_precision_m,
+        ),
+        height_delta_m=_round_to_precision(dz, distance_precision_m),
+    )
+
+
+def _relative_direction(dx: float, dy: float) -> str:
+    horizontal = "center"
+    if dx > 1e-9:
+        horizontal = "right"
+    elif dx < -1e-9:
+        horizontal = "left"
+
+    vertical = "center"
+    if dy > 1e-9:
+        vertical = "front"
+    elif dy < -1e-9:
+        vertical = "back"
+
+    if horizontal == "center" and vertical == "center":
+        return "aligned"
+    if horizontal == "center":
+        return vertical
+    if vertical == "center":
+        return horizontal
+    return f"{horizontal}_{vertical}"
