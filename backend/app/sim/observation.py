@@ -2,25 +2,31 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from backend.app.schemas.enums import OperatorProfile, RiskPromptMode
 from backend.app.schemas.control import ControlTarget
 from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.observation import (
     AxisCommand,
+    AvailableActions,
     JoystickCommandSummary,
     LeftJoystickCommand,
+    MemorySummary,
     OnlineRiskHint,
+    Observation,
     RightJoystickCommand,
     SafetyHint,
     SelfStateSummary,
     TaskObservationSummary,
     VisibleNeighbor,
+    WeatherObservationSummary,
 )
-from backend.app.schemas.enums import RiskPromptMode
 from backend.app.schemas.state import CraneState
 from backend.app.schemas.task import TaskPoint
-from backend.app.schemas.weather import WeatherVisibilityContext
+from backend.app.schemas.weather import WeatherState, WeatherVisibilityContext
 from backend.app.sim.layout_geometry import horizontal_distance
 from backend.app.sim.task_observation import TaskObservationContext
 from backend.app.sim.task_queue import IdleObservationContext
@@ -42,6 +48,172 @@ class ObservationBuildError(ValueError):
         self.episode_status = "failed_invalid_state"
         self.crane_id = crane_id
         self.field_path = field_path
+
+
+class ObservationWorldSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    schema_version: str = "1.0"
+    snapshot_id: str
+    time_s: float = Field(ge=0)
+    decision_time_bucket: int
+    crane_states: List[CraneState]
+    crane_configs: List[CraneConfig]
+    weather_state: WeatherState
+    visibility_context: WeatherVisibilityContext
+    neighbor_map: Dict[str, List[str]] = Field(default_factory=dict)
+    task_contexts: Dict[str, TaskObservationContext | IdleObservationContext]
+    current_commands: Dict[str, ControlTarget] = Field(default_factory=dict)
+    recent_decisions: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+    recent_events: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_unique_ids(self) -> "ObservationWorldSnapshot":
+        _ensure_unique_ids(
+            [state.crane_id for state in self.crane_states],
+            field_path="crane_states",
+        )
+        _ensure_unique_ids(
+            [config.crane_id for config in self.crane_configs],
+            field_path="crane_configs",
+        )
+        return self
+
+
+def build_observation(
+    *,
+    snapshot: ObservationWorldSnapshot,
+    crane_id: str,
+    risk_prompt_mode: RiskPromptMode,
+    operator_profile: OperatorProfile,
+    online_risk: Optional[OnlineRiskHint] = None,
+    operator_id: Optional[str] = None,
+) -> Observation:
+    states_by_id = _index_by_crane_id(snapshot.crane_states, "crane_states")
+    configs_by_id = _index_by_crane_id(snapshot.crane_configs, "crane_configs")
+    try:
+        state = states_by_id[crane_id]
+    except KeyError as exc:
+        raise ObservationBuildError(
+            "crane state is missing",
+            crane_id=crane_id,
+            field_path=f"crane_states.{crane_id}",
+        ) from exc
+    try:
+        config = configs_by_id[crane_id]
+    except KeyError as exc:
+        raise ObservationBuildError(
+            "crane config is missing",
+            crane_id=crane_id,
+            field_path=f"crane_configs.{crane_id}",
+        ) from exc
+    try:
+        task_context = snapshot.task_contexts[crane_id]
+    except KeyError as exc:
+        raise ObservationBuildError(
+            "task context is missing",
+            crane_id=crane_id,
+            field_path=f"task_contexts.{crane_id}",
+        ) from exc
+
+    precision = snapshot.visibility_context.distance_precision_m
+    return Observation(
+        observation_id=f"OBS_{snapshot.snapshot_id}_{crane_id}",
+        source_snapshot_id=snapshot.snapshot_id,
+        operator_id=operator_id or f"OP_{crane_id}",
+        crane_id=crane_id,
+        time_s=snapshot.time_s,
+        operator_profile=OperatorProfile(operator_profile),
+        risk_prompt_mode=RiskPromptMode(risk_prompt_mode),
+        task=build_task_summary(
+            task_context=task_context,
+            observer_state=state,
+            distance_precision_m=precision,
+        ),
+        self_state=build_self_state_summary(
+            state=state,
+            crane_config=config,
+            current_command=snapshot.current_commands.get(crane_id),
+            distance_precision_m=precision,
+        ),
+        visible_neighbors=build_visible_neighbors(
+            observer_state=state,
+            states_by_id=states_by_id,
+            neighbor_ids=snapshot.neighbor_map.get(crane_id, []),
+            visibility=snapshot.visibility_context,
+            decision_time_bucket=snapshot.decision_time_bucket,
+        ),
+        weather=build_weather_summary(snapshot.weather_state),
+        safety_hint=build_safety_hint(
+            risk_prompt_mode=RiskPromptMode(risk_prompt_mode),
+            online_risk=online_risk,
+            visibility=snapshot.visibility_context,
+            distance_precision_m=precision,
+        ),
+        available_actions=AvailableActions(),
+        memory=build_memory_summary(
+            recent_decisions=snapshot.recent_decisions.get(crane_id, []),
+            recent_events=snapshot.recent_events.get(crane_id, []),
+        ),
+    )
+
+
+def build_observations_for_snapshot(
+    *,
+    snapshot: ObservationWorldSnapshot,
+    crane_ids: List[str],
+    risk_prompt_mode: RiskPromptMode,
+    operator_profiles: Dict[str, OperatorProfile],
+    online_risks: Optional[Dict[str, OnlineRiskHint]] = None,
+    operator_ids: Optional[Dict[str, str]] = None,
+) -> List[Observation]:
+    risks = online_risks or {}
+    ids = operator_ids or {}
+    observations: List[Observation] = []
+    for crane_id in crane_ids:
+        try:
+            profile = operator_profiles[crane_id]
+        except KeyError as exc:
+            raise ObservationBuildError(
+                "operator profile is missing",
+                crane_id=crane_id,
+                field_path=f"operator_profiles.{crane_id}",
+            ) from exc
+        observations.append(
+            build_observation(
+                snapshot=snapshot,
+                crane_id=crane_id,
+                risk_prompt_mode=risk_prompt_mode,
+                operator_profile=profile,
+                online_risk=risks.get(crane_id),
+                operator_id=ids.get(crane_id),
+            )
+        )
+    return observations
+
+
+def build_weather_summary(weather_state: WeatherState) -> WeatherObservationSummary:
+    return WeatherObservationSummary(
+        wind_speed_m_s=weather_state.wind_speed_m_s,
+        gust_m_s=weather_state.wind_gust_m_s,
+        wind_direction_deg=weather_state.wind_direction_deg,
+        visibility=weather_state.visibility_level,
+        rain_level=weather_state.rain_level,
+        fog_level=weather_state.fog_level,
+        visibility_confidence=weather_state.visibility_confidence,
+    )
+
+
+def build_memory_summary(
+    *,
+    recent_decisions: List[Dict[str, Any]],
+    recent_events: List[Dict[str, Any]],
+) -> MemorySummary:
+    return MemorySummary(
+        task_history_summary=_task_history_summary(recent_decisions, recent_events),
+        recent_decisions=[dict(decision) for decision in recent_decisions],
+        event_summary=[_event_summary(event) for event in recent_events],
+    )
 
 
 def build_self_state_summary(
@@ -438,3 +610,46 @@ def _distance_level(distance_m: float) -> str:
     if distance_m <= 80.0:
         return "medium"
     return "far"
+
+
+def _index_by_crane_id(
+    items: List[CraneState] | List[CraneConfig],
+    field_path: str,
+) -> Dict[str, Any]:
+    index: Dict[str, Any] = {}
+    for item in items:
+        if item.crane_id in index:
+            raise ObservationBuildError(
+                "duplicate crane_id",
+                crane_id=item.crane_id,
+                field_path=field_path,
+            )
+        index[item.crane_id] = item
+    return index
+
+
+def _ensure_unique_ids(ids: List[str], field_path: str) -> None:
+    seen: set[str] = set()
+    for crane_id in ids:
+        if crane_id in seen:
+            raise ValueError(f"{field_path} contains duplicate crane_id: {crane_id}")
+        seen.add(crane_id)
+
+
+def _task_history_summary(
+    recent_decisions: List[Dict[str, Any]],
+    recent_events: List[Dict[str, Any]],
+) -> Optional[str]:
+    parts: List[str] = []
+    if recent_decisions:
+        parts.append(f"最近已有 {len(recent_decisions)} 条操作记录。")
+    if recent_events:
+        parts.append(f"最近已有 {len(recent_events)} 条任务事件。")
+    return "".join(parts) if parts else None
+
+
+def _event_summary(event: Dict[str, Any]) -> str:
+    event_type = str(event.get("event_type", "event"))
+    time_s = event.get("time_s")
+    summary = event.get("summary") or event.get("reason") or event_type
+    return f"{event_type} at {time_s}: {summary}"
