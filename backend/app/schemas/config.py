@@ -32,6 +32,7 @@ from backend.app.schemas.enums import (
     SummarizerProviderMode,
     TaskAssignmentMode,
     TaskGenerationMode,
+    TaskRecoveryPolicy,
     TaskType,
     QueueStartMode,
     RuntimeMode,
@@ -232,18 +233,39 @@ class StageTimeoutPolicyConfig(ConfigBaseModel):
     terminate_episode: bool
 
 
+class TaskAxisSpeedThresholdConfig(ConfigBaseModel):
+    slew_deg_s: float = Field(gt=0)
+    trolley_m_s: float = Field(gt=0)
+    hoist_m_s: float = Field(gt=0)
+
+
 class TaskStateMachineConfig(ConfigBaseModel):
     align_xy_threshold_m: float = Field(gt=0)
     attach_xy_threshold_m: float = Field(gt=0)
     attach_height_threshold_m: float = Field(gt=0)
     release_xy_threshold_m: float = Field(gt=0)
     release_height_threshold_m: float = Field(gt=0)
+    attach_speed_threshold: TaskAxisSpeedThresholdConfig = Field(
+        default_factory=lambda: TaskAxisSpeedThresholdConfig(
+            slew_deg_s=0.3,
+            trolley_m_s=0.08,
+            hoist_m_s=0.05,
+        )
+    )
+    release_speed_threshold: TaskAxisSpeedThresholdConfig = Field(
+        default_factory=lambda: TaskAxisSpeedThresholdConfig(
+            slew_deg_s=0.3,
+            trolley_m_s=0.08,
+            hoist_m_s=0.05,
+        )
+    )
     safe_transport_height_m: float = Field(gt=0)
     lift_clearance_m: float = Field(gt=0)
     attach_stage_timeout_s: float = Field(gt=0)
     release_stage_timeout_s: float = Field(gt=0)
     task_no_progress_timeout_s: float = Field(gt=0)
     recovery_release_timeout_s: float = Field(gt=0)
+    no_progress_xy_epsilon_m: float = Field(default=0.25, gt=0)
     stage_timeout_policy: StageTimeoutPolicyConfig
 
 
@@ -254,6 +276,12 @@ class ManualTaskInput(ConfigBaseModel):
     dropoff_zone_id: str
     load_type: str
     priority: PriorityLevel = PriorityLevel.MEDIUM
+
+
+class TaskRecoveryConfig(ConfigBaseModel):
+    enabled: bool = True
+    policy: TaskRecoveryPolicy = TaskRecoveryPolicy.ATTEMPT_SAFE_RELEASE
+    emergency_drop_zones: List[str] = Field(default_factory=list)
 
 
 class TaskGenerationConfig(ConfigBaseModel):
@@ -269,6 +297,7 @@ class TaskGenerationConfig(ConfigBaseModel):
     priority_distribution: Dict[PriorityLevel, float]
     deadline_policy: DeadlinePolicyConfig
     state_machine: TaskStateMachineConfig
+    recovery: TaskRecoveryConfig = Field(default_factory=TaskRecoveryConfig)
     manual_tasks: Optional[List[ManualTaskInput]] = None
 
     @field_validator("task_type_distribution")

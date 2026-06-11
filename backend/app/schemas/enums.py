@@ -27,6 +27,11 @@ class TaskType(StrEnum):
     STRESS_TASK = "stress_task"
 
 
+class TaskRecoveryPolicy(StrEnum):
+    ATTEMPT_SAFE_RELEASE = "attempt_safe_release"
+    TERMINATE_EPISODE = "terminate_episode"
+
+
 class QueueStartMode(StrEnum):
     SIMULTANEOUS = "simultaneous"
     STAGGERED = "staggered"
