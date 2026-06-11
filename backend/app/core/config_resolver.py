@@ -8,6 +8,7 @@ from backend.app.core.secret_resolver import (
 )
 from backend.app.schemas.config import DatasetConfig, ExperimentConfig, ScenarioConfig
 from backend.app.schemas.enums import LayoutMode
+from backend.app.schemas.weather import DEFAULT_VISIBILITY_PROFILES
 from backend.app.schemas.resolved_config import (
     DefaultApplied,
     PersistedProviderSummary,
@@ -48,6 +49,11 @@ def resolve_config(
     provider = provider_summary or build_persisted_provider_summary(experiment_config)
 
     scenario_payload = _safe_dump(scenario_config)
+    scenario_payload["weather"] = _resolve_weather(
+        scenario_config,
+        experiment_config,
+        defaults_applied=defaults_applied,
+    )
     experiment_payload = _safe_dump(experiment_config)
     dataset_payload = _safe_dump(dataset_config) if dataset_config is not None else None
 
@@ -141,6 +147,170 @@ def _derive_seeds(
 
 def _stable_seed(base_seed: int, salt: int) -> int:
     return (base_seed * 1_000_003 + salt) % (2**31 - 1)
+
+
+def _resolve_weather(
+    scenario_config: ScenarioConfig,
+    experiment_config: ExperimentConfig,
+    *,
+    defaults_applied: List[DefaultApplied],
+) -> Dict[str, Any]:
+    weather_config = scenario_config.weather
+    payload = _safe_dump(weather_config)
+
+    if weather_config.update_interval_s is None:
+        payload["update_interval_s"] = experiment_config.sim.dt
+        defaults_applied.append(
+            DefaultApplied(
+                field_path="scenario.weather.update_interval_s",
+                value=experiment_config.sim.dt,
+                source="experiment.sim.dt",
+                reason="Weather update interval defaults to the simulation frame dt.",
+            )
+        )
+
+    _track_present_default(
+        defaults_applied,
+        field_path="scenario.weather.enabled",
+        value=payload["enabled"],
+        reason="Weather generation is enabled by default for every scenario.",
+    )
+    _track_present_default(
+        defaults_applied,
+        field_path="scenario.weather.runtime_failure_policy",
+        value=payload["runtime_failure_policy"],
+        reason="Runtime weather invalid state defaults to episode failure.",
+    )
+
+    if not payload["visibility"].get("levels"):
+        payload["visibility"]["levels"] = {
+            level.value: profile.model_dump(mode="json")
+            for level, profile in DEFAULT_VISIBILITY_PROFILES.items()
+        }
+        defaults_applied.append(
+            DefaultApplied(
+                field_path="scenario.weather.visibility.levels",
+                value=payload["visibility"]["levels"],
+                source="moduleE.default_visibility_profiles",
+                reason="Visibility profiles default to the module E canonical profiles.",
+            )
+        )
+
+    if "precipitation" in payload:
+        _track_present_default(
+            defaults_applied,
+            field_path="scenario.weather.precipitation",
+            value=payload["precipitation"],
+            reason="MVP weather defaults to no rain and no fog.",
+        )
+
+    if not payload["schedule"]["segments"]:
+        payload["schedule"]["segments"] = [_default_schedule_segment(payload)]
+        defaults_applied.append(
+            DefaultApplied(
+                field_path="scenario.weather.schedule.segments",
+                value=payload["schedule"]["segments"],
+                source="backward_compatibility",
+                reason="Legacy schedule weather without segments becomes a single open-ended segment.",
+            )
+        )
+
+    random_payload = payload["random"]
+    random_defaults = {
+        "change_interval_s": [30.0, 120.0],
+        "smoothing_time_s": 10.0,
+        "wind_speed_range_m_s": [0.0, 12.0],
+        "gust_extra_range_m_s": [0.0, 8.0],
+        "direction_change_range_deg": [-30.0, 30.0],
+        "visibility_distribution": {"good": 0.5, "medium": 0.35, "poor": 0.15},
+        "rain_distribution": {"none": 1.0, "light": 0.0, "moderate": 0.0, "heavy": 0.0},
+        "fog_distribution": {"none": 1.0, "light": 0.0, "medium": 0.0, "dense": 0.0},
+    }
+    applied_random_defaults: Dict[str, Any] = {}
+    for key, value in random_defaults.items():
+        if random_payload.get(key) is None:
+            random_payload[key] = value
+            applied_random_defaults[key] = value
+    if applied_random_defaults:
+        defaults_applied.append(
+            DefaultApplied(
+                field_path="scenario.weather.random",
+                value=applied_random_defaults,
+                source="moduleE.random_defaults",
+                reason="Random weather mode uses deterministic default generation ranges.",
+            )
+        )
+
+    if payload.get("wind_advisory_thresholds_m_s") is None:
+        payload["wind_advisory_thresholds_m_s"] = {
+            "caution": 8.0,
+            "gusty": 12.0,
+            "strong_wind": 16.0,
+        }
+        defaults_applied.append(
+            DefaultApplied(
+                field_path="scenario.weather.wind_advisory_thresholds_m_s",
+                value=payload["wind_advisory_thresholds_m_s"],
+                source="moduleE.wind_advisory_defaults",
+                reason="Wind advisory thresholds default to module E warning levels.",
+            )
+        )
+
+    if payload["wind"].get("speed_bounds_m_s") is None:
+        payload["wind"]["speed_bounds_m_s"] = [0.0, 25.0]
+        defaults_applied.append(
+            DefaultApplied(
+                field_path="scenario.weather.wind.speed_bounds_m_s",
+                value=payload["wind"]["speed_bounds_m_s"],
+                source="moduleE.wind_defaults",
+                reason="Weather wind speed bounds default to the MVP accepted range.",
+            )
+        )
+
+    if payload["wind"].get("gust_duration_s") is None:
+        payload["wind"]["gust_duration_s"] = [3.0, 10.0]
+        defaults_applied.append(
+            DefaultApplied(
+                field_path="scenario.weather.wind.gust_duration_s",
+                value=payload["wind"]["gust_duration_s"],
+                source="moduleE.wind_defaults",
+                reason="Gust duration defaults support future random weather generation.",
+            )
+        )
+
+    return payload
+
+
+def _track_present_default(
+    defaults_applied: List[DefaultApplied],
+    *,
+    field_path: str,
+    value: Any,
+    reason: str,
+) -> None:
+    defaults_applied.append(
+        DefaultApplied(
+            field_path=field_path,
+            value=value,
+            source="schema_default",
+            reason=reason,
+        )
+    )
+
+
+def _default_schedule_segment(weather_payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "segment_id": "schedule-default-0",
+        "start_s": 0.0,
+        "end_s": None,
+        "wind_speed_m_s": weather_payload["wind"]["base_speed_m_s"],
+        "wind_gust_m_s": weather_payload["wind"]["gust_speed_m_s"],
+        "wind_direction_deg": weather_payload["wind"]["direction_deg"],
+        "visibility_level": weather_payload["visibility"]["base_level"],
+        "rain_level": weather_payload["precipitation"]["rain_level"],
+        "fog_level": weather_payload["precipitation"]["fog_level"],
+        "transition_s": 0.0,
+    }
 
 
 def _resolve_layout(scenario_config: ScenarioConfig, layout_seed: int) -> ResolvedLayoutConfig:

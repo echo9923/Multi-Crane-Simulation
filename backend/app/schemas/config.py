@@ -37,7 +37,10 @@ from backend.app.schemas.enums import (
     QueueStartMode,
     RuntimeMode,
     VisibilityLevel,
+    RainLevel,
+    FogLevel,
     WeatherMode,
+    WeatherRuntimeFailurePolicy,
 )
 
 
@@ -328,16 +331,220 @@ class WindConfig(ConfigBaseModel):
     base_speed_m_s: float = Field(ge=0)
     gust_speed_m_s: float = Field(ge=0)
     direction_deg: float = Field(ge=0, le=360)
+    speed_bounds_m_s: Optional[List[float]] = None
+    direction_variability_deg: float = Field(default=0.0, ge=0)
+    gust_probability: float = Field(default=0.0, ge=0, le=1)
+    gust_duration_s: Optional[List[float]] = None
+
+    @field_validator("speed_bounds_m_s", "gust_duration_s")
+    @classmethod
+    def validate_optional_ranges(cls, value: Optional[List[float]]) -> Optional[List[float]]:
+        if value is None:
+            return value
+        if any(component < 0 for component in value):
+            raise ValueError("WEATHER_E_001 weather range values must be non-negative")
+        return _validate_numeric_range(value, "weather range")
+
+    @model_validator(mode="after")
+    def validate_gust_not_below_base(self) -> "WindConfig":
+        if self.gust_speed_m_s < self.base_speed_m_s:
+            raise ValueError("WEATHER_E_001 gust_speed_m_s must be >= base_speed_m_s")
+        return self
 
 
 class VisibilityConfig(ConfigBaseModel):
     base_level: VisibilityLevel
+    levels: Optional[Dict[VisibilityLevel, Dict[str, float]]] = None
+
+    @field_validator("base_level", mode="before")
+    @classmethod
+    def canonicalize_base_level(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _canonical_visibility_value(value)
+        return value
+
+    @field_validator("levels", mode="before")
+    @classmethod
+    def canonicalize_level_keys(
+        cls, value: Optional[Dict[Any, Dict[str, float]]]
+    ) -> Optional[Dict[str, Dict[str, float]]]:
+        if value is None:
+            return value
+        return {_canonical_visibility_value(str(key)): item for key, item in value.items()}
+
+
+class PrecipitationConfig(ConfigBaseModel):
+    rain_level: RainLevel = RainLevel.NONE
+    fog_level: FogLevel = FogLevel.NONE
+
+
+class WeatherScheduleSegmentConfig(ConfigBaseModel):
+    segment_id: str
+    start_s: float = Field(ge=0)
+    end_s: Optional[float] = Field(default=None, gt=0)
+    wind_speed_m_s: float = Field(ge=0)
+    wind_gust_m_s: float = Field(ge=0)
+    wind_direction_deg: float = Field(ge=0, le=360)
+    visibility_level: VisibilityLevel
+    rain_level: RainLevel = RainLevel.NONE
+    fog_level: FogLevel = FogLevel.NONE
+    transition_s: float = Field(default=0.0, ge=0)
+
+    @field_validator("visibility_level", mode="before")
+    @classmethod
+    def canonicalize_visibility_level(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _canonical_visibility_value(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_segment(self) -> "WeatherScheduleSegmentConfig":
+        if self.end_s is not None and self.end_s <= self.start_s:
+            raise ValueError("WEATHER_E_002 schedule segment end_s must be > start_s")
+        if self.wind_gust_m_s < self.wind_speed_m_s:
+            raise ValueError("WEATHER_E_002 wind_gust_m_s must be >= wind_speed_m_s")
+        return self
+
+
+class WeatherScheduleConfig(ConfigBaseModel):
+    segments: List[WeatherScheduleSegmentConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_segments(self) -> "WeatherScheduleConfig":
+        if not self.segments:
+            return self
+        first = self.segments[0]
+        if first.start_s != 0:
+            raise ValueError("WEATHER_E_002 first schedule segment must start at 0")
+        for index, segment in enumerate(self.segments):
+            if segment.end_s is None and index != len(self.segments) - 1:
+                raise ValueError("WEATHER_E_002 only the last segment may have end_s=null")
+            if index == 0:
+                continue
+            previous = self.segments[index - 1]
+            if segment.start_s <= previous.start_s:
+                raise ValueError("WEATHER_E_002 schedule segment start_s must increase")
+            if previous.end_s is None:
+                raise ValueError("WEATHER_E_002 segment after open-ended segment is invalid")
+            if segment.start_s != previous.end_s:
+                raise ValueError("WEATHER_E_002 schedule segments must be continuous")
+        return self
+
+
+class WeatherRandomConfig(ConfigBaseModel):
+    change_interval_s: Optional[List[float]] = None
+    smoothing_time_s: Optional[float] = Field(default=None, ge=0)
+    wind_speed_range_m_s: Optional[List[float]] = None
+    gust_extra_range_m_s: Optional[List[float]] = None
+    direction_change_range_deg: Optional[List[float]] = None
+    visibility_distribution: Optional[Dict[VisibilityLevel, float]] = None
+    rain_distribution: Optional[Dict[RainLevel, float]] = None
+    fog_distribution: Optional[Dict[FogLevel, float]] = None
+
+    @field_validator(
+        "change_interval_s",
+        "wind_speed_range_m_s",
+        "gust_extra_range_m_s",
+    )
+    @classmethod
+    def validate_non_negative_ranges(
+        cls, value: Optional[List[float]]
+    ) -> Optional[List[float]]:
+        if value is None:
+            return value
+        if any(component < 0 for component in value):
+            raise ValueError("WEATHER_E_003 random weather ranges must be non-negative")
+        return _validate_numeric_range(value, "random weather range")
+
+    @field_validator("direction_change_range_deg")
+    @classmethod
+    def validate_direction_change_range(
+        cls, value: Optional[List[float]]
+    ) -> Optional[List[float]]:
+        if value is None:
+            return value
+        return _validate_numeric_range(value, "direction_change_range_deg")
+
+    @field_validator("visibility_distribution", mode="before")
+    @classmethod
+    def canonicalize_visibility_distribution(
+        cls, value: Optional[Dict[Any, float]]
+    ) -> Optional[Dict[str, float]]:
+        if value is None:
+            return value
+        return {_canonical_visibility_value(str(key)): weight for key, weight in value.items()}
+
+    @field_validator("visibility_distribution")
+    @classmethod
+    def validate_visibility_distribution(
+        cls, value: Optional[Dict[VisibilityLevel, float]]
+    ) -> Optional[Dict[VisibilityLevel, float]]:
+        if value is not None:
+            return _validate_distribution(value, "WEATHER_E_003 visibility_distribution")
+        return value
+
+    @field_validator("rain_distribution")
+    @classmethod
+    def validate_rain_distribution(
+        cls, value: Optional[Dict[RainLevel, float]]
+    ) -> Optional[Dict[RainLevel, float]]:
+        if value is not None:
+            return _validate_distribution(value, "WEATHER_E_003 rain_distribution")
+        return value
+
+    @field_validator("fog_distribution")
+    @classmethod
+    def validate_fog_distribution(
+        cls, value: Optional[Dict[FogLevel, float]]
+    ) -> Optional[Dict[FogLevel, float]]:
+        if value is not None:
+            return _validate_distribution(value, "WEATHER_E_003 fog_distribution")
+        return value
 
 
 class WeatherConfig(ConfigBaseModel):
+    enabled: bool = True
     mode: WeatherMode
+    update_interval_s: Optional[float] = Field(default=None, gt=0)
+    runtime_failure_policy: WeatherRuntimeFailurePolicy = (
+        WeatherRuntimeFailurePolicy.FAIL_EPISODE
+    )
     wind: WindConfig
     visibility: VisibilityConfig
+    precipitation: PrecipitationConfig = Field(default_factory=PrecipitationConfig)
+    schedule: WeatherScheduleConfig = Field(default_factory=WeatherScheduleConfig)
+    random: WeatherRandomConfig = Field(default_factory=WeatherRandomConfig)
+    wind_advisory_thresholds_m_s: Optional[Dict[str, float]] = None
+
+    @field_validator("wind_advisory_thresholds_m_s")
+    @classmethod
+    def validate_wind_advisory_thresholds(
+        cls, value: Optional[Dict[str, float]]
+    ) -> Optional[Dict[str, float]]:
+        if value is None:
+            return value
+        required = {"caution", "gusty", "strong_wind"}
+        if set(value) != required:
+            raise ValueError("WEATHER_E_001 wind advisory thresholds are incomplete")
+        if any(threshold < 0 for threshold in value.values()):
+            raise ValueError("WEATHER_E_001 wind advisory thresholds must be non-negative")
+        if not value["caution"] <= value["gusty"] <= value["strong_wind"]:
+            raise ValueError("WEATHER_E_001 wind advisory thresholds must be ordered")
+        return value
+
+
+def _canonical_visibility_value(value: str) -> str:
+    aliases = {
+        "high": "good",
+        "medium": "medium",
+        "low": "poor",
+        "good": "good",
+        "poor": "poor",
+    }
+    try:
+        return aliases[value]
+    except KeyError as exc:
+        raise ValueError(f"WEATHER_E_001 unknown visibility level: {value}") from exc
 
 
 class GeometryEnvelopeConfig(ConfigBaseModel):

@@ -5,44 +5,20 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.app.schemas.enums import StrEnum, WeatherMode
+from backend.app.schemas.enums import (
+    FogLevel,
+    RainLevel,
+    StrEnum,
+    VisibilityLevel,
+    WeatherMode,
+    WindAdvisoryLevel,
+)
 
 WEATHER_SCHEMA_VERSION = "1.0"
 
 
 class WeatherBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-
-
-class VisibilityLevel(StrEnum):
-    GOOD = "good"
-    MEDIUM = "medium"
-    POOR = "poor"
-
-    @classmethod
-    def canonical_values(cls) -> List["VisibilityLevel"]:
-        return [cls.GOOD, cls.MEDIUM, cls.POOR]
-
-
-class RainLevel(StrEnum):
-    NONE = "none"
-    LIGHT = "light"
-    MODERATE = "moderate"
-    HEAVY = "heavy"
-
-
-class FogLevel(StrEnum):
-    NONE = "none"
-    LIGHT = "light"
-    MEDIUM = "medium"
-    DENSE = "dense"
-
-
-class WindAdvisoryLevel(StrEnum):
-    NORMAL = "normal"
-    CAUTION = "caution"
-    GUSTY = "gusty"
-    STRONG_WIND = "strong_wind"
 
 
 class WeatherDiagnostic(WeatherBaseModel):

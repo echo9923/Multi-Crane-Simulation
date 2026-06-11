@@ -44,6 +44,43 @@ class WeatherMode(StrEnum):
     RANDOM = "random"
 
 
+class VisibilityLevel(StrEnum):
+    GOOD = "good"
+    MEDIUM = "medium"
+    POOR = "poor"
+
+    @classmethod
+    def canonical_values(cls) -> list["VisibilityLevel"]:
+        return [cls.GOOD, cls.MEDIUM, cls.POOR]
+
+
+class RainLevel(StrEnum):
+    NONE = "none"
+    LIGHT = "light"
+    MODERATE = "moderate"
+    HEAVY = "heavy"
+
+
+class FogLevel(StrEnum):
+    NONE = "none"
+    LIGHT = "light"
+    MEDIUM = "medium"
+    DENSE = "dense"
+
+
+class WindAdvisoryLevel(StrEnum):
+    NORMAL = "normal"
+    CAUTION = "caution"
+    GUSTY = "gusty"
+    STRONG_WIND = "strong_wind"
+
+
+class WeatherRuntimeFailurePolicy(StrEnum):
+    FAIL_EPISODE = "fail_episode"
+    WARN_AND_HOLD_LAST = "warn_and_hold_last"
+    WARN_AND_USE_SAFE_DEFAULT = "warn_and_use_safe_default"
+
+
 class RiskPromptMode(StrEnum):
     R0 = "R0"
     R1 = "R1"
@@ -146,9 +183,3 @@ class SummarizerMode(StrEnum):
 class SummarizerProviderMode(StrEnum):
     SAME_AS_OPERATOR = "same_as_operator"
     EXPLICIT = "explicit"
-
-
-class VisibilityLevel(StrEnum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
