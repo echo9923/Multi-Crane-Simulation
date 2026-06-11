@@ -6,6 +6,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from backend.app.schemas.enums import LLMProviderName, OperatorProfile
 from backend.app.schemas.observation import Observation
+from backend.app.schemas.risk import (
+    ForbiddenZoneResult,
+    InterventionRecord,
+    MechanicalLimitResult,
+    SAFETY_SCHEMA_VERSION,
+)
 
 COMMAND_SCHEMA_VERSION = "1.0"
 
@@ -167,6 +173,123 @@ class OperatorDecisionResult(CommandBaseModel):
     model: str
     fallback_applied: bool = False
     episode_failure_reason: Optional[Literal["llm_failed"]] = None
+
+
+class ExecutedAxisCommand(CommandBaseModel):
+    direction: str
+    gear: int = Field(ge=0, le=5)
+    speed_scale: float = Field(default=1.0, ge=0, le=1)
+    source: Literal["raw", "mechanical_limit", "forbidden_zone", "risk_intervention"]
+
+    @model_validator(mode="after")
+    def validate_direction_and_gear(self) -> "ExecutedAxisCommand":
+        if self.direction == "neutral" and self.gear != 0:
+            raise ValueError("neutral direction requires gear 0")
+        if self.direction != "neutral" and self.gear == 0:
+            raise ValueError("gear 0 requires neutral direction")
+        return self
+
+
+class ExecutedLeftJoystickCommand(CommandBaseModel):
+    slew: ExecutedAxisCommand
+    trolley: ExecutedAxisCommand
+
+
+class ExecutedRightJoystickCommand(CommandBaseModel):
+    hoist: ExecutedAxisCommand
+
+
+class ExecutedCommand(CommandBaseModel):
+    schema_version: str = SAFETY_SCHEMA_VERSION
+    command_id: str
+    raw_command_id: str
+    observation_id: str
+    source_snapshot_id: str
+    operator_id: str
+    crane_id: str
+    time_s: float = Field(ge=0)
+    raw_command: ParsedCommand
+    left_joystick: ExecutedLeftJoystickCommand
+    right_joystick: ExecutedRightJoystickCommand
+    deadman_pressed: bool
+    emergency_stop: bool
+    horn: bool
+    command_duration_s: float = Field(ge=0)
+    task_action: Literal["none", "request_attach", "request_release"]
+    modified: bool
+    modification_reasons: List[str] = Field(default_factory=list)
+    mechanical_limit: Optional[MechanicalLimitResult] = None
+    forbidden_zone: Optional[ForbiddenZoneResult] = None
+    interventions: List[InterventionRecord] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_modification_contract(self) -> "ExecutedCommand":
+        if self.modified and not self.modification_reasons:
+            raise ValueError("modified executed command requires modification reasons")
+        if not self.modified and self.modification_reasons:
+            raise ValueError("unmodified executed command must not include reasons")
+        if self.raw_command_id != self.raw_command.command_id:
+            raise ValueError("raw_command_id must match raw_command.command_id")
+        return self
+
+    @classmethod
+    def from_raw(
+        cls,
+        *,
+        command_id: str,
+        raw_command: ParsedCommand,
+        mechanical_limit: Optional[MechanicalLimitResult] = None,
+        forbidden_zone: Optional[ForbiddenZoneResult] = None,
+        interventions: Optional[List[InterventionRecord]] = None,
+        modification_reasons: Optional[List[str]] = None,
+    ) -> "ExecutedCommand":
+        reasons = list(modification_reasons or [])
+        all_interventions = list(interventions or [])
+        modified = bool(
+            reasons
+            or (mechanical_limit and mechanical_limit.modified)
+            or (forbidden_zone and forbidden_zone.blocked)
+            or any(intervention.modified for intervention in all_interventions)
+        )
+        return cls(
+            command_id=command_id,
+            raw_command_id=raw_command.command_id,
+            observation_id=raw_command.observation_id,
+            source_snapshot_id=raw_command.source_snapshot_id,
+            operator_id=raw_command.operator_id,
+            crane_id=raw_command.crane_id,
+            time_s=raw_command.time_s,
+            raw_command=raw_command,
+            left_joystick=ExecutedLeftJoystickCommand(
+                slew=ExecutedAxisCommand(
+                    direction=raw_command.left_joystick.slew.direction,
+                    gear=raw_command.left_joystick.slew.gear,
+                    source="raw",
+                ),
+                trolley=ExecutedAxisCommand(
+                    direction=raw_command.left_joystick.trolley.direction,
+                    gear=raw_command.left_joystick.trolley.gear,
+                    source="raw",
+                ),
+            ),
+            right_joystick=ExecutedRightJoystickCommand(
+                hoist=ExecutedAxisCommand(
+                    direction=raw_command.right_joystick.hoist.direction,
+                    gear=raw_command.right_joystick.hoist.gear,
+                    source="raw",
+                )
+            ),
+            deadman_pressed=raw_command.deadman_pressed,
+            emergency_stop=raw_command.emergency_stop,
+            horn=raw_command.horn,
+            command_duration_s=raw_command.command_duration_s,
+            task_action=raw_command.task_action,
+            modified=modified,
+            modification_reasons=reasons,
+            mechanical_limit=mechanical_limit,
+            forbidden_zone=forbidden_zone,
+            interventions=all_interventions,
+        )
 
 
 def build_neutral_stop_command(
