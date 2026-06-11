@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 from typing import Optional
 
 from backend.app.schemas.control import ControlTarget
@@ -12,12 +13,15 @@ from backend.app.schemas.observation import (
     RightJoystickCommand,
     SelfStateSummary,
     TaskObservationSummary,
+    VisibleNeighbor,
 )
 from backend.app.schemas.state import CraneState
 from backend.app.schemas.task import TaskPoint
+from backend.app.schemas.weather import WeatherVisibilityContext
 from backend.app.sim.layout_geometry import horizontal_distance
 from backend.app.sim.task_observation import TaskObservationContext
 from backend.app.sim.task_queue import IdleObservationContext
+from backend.app.sim.weather import build_visibility_sampling_key
 
 
 class ObservationBuildError(ValueError):
@@ -122,6 +126,81 @@ def build_task_summary(
     )
 
 
+def build_visible_neighbors(
+    *,
+    observer_state: CraneState,
+    states_by_id: dict[str, CraneState],
+    neighbor_ids: list[str],
+    visibility: WeatherVisibilityContext,
+    decision_time_bucket: int,
+) -> list[VisibleNeighbor]:
+    neighbors: list[VisibleNeighbor] = []
+    for neighbor_id in neighbor_ids:
+        try:
+            neighbor_state = states_by_id[neighbor_id]
+        except KeyError as exc:
+            raise ObservationBuildError(
+                "neighbor state is missing",
+                crane_id=observer_state.crane_id,
+                field_path=f"states_by_id.{neighbor_id}",
+            ) from exc
+
+        true_distance = horizontal_distance(
+            observer_state.hook_position,
+            neighbor_state.hook_position,
+        )
+        if true_distance > visibility.neighbor_visibility_radius_m:
+            continue
+
+        observed_distance = _observed_neighbor_distance(
+            true_distance=true_distance,
+            observer_crane_id=observer_state.crane_id,
+            target_crane_id=neighbor_id,
+            visibility=visibility,
+            decision_time_bucket=decision_time_bucket,
+        )
+        hook_visible = not _sample_hook_hidden(
+            observer_crane_id=observer_state.crane_id,
+            target_crane_id=neighbor_id,
+            visibility=visibility,
+            decision_time_bucket=decision_time_bucket,
+        )
+        dx = neighbor_state.hook_position[0] - observer_state.hook_position[0]
+        dy = neighbor_state.hook_position[1] - observer_state.hook_position[1]
+        neighbors.append(
+            VisibleNeighbor(
+                crane_id=neighbor_id,
+                relative_direction=_relative_direction(dx, dy),
+                distance_m=observed_distance,
+                distance_level=_distance_level(observed_distance),
+                hook_visible=hook_visible,
+                hook_height_m=(
+                    _round_to_precision(
+                        neighbor_state.hook_position[2],
+                        visibility.distance_precision_m,
+                    )
+                    if hook_visible
+                    else None
+                ),
+                jib_motion=_slew_motion(neighbor_state.theta_dot_rad_s),
+                trolley_motion=_linear_motion(
+                    neighbor_state.trolley_v_m_s,
+                    positive="out",
+                    negative="in",
+                ),
+                hoist_motion=_linear_motion(
+                    neighbor_state.hoist_v_m_s,
+                    positive="up",
+                    negative="down",
+                ),
+                load_attached=neighbor_state.load_attached if hook_visible else None,
+                task_stage=neighbor_state.task_stage,
+                in_overlap_zone=true_distance <= visibility.neighbor_visibility_radius_m,
+            )
+        )
+    return neighbors
+
+
 def _command_summary(current_command: Optional[ControlTarget]) -> JoystickCommandSummary:
     if current_command is None:
         return JoystickCommandSummary(
@@ -174,6 +253,11 @@ def _command_summary(current_command: Optional[ControlTarget]) -> JoystickComman
 
 def _slew_motion(velocity_rad_s: float) -> str:
     direction = _axis_direction(velocity_rad_s, positive="slow_left", negative="slow_right")
+    return "hold" if direction == "neutral" else direction
+
+
+def _linear_motion(value: float, *, positive: str, negative: str) -> str:
+    direction = _axis_direction(value, positive=positive, negative=negative)
     return "hold" if direction == "neutral" else direction
 
 
@@ -267,3 +351,57 @@ def _relative_direction(dx: float, dy: float) -> str:
     if vertical == "center":
         return horizontal
     return f"{horizontal}_{vertical}"
+
+
+def _observed_neighbor_distance(
+    *,
+    true_distance: float,
+    observer_crane_id: str,
+    target_crane_id: str,
+    visibility: WeatherVisibilityContext,
+    decision_time_bucket: int,
+) -> float:
+    if visibility.distance_noise_m == 0:
+        noisy = true_distance
+    else:
+        key = build_visibility_sampling_key(
+            noise_seed=visibility.noise_seed,
+            observer_crane_id=observer_crane_id,
+            target_crane_id=target_crane_id,
+            decision_time_bucket=decision_time_bucket,
+            purpose="distance_noise",
+        )
+        noisy = true_distance + random.Random(key).uniform(
+            -visibility.distance_noise_m,
+            visibility.distance_noise_m,
+        )
+    return max(0.0, _round_to_precision(noisy, visibility.distance_precision_m))
+
+
+def _sample_hook_hidden(
+    *,
+    observer_crane_id: str,
+    target_crane_id: str,
+    visibility: WeatherVisibilityContext,
+    decision_time_bucket: int,
+) -> bool:
+    if visibility.hide_hook_prob <= 0:
+        return False
+    if visibility.hide_hook_prob >= 1:
+        return True
+    key = build_visibility_sampling_key(
+        noise_seed=visibility.noise_seed,
+        observer_crane_id=observer_crane_id,
+        target_crane_id=target_crane_id,
+        decision_time_bucket=decision_time_bucket,
+        purpose="hook_visibility",
+    )
+    return random.Random(key).random() < visibility.hide_hook_prob
+
+
+def _distance_level(distance_m: float) -> str:
+    if distance_m <= 30.0:
+        return "near"
+    if distance_m <= 80.0:
+        return "medium"
+    return "far"
