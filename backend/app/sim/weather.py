@@ -420,3 +420,93 @@ def _recommended_behavior_keys(level: str) -> List[str]:
         "increase_observation",
         "pause_if_gusty",
     ]
+
+
+def build_weather_record_row(
+    weather_state: WeatherState,
+    *,
+    episode_id: str,
+    scenario_id: str,
+    frame_index: int,
+) -> Dict[str, Any]:
+    return {
+        "schema_version": weather_state.schema_version,
+        "episode_id": episode_id,
+        "scenario_id": scenario_id,
+        "frame": frame_index,
+        "time_s": weather_state.time_s,
+        "wind_speed_m_s": weather_state.wind_speed_m_s,
+        "wind_gust_m_s": weather_state.wind_gust_m_s,
+        "wind_direction_deg": weather_state.wind_direction_deg,
+        "visibility_level": _value(weather_state.visibility_level),
+        "rain_level": _value(weather_state.rain_level),
+        "fog_level": _value(weather_state.fog_level),
+        "wind_for_safety_m_s": weather_state.wind_for_safety_m_s,
+        "wind_advisory_level": _value(weather_state.wind_advisory_level),
+        "neighbor_visibility_radius_m": weather_state.neighbor_visibility_radius_m,
+        "distance_noise_m": weather_state.distance_noise_m,
+        "hide_hook_prob": weather_state.hide_hook_prob,
+        "visibility_confidence": weather_state.visibility_confidence,
+        "source_segment_id": weather_state.source_segment_id,
+        "generation_seed": weather_state.generation_seed,
+        "generation_step": weather_state.generation_step,
+    }
+
+
+def build_weather_frame_summary(weather_state: WeatherState) -> Dict[str, Any]:
+    return {
+        "wind_speed_m_s": weather_state.wind_speed_m_s,
+        "wind_gust_m_s": weather_state.wind_gust_m_s,
+        "wind_direction_deg": weather_state.wind_direction_deg,
+        "visibility_level": _value(weather_state.visibility_level),
+        "rain_level": _value(weather_state.rain_level),
+        "fog_level": _value(weather_state.fog_level),
+        "wind_advisory_level": _value(weather_state.wind_advisory_level),
+    }
+
+
+def compare_weather_replay_row(
+    weather_state: WeatherState,
+    historical_row: Dict[str, Any],
+    *,
+    abs_tol: float = 1e-9,
+) -> Optional[Dict[str, Any]]:
+    expected = build_weather_record_row(
+        weather_state,
+        episode_id=str(historical_row.get("episode_id", "")),
+        scenario_id=str(historical_row.get("scenario_id", "")),
+        frame_index=int(historical_row.get("frame", weather_state.generation_step)),
+    )
+    fields = [
+        "frame",
+        "time_s",
+        "wind_speed_m_s",
+        "wind_gust_m_s",
+        "wind_direction_deg",
+        "visibility_level",
+        "rain_level",
+    ]
+    for field in fields:
+        actual = historical_row.get(field)
+        expected_value = expected[field]
+        if isinstance(expected_value, float):
+            if actual is None or not math.isclose(float(actual), expected_value, abs_tol=abs_tol):
+                return _replay_mismatch(field, expected_value, actual)
+        elif actual != expected_value:
+            return _replay_mismatch(field, expected_value, actual)
+    return None
+
+
+def _replay_mismatch(field: str, expected: Any, actual: Any) -> Dict[str, Any]:
+    return {
+        "source_module": "E",
+        "error_code": "WEATHER_E_REPLAY_MISMATCH",
+        "field": field,
+        "expected": expected,
+        "actual": actual,
+        "default_episode_status": "failed_replay_mismatch",
+    }
+
+
+def _value(value: Any) -> Any:
+    return value.value if hasattr(value, "value") else value

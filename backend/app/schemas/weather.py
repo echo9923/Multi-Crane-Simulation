@@ -80,6 +80,15 @@ class WindAdvisory(WeatherBaseModel):
     recommended_behavior_keys: List[str] = Field(default_factory=list)
 
 
+class WeatherWorldSnapshot(WeatherBaseModel):
+    schema_version: str = WEATHER_SCHEMA_VERSION
+    time_s: float = Field(ge=0)
+    crane_states: List[Dict[str, Any]]
+    tasks: List[Dict[str, Any]]
+    weather: "WeatherState"
+    recent_events: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 DEFAULT_VISIBILITY_PROFILES: Dict[VisibilityLevel, VisibilityProfile] = {
     VisibilityLevel.GOOD: VisibilityProfile(
         level=VisibilityLevel.GOOD,
