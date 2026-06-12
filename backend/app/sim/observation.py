@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -62,7 +62,7 @@ class ObservationWorldSnapshot(BaseModel):
     weather_state: WeatherState
     visibility_context: WeatherVisibilityContext
     neighbor_map: Dict[str, List[str]] = Field(default_factory=dict)
-    task_contexts: Dict[str, TaskObservationContext | IdleObservationContext]
+    task_contexts: Dict[str, Union[TaskObservationContext, IdleObservationContext]]
     current_commands: Dict[str, ControlTarget] = Field(default_factory=dict)
     recent_decisions: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
     recent_events: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
@@ -250,7 +250,7 @@ def build_self_state_summary(
 
 def build_task_summary(
     *,
-    task_context: TaskObservationContext | IdleObservationContext,
+    task_context: Union[TaskObservationContext, IdleObservationContext],
     observer_state: CraneState,
     distance_precision_m: float,
 ) -> TaskObservationSummary:
@@ -618,7 +618,7 @@ def _distance_level(distance_m: float) -> str:
 
 
 def _index_by_crane_id(
-    items: List[CraneState] | List[CraneConfig],
+    items: Union[List[CraneState], List[CraneConfig]],
     field_path: str,
 ) -> Dict[str, Any]:
     index: Dict[str, Any] = {}
