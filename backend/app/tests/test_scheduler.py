@@ -36,6 +36,7 @@ from backend.app.sim.crane_model import build_crane_model_library
 from backend.app.sim.layout import build_crane_configs
 from backend.app.sim.physics import initialize_crane_state
 from backend.app.sim.scheduler import freeze_world_snapshot, to_observation_snapshot
+from backend.app.sim.scheduler import CommandStore
 from backend.app.sim.task_observation import TaskObservationContext
 from backend.app.sim.task_queue import IdleObservationContext
 from backend.app.tests.test_config_schema import load_fixture
@@ -705,3 +706,146 @@ def test_freeze_world_snapshot_rejects_recent_decision_leaks() -> None:
                 ]
             },
         )
+
+
+def test_command_store_initializes_startup_neutral_for_each_crane() -> None:
+    store = CommandStore.with_startup_neutral(
+        crane_ids=["C1", "C2"],
+        time_s=0.0,
+        default_operator_ids={"C1": "OP_A", "C2": "OP_B"},
+        command_duration_s=1.0,
+    )
+
+    commands = store.get_current_commands()
+
+    assert set(commands) == {"C1", "C2"}
+    assert commands["C1"].operator_id == "OP_A"
+    assert commands["C2"].operator_id == "OP_B"
+    for command in commands.values():
+        assert command.left_joystick.slew.direction == "neutral"
+        assert command.left_joystick.trolley.gear == 0
+        assert command.right_joystick.hoist.direction == "neutral"
+        assert command.deadman_pressed is True
+        assert command.emergency_stop is False
+        assert command.task_action == "none"
+
+
+def test_command_store_replaces_due_commands_atomically() -> None:
+    store = CommandStore.with_startup_neutral(crane_ids=["C1", "C2"])
+    old_commands = store.get_current_commands()
+    c1 = _executed_command(
+        crane_id="C1",
+        command_id="cmd-new-c1",
+        time_s=2.0,
+        command_duration_s=1.0,
+    )
+    c2 = _executed_command(
+        crane_id="C2",
+        command_id="cmd-new-c2",
+        time_s=2.0,
+        command_duration_s=1.0,
+    )
+
+    snapshot = store.replace_current_commands([c1, c2], sim_time=2.0)
+
+    assert store.get_current_commands()["C1"].command_id == c1.command_id
+    assert store.get_current_commands()["C2"].command_id == c2.command_id
+    assert snapshot.commands["C1"].source == "decision"
+    assert snapshot.commands["C1"].expires_at_s == pytest.approx(3.0)
+    assert old_commands["C1"].command_id != c1.command_id
+
+
+def test_command_store_rejects_invalid_batch_without_partial_update() -> None:
+    store = CommandStore.with_startup_neutral(crane_ids=["C1", "C2"])
+    before = store.get_current_commands()
+    valid = _executed_command(crane_id="C1", command_id="cmd-valid", time_s=2.0)
+    unknown = _executed_command(crane_id="C9", command_id="cmd-unknown", time_s=2.0)
+
+    with pytest.raises(SchedulerError):
+        store.replace_current_commands([valid, unknown], sim_time=2.0)
+
+    assert store.get_current_commands() == before
+
+    duplicate = _executed_command(crane_id="C1", command_id="cmd-dup", time_s=2.0)
+    with pytest.raises(SchedulerError):
+        store.replace_current_commands([valid, duplicate], sim_time=2.0)
+
+    assert store.get_current_commands() == before
+
+
+def test_command_store_expires_only_commands_at_or_past_boundary() -> None:
+    store = CommandStore.with_startup_neutral(crane_ids=["C1", "C2"])
+    c1 = _executed_command(
+        crane_id="C1",
+        command_id="cmd-c1",
+        time_s=2.0,
+        command_duration_s=1.0,
+    )
+    c2 = _executed_command(
+        crane_id="C2",
+        command_id="cmd-c2",
+        time_s=2.0,
+        command_duration_s=2.0,
+    )
+    store.replace_current_commands([c1, c2], sim_time=2.0)
+
+    commands, events = store.expire_or_neutral_stop(
+        sim_time=2.99,
+        command_duration_s=1.25,
+    )
+    assert commands["C1"].command_id == c1.command_id
+    assert events == []
+
+    commands, events = store.expire_or_neutral_stop(
+        sim_time=3.0,
+        command_duration_s=1.25,
+    )
+
+    assert commands["C1"].command_id.startswith("EXEC_cmd-neutral-expired-C1-")
+    assert commands["C1"].time_s == pytest.approx(3.0)
+    assert commands["C1"].command_duration_s == pytest.approx(1.25)
+    assert commands["C1"].left_joystick.slew.direction == "neutral"
+    assert commands["C1"].right_joystick.hoist.gear == 0
+    assert commands["C1"].task_action == "none"
+    assert commands["C2"].command_id == c2.command_id
+    assert events == [
+        {
+            "event_type": "command_expired_neutral_stop",
+            "time_s": 3.0,
+            "crane_id": "C1",
+            "expired_command_id": c1.command_id,
+        }
+    ]
+
+
+def test_command_store_accepts_replay_source_and_serializes_snapshot() -> None:
+    store = CommandStore.with_startup_neutral(crane_ids=["C1"])
+    command = _executed_command(
+        crane_id="C1",
+        command_id="cmd-replay",
+        time_s=5.0,
+        command_duration_s=0.0,
+    )
+
+    snapshot = store.replace_current_commands(
+        [command],
+        sim_time=5.0,
+        source="replay",
+    )
+
+    assert snapshot.commands["C1"].source == "replay"
+    assert snapshot.commands["C1"].expires_at_s == pytest.approx(5.0)
+    json.dumps(store.snapshot(time_s=5.0).model_dump(mode="json"), ensure_ascii=False)
+
+
+def test_command_store_rejects_non_finite_time() -> None:
+    store = CommandStore.with_startup_neutral(crane_ids=["C1"])
+
+    with pytest.raises(SchedulerError):
+        store.replace_current_commands(
+            [_executed_command(crane_id="C1", command_id="cmd-c1", time_s=1.0)],
+            sim_time=math.nan,
+        )
+
+    with pytest.raises(SchedulerError):
+        store.expire_or_neutral_stop(sim_time=math.inf)
