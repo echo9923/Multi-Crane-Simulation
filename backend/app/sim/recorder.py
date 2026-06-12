@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Literal, Mapping, Optional
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Type
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import yaml
+from pydantic import BaseModel, ValidationError
 
-from backend.app.schemas.recorder import RECORDER_SCHEMA_VERSION
+from backend.app.schemas.recorder import (
+    RECORDER_SCHEMA_VERSION,
+    DataExportWarning,
+    GraphEdgeRow,
+    PairRiskRow,
+    RecorderBaseModel,
+    TaskParquetRow,
+    TrajectoryRow,
+    WeatherParquetRow,
+)
 from backend.app.schemas.resolved_config import ResolvedConfig
 
 
@@ -104,6 +117,142 @@ def init_run_directory(
             details={"exception_type": type(exc).__name__, "reason": str(exc)},
         ) from exc
     return layout
+
+
+class ParquetTableWriter:
+    def __init__(
+        self,
+        *,
+        output_path: Path,
+        row_model: Type[RecorderBaseModel],
+    ) -> None:
+        self.output_path = output_path
+        self.row_model = row_model
+        self._rows: List[Dict[str, Any]] = []
+        self.warnings: List[DataExportWarning] = []
+
+    def append(
+        self,
+        rows: Sequence[RecorderBaseModel],
+    ) -> None:
+        for index, row in enumerate(rows):
+            row_payload = _model_or_mapping_to_dict(row)
+            sanitized = _sanitize_for_export(
+                row_payload,
+                file_name=str(self.output_path),
+                warning_sink=self.warnings,
+            )
+            try:
+                validated = self.row_model.model_validate(sanitized)
+            except ValidationError as exc:
+                raise DataExportError(
+                    "invalid parquet row",
+                    error_code="RECORDER_E_PARQUET_SCHEMA",
+                    file_path=str(self.output_path),
+                    field_path=str(index),
+                    details={"errors": exc.errors()},
+                ) from exc
+            self._rows.append(validated.model_dump(mode="json"))
+
+    def flush(self) -> None:
+        if not self._rows:
+            return
+        tmp_path = self.output_path.with_name(f".{self.output_path.name}.tmp")
+        try:
+            table = pa.Table.from_pylist(self._rows)
+            pq.write_table(table, tmp_path)
+            tmp_path.replace(self.output_path)
+        except Exception as exc:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            raise DataExportError(
+                "failed to write parquet table",
+                error_code="RECORDER_E_PARQUET_WRITE",
+                file_path=str(self.output_path),
+                details={"exception_type": type(exc).__name__, "reason": str(exc)},
+            ) from exc
+
+    def close(self) -> None:
+        self.flush()
+
+
+class RecorderParquetWriters:
+    def __init__(
+        self,
+        *,
+        trajectories: ParquetTableWriter,
+        pair_risks: ParquetTableWriter,
+        graph_edges: ParquetTableWriter,
+        tasks: ParquetTableWriter,
+        weather: ParquetTableWriter,
+    ) -> None:
+        self.trajectories = trajectories
+        self.pair_risks = pair_risks
+        self.graph_edges = graph_edges
+        self.tasks = tasks
+        self.weather = weather
+
+    @classmethod
+    def from_layout(cls, layout: RunDirectoryLayout) -> "RecorderParquetWriters":
+        return cls(
+            trajectories=ParquetTableWriter(
+                output_path=layout.trajectories_path,
+                row_model=TrajectoryRow,
+            ),
+            pair_risks=ParquetTableWriter(
+                output_path=layout.pair_risks_path,
+                row_model=PairRiskRow,
+            ),
+            graph_edges=ParquetTableWriter(
+                output_path=layout.graph_edges_path,
+                row_model=GraphEdgeRow,
+            ),
+            tasks=ParquetTableWriter(
+                output_path=layout.tasks_path,
+                row_model=TaskParquetRow,
+            ),
+            weather=ParquetTableWriter(
+                output_path=layout.weather_path,
+                row_model=WeatherParquetRow,
+            ),
+        )
+
+    @property
+    def warnings(self) -> List[DataExportWarning]:
+        return [
+            *self.trajectories.warnings,
+            *self.pair_risks.warnings,
+            *self.graph_edges.warnings,
+            *self.tasks.warnings,
+            *self.weather.warnings,
+        ]
+
+    def write_trajectories(self, rows: Sequence[Any]) -> None:
+        self.trajectories.append(rows)
+
+    def write_pair_risks(self, rows: Sequence[Any]) -> None:
+        self.pair_risks.append(rows)
+
+    def write_graph_edges(self, rows: Sequence[Any]) -> None:
+        self.graph_edges.append(rows)
+
+    def write_tasks(self, rows: Sequence[Any]) -> None:
+        self.tasks.append(rows)
+
+    def write_weather(self, rows: Sequence[Any]) -> None:
+        self.weather.append(rows)
+
+    def flush_all(self) -> None:
+        self.trajectories.flush()
+        self.pair_risks.flush()
+        self.graph_edges.flush()
+        self.tasks.flush()
+        self.weather.flush()
+
+    def close_all(self) -> None:
+        self.flush_all()
 
 
 def _coerce_resolved_config(config: object) -> ResolvedConfig:
@@ -236,3 +385,57 @@ def _scenario_id_from_config(resolved_config: ResolvedConfig) -> Optional[str]:
     scenario = resolved_config.scenario
     value = scenario.get("scenario_id") if isinstance(scenario, dict) else None
     return str(value) if value is not None else None
+
+
+def _model_or_mapping_to_dict(row: object) -> Dict[str, Any]:
+    if isinstance(row, BaseModel):
+        return row.model_dump(mode="json")
+    if isinstance(row, Mapping):
+        return dict(row)
+    raise DataExportError(
+        "parquet row must be a Pydantic model or mapping",
+        error_code="RECORDER_E_PARQUET_ROW_TYPE",
+        details={"row_type": type(row).__name__},
+    )
+
+
+def _sanitize_for_export(
+    value: Any,
+    *,
+    file_name: str,
+    warning_sink: List[DataExportWarning],
+    field_path: str = "",
+) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        warning_type = "nan_to_null" if math.isnan(value) else "inf_to_null"
+        warning_sink.append(
+            DataExportWarning(
+                warning_id=f"warning-{len(warning_sink) + 1:06d}",
+                file_name=file_name,
+                field_path=field_path or None,
+                warning_type=warning_type,
+                message=f"converted non-finite float to null at {field_path}",
+            )
+        )
+        return None
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_for_export(
+                child,
+                file_name=file_name,
+                warning_sink=warning_sink,
+                field_path=f"{field_path}.{key}" if field_path else str(key),
+            )
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _sanitize_for_export(
+                child,
+                file_name=file_name,
+                warning_sink=warning_sink,
+                field_path=f"{field_path}[{index}]",
+            )
+            for index, child in enumerate(value)
+        ]
+    return value

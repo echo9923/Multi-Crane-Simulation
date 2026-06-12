@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 from pydantic import ValidationError
+import pyarrow.parquet as pq
 
 from backend.app.core.config_resolver import resolve_config
 from backend.app.schemas.recorder import (
@@ -26,7 +27,11 @@ from backend.app.schemas.recorder import (
     TrajectoryRow,
     WeatherParquetRow,
 )
-from backend.app.sim.recorder import DataExportError, init_run_directory
+from backend.app.sim.recorder import (
+    DataExportError,
+    RecorderParquetWriters,
+    init_run_directory,
+)
 from backend.app.tests.test_config_schema import load_fixture
 
 
@@ -494,3 +499,160 @@ def test_init_run_directory_maps_filesystem_errors_to_data_export_error(
 
     assert exc_info.value.category == "data_export_error"
     assert exc_info.value.file_path is not None
+
+
+def test_parquet_writers_append_and_flush_all_tables(tmp_path: Path) -> None:
+    layout = init_run_directory(
+        config=_resolved_config(tmp_path),
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+    )
+    writers = RecorderParquetWriters.from_layout(layout)
+
+    writers.write_trajectories(
+        [
+            _trajectory_row_payload(frame=0, time_s=0.0),
+            _trajectory_row_payload(frame=1, time_s=0.5),
+        ]
+    )
+    writers.write_trajectories([_trajectory_row_payload(frame=2, time_s=1.0)])
+    writers.write_pair_risks(
+        [
+            {
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "frame": 1,
+                "time_s": 0.5,
+                "crane_i": "C1",
+                "crane_j": "C2",
+                "clearance_min_now_m": 4.5,
+                "risk_level_now": "medium",
+            }
+        ]
+    )
+    writers.write_graph_edges(
+        [
+            {
+                "episode_id": "episode-001",
+                "frame": 1,
+                "time_s": 0.5,
+                "src_crane_id": "C1",
+                "dst_crane_id": "C2",
+                "edge_distance_m": 6.0,
+                "edge_overlap_ratio": 0.25,
+            }
+        ]
+    )
+    writers.write_tasks(
+        [
+            {
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "task_id": "T1",
+                "crane_id": "C1",
+                "task_type": "easy_task",
+                "status": "completed",
+                "pickup_x": 0.0,
+                "pickup_y": 1.0,
+                "pickup_z": 0.0,
+                "dropoff_x": 10.0,
+                "dropoff_y": 11.0,
+                "dropoff_z": 0.0,
+                "pickup_zone_id": "yard",
+                "dropoff_zone_id": "workface",
+                "load_type": "steel",
+                "load_weight_t": 1.2,
+                "load_size_x_m": 2.0,
+                "load_size_y_m": 1.0,
+                "load_size_z_m": 1.0,
+                "deadline_missed": False,
+                "overtime_s": 0.0,
+            }
+        ]
+    )
+    writers.write_weather(
+        [
+            {
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "frame": 1,
+                "time_s": 0.5,
+                "wind_speed_m_s": 8.0,
+                "wind_gust_m_s": 10.0,
+                "wind_direction_deg": 90.0,
+                "visibility_level": "medium",
+                "rain_level": "none",
+            }
+        ]
+    )
+    writers.flush_all()
+
+    trajectories = pq.read_table(layout.trajectories_path)
+    pair_risks = pq.read_table(layout.pair_risks_path)
+    graph_edges = pq.read_table(layout.graph_edges_path)
+    tasks = pq.read_table(layout.tasks_path)
+    weather = pq.read_table(layout.weather_path)
+
+    assert trajectories.num_rows == 3
+    assert pair_risks.num_rows == 1
+    assert graph_edges.num_rows == 1
+    assert tasks.num_rows == 1
+    assert weather.num_rows == 1
+    for table in [trajectories, pair_risks, graph_edges, tasks, weather]:
+        assert "schema_version" in table.column_names
+
+
+def test_parquet_writer_converts_non_finite_values_to_null_and_records_warning(
+    tmp_path: Path,
+) -> None:
+    layout = init_run_directory(
+        config=_resolved_config(tmp_path),
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+    )
+    writers = RecorderParquetWriters.from_layout(layout)
+
+    writers.write_pair_risks(
+        [
+            {
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "frame": 1,
+                "time_s": 0.5,
+                "crane_i": "C1",
+                "crane_j": "C2",
+                "clearance_min_now_m": math.nan,
+                "ttc_5s_s": math.inf,
+                "risk_level_now": "medium",
+            }
+        ]
+    )
+    writers.flush_all()
+
+    table = pq.read_table(layout.pair_risks_path)
+    data = table.to_pylist()[0]
+
+    assert data["clearance_min_now_m"] is None
+    assert data["ttc_5s_s"] is None
+    assert {warning.warning_type for warning in writers.warnings} == {
+        "nan_to_null",
+        "inf_to_null",
+    }
+
+
+def test_parquet_writer_rejects_extra_fields_without_authoritative_file(
+    tmp_path: Path,
+) -> None:
+    layout = init_run_directory(
+        config=_resolved_config(tmp_path),
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+    )
+    writers = RecorderParquetWriters.from_layout(layout)
+
+    with pytest.raises(DataExportError):
+        writers.write_trajectories(
+            [_trajectory_row_payload(extra_training_hint="not allowed")]
+        )
+
+    assert not layout.trajectories_path.exists()
