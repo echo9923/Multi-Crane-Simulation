@@ -2,26 +2,606 @@ from __future__ import annotations
 
 import copy
 import math
+from dataclasses import dataclass
 from typing import Any, Collection, Literal, Mapping, Optional, Sequence
 
 from backend.app.schemas.command import ExecutedCommand, build_neutral_stop_command
 from backend.app.schemas.control import ControlTarget
 from backend.app.schemas.crane import CraneConfig
+from backend.app.schemas.enums import RuntimeMode
 from backend.app.schemas.scheduler import (
     SCH_E_COMMAND_STORE,
     SCH_E_FRAME_LOOP,
     SCH_E_INVALID_SNAPSHOT,
     CommandStoreSnapshot,
+    EpisodeResult,
+    EpisodeStatus,
+    FrameStepResult,
+    SchedulerConfig,
     SchedulerError,
     StoredCommand,
+    TerminalStatusCandidate,
     WorldSnapshot,
 )
 from backend.app.schemas.state import CraneState
 from backend.app.schemas.task import Task, TaskQueue
 from backend.app.schemas.weather import WeatherState, WeatherVisibilityContext
 from backend.app.sim.observation import ObservationWorldSnapshot
+from backend.app.sim.task_queue import all_ordinary_tasks_terminal
 
 CommandReplacementSource = Literal["decision", "replay"]
+
+
+@dataclass
+class SchedulerDependencies:
+    weather: Any
+    task_system: Any
+    observation_builder: Any
+    operator: Any
+    safety: Any
+    controller: Any
+    physics: Any
+    risk: Any
+    collision: Any
+    recorder: Any
+    websocket: Any = None
+    replay: Any = None
+
+
+class EpisodeRunner:
+    def __init__(
+        self,
+        *,
+        config: SchedulerConfig,
+        dependencies: SchedulerDependencies,
+        episode_id: str,
+        crane_configs: Sequence[CraneConfig],
+        crane_states: Sequence[CraneState],
+        weather_state: WeatherState,
+        visibility_context: WeatherVisibilityContext,
+        tasks: Sequence[Task] = (),
+        task_queues: Sequence[TaskQueue] = (),
+        task_contexts: Optional[Mapping[str, Any]] = None,
+        current_commands: Optional[Mapping[str, ExecutedCommand]] = None,
+        current_control_targets: Optional[Mapping[str, ControlTarget]] = None,
+    ) -> None:
+        self.config = config
+        self.dependencies = dependencies
+        self.episode_id = episode_id
+        self.crane_configs = tuple(copy.deepcopy(list(crane_configs)))
+        self.crane_states = list(copy.deepcopy(list(crane_states)))
+        self.weather_state = copy.deepcopy(weather_state)
+        self.visibility_context = copy.deepcopy(visibility_context)
+        self.tasks = tuple(copy.deepcopy(list(tasks)))
+        self.task_queues = list(copy.deepcopy(list(task_queues)))
+        self.task_contexts = copy.deepcopy(dict(task_contexts or {}))
+        self.current_control_targets = copy.deepcopy(
+            dict(current_control_targets or {})
+        )
+        self.crane_ids = tuple(config.crane_id for config in self.crane_configs)
+        self.time_s = 0.0
+        self.frame_index = 0
+        self.episode_status = EpisodeStatus.RUNNING
+        self._terminal_candidate: TerminalStatusCandidate | None = None
+        self._all_tasks_done_since_s: float | None = None
+        self._stop_requested = False
+        self._stop_reason = "stopped_by_user"
+        self._initial_recorded = False
+        self._recent_decisions: dict[str, list[dict[str, Any]]] = {}
+        self._recent_events: dict[str, list[dict[str, Any]]] = {}
+        self.decision_clock = DecisionClock(
+            crane_ids=self.crane_ids,
+            llm_decision_interval_s=config.llm_decision_interval_s,
+        )
+        self.command_store = CommandStore.with_startup_neutral(
+            crane_ids=self.crane_ids,
+            time_s=0.0,
+        )
+        if current_commands:
+            self.command_store.replace_current_commands(
+                list(current_commands.values()),
+                sim_time=0.0,
+            )
+
+    @classmethod
+    def from_config(
+        cls,
+        config: object,
+        *,
+        dependencies: SchedulerDependencies | None = None,
+        **kwargs: Any,
+    ) -> "EpisodeRunner":
+        if dependencies is None:
+            raise SchedulerError(
+                "EpisodeRunner.from_config requires scheduler dependencies",
+                error_code=SCH_E_FRAME_LOOP,
+            )
+        scheduler_config = (
+            config
+            if isinstance(config, SchedulerConfig)
+            else SchedulerConfig.from_config(config)
+        )
+        return cls(config=scheduler_config, dependencies=dependencies, **kwargs)
+
+    def run_episode(self) -> EpisodeResult:
+        while not should_stop(
+            episode_status=self.episode_status,
+            sim_time=self.time_s,
+            config=self.config,
+            all_tasks_done_since_s=self._all_tasks_done_since_s,
+        ):
+            self.run_one_frame()
+        return EpisodeResult(
+            episode_id=self.episode_id,
+            status=self.episode_status,
+            final_time_s=self.time_s,
+            final_frame_index=self.frame_index,
+            reason=self._terminal_candidate.reason if self._terminal_candidate else None,
+            terminal_candidate=self._terminal_candidate,
+            metrics={"frames": self.frame_index},
+        )
+
+    def run_one_frame(self) -> FrameStepResult:
+        if self.episode_status is not EpisodeStatus.RUNNING:
+            return FrameStepResult(
+                frame_index=self.frame_index,
+                time_s=self.time_s,
+                status=self.episode_status,
+                events=[],
+            )
+        if self._stop_requested:
+            self.episode_status = EpisodeStatus.STOPPED_BY_USER
+            self._terminal_candidate = TerminalStatusCandidate(
+                status=EpisodeStatus.STOPPED_BY_USER,
+                source_module="J",
+                reason=self._stop_reason,
+                time_s=self.time_s,
+                frame_index=self.frame_index,
+            )
+            return FrameStepResult(
+                frame_index=self.frame_index,
+                time_s=self.time_s,
+                status=self.episode_status,
+                events=[self._terminal_candidate.model_dump(mode="json")],
+            )
+
+        try:
+            return self._run_one_frame()
+        except SchedulerError as exc:
+            self.episode_status = exc.episode_status
+            self._terminal_candidate = TerminalStatusCandidate(
+                status=exc.episode_status,
+                source_module=exc.source_module,
+                reason=str(exc),
+                time_s=self.time_s,
+                frame_index=self.frame_index,
+                details=exc.details,
+            )
+        except Exception as exc:
+            self.episode_status = EpisodeStatus.FAILED_INVALID_STATE
+            self._terminal_candidate = TerminalStatusCandidate(
+                status=EpisodeStatus.FAILED_INVALID_STATE,
+                source_module="J",
+                reason=str(exc),
+                time_s=self.time_s,
+                frame_index=self.frame_index,
+                details={"exception_type": type(exc).__name__},
+            )
+        return FrameStepResult(
+            frame_index=self.frame_index,
+            time_s=self.time_s,
+            status=self.episode_status,
+            events=[self._terminal_candidate.model_dump(mode="json")]
+            if self._terminal_candidate
+            else [],
+        )
+
+    def stop(self, reason: str = "stopped_by_user") -> None:
+        self._stop_requested = True
+        self._stop_reason = reason
+
+    def _run_one_frame(self) -> FrameStepResult:
+        if not self._initial_recorded:
+            self._record_initial_frame()
+
+        sim_time = self.time_s
+        frame_index = self.frame_index
+        weather_state, visibility_context = self._update_weather(sim_time)
+        self.weather_state = weather_state
+        self.visibility_context = visibility_context
+
+        task_activation = self.dependencies.task_system.activate_due_tasks(
+            time_s=sim_time,
+            states=self.crane_states,
+            task_queues=self.task_queues,
+        )
+        activation_events = self._apply_task_result(task_activation)
+
+        decision_cranes = self.decision_clock.cranes_due_for_decision(
+            sim_time=sim_time,
+            include_idle=True,
+        )
+        snapshot: WorldSnapshot | None = None
+        decision_results: list[Any] = []
+        if decision_cranes:
+            snapshot = self._freeze_snapshot(frame_index=frame_index, time_s=sim_time)
+            executed_commands, decision_results = self._decide_and_execute(
+                snapshot=snapshot,
+                decision_cranes=decision_cranes,
+            )
+            self.command_store.replace_current_commands(
+                executed_commands,
+                sim_time=sim_time,
+                source=(
+                    "replay"
+                    if self.config.run_mode is RuntimeMode.OFFLINE_REPLAY
+                    else "decision"
+                ),
+            )
+            self.decision_clock.mark_decided(
+                decision_cranes,
+                decision_time_s=sim_time,
+            )
+
+        current_commands, expiry_events = self.command_store.expire_or_neutral_stop(
+            sim_time=sim_time
+        )
+        control_targets, controller_diagnostics = (
+            self.dependencies.controller.compute_batch(
+                commands=self._commands_in_crane_order(current_commands),
+                states=self.crane_states,
+                models=self._models_by_crane_id(),
+                dt_s=self.config.dt_s,
+                now_s=sim_time,
+            )
+        )
+        self.current_control_targets = {
+            target.crane_id: copy.deepcopy(target) for target in control_targets
+        }
+
+        next_states = self.dependencies.physics.step_world(
+            crane_configs=self.crane_configs,
+            previous_states=self.crane_states,
+            control_targets=control_targets,
+            dt=self.config.dt_s,
+        )
+        next_time_s = sim_time + self.config.dt_s
+
+        task_update = self.dependencies.task_system.update_after_physics(
+            states=next_states,
+            commands=current_commands,
+            time_s=next_time_s,
+            task_queues=self.task_queues,
+        )
+        task_events = self._apply_task_result(task_update, states=next_states)
+        next_states = self.crane_states
+
+        risk_now = self.dependencies.risk.evaluate_after_physics(
+            states=next_states,
+            commands=current_commands,
+            time_s=next_time_s,
+        )
+        collision_events = self.dependencies.collision.detect(
+            states=next_states,
+            risk=risk_now,
+            time_s=next_time_s,
+        )
+
+        status_or_candidate = update_terminal_status(
+            current_status=self.episode_status,
+            sim_time=next_time_s,
+            frame_index=frame_index + 1,
+            states=next_states,
+            task_queues=self.task_queues,
+            task_events=task_events,
+            collision_events=collision_events,
+            llm_results=decision_results,
+            replay_mismatch=None,
+            config=self.config,
+        )
+        self._apply_terminal_status(status_or_candidate, next_time_s, frame_index + 1)
+        self._promote_completed_if_cooldown_met(next_time_s, frame_index + 1)
+
+        frame_events = [
+            *_events_to_dicts(activation_events),
+            *expiry_events,
+            *_events_to_dicts(task_events),
+            *_events_to_dicts(collision_events),
+        ]
+        if self._terminal_candidate is not None:
+            frame_events.append(self._terminal_candidate.model_dump(mode="json"))
+
+        self.dependencies.recorder.record_step(
+            episode_id=self.episode_id,
+            frame_index=frame_index + 1,
+            time_s=next_time_s,
+            states=copy.deepcopy(next_states),
+            weather_state=copy.deepcopy(weather_state),
+            visibility_context=copy.deepcopy(visibility_context),
+            commands=copy.deepcopy(current_commands),
+            control_targets=copy.deepcopy(control_targets),
+            controller_diagnostics=copy.deepcopy(controller_diagnostics),
+            task_queues=copy.deepcopy(self.task_queues),
+            events=copy.deepcopy(frame_events),
+            status=self.episode_status,
+            snapshot_id=snapshot.snapshot_id if snapshot is not None else None,
+        )
+        if (
+            self.config.run_mode is RuntimeMode.INTERACTIVE_SERVER
+            and self.dependencies.websocket is not None
+        ):
+            self.dependencies.websocket.broadcast_sim_frame_if_enabled(
+                episode_id=self.episode_id,
+                frame_index=frame_index + 1,
+                time_s=next_time_s,
+                states=copy.deepcopy(next_states),
+                events=copy.deepcopy(frame_events),
+                status=self.episode_status,
+            )
+
+        self.frame_index = frame_index + 1
+        self.time_s = next_time_s
+        self.crane_states = list(copy.deepcopy(next_states))
+        return FrameStepResult(
+            frame_index=self.frame_index,
+            time_s=self.time_s,
+            status=self.episode_status,
+            snapshot_id=snapshot.snapshot_id if snapshot is not None else None,
+            events=frame_events,
+        )
+
+    def _record_initial_frame(self) -> None:
+        weather_state, visibility_context = self._update_weather(0.0)
+        self.weather_state = weather_state
+        self.visibility_context = visibility_context
+        self.dependencies.recorder.record_initial_frame(
+            episode_id=self.episode_id,
+            frame_index=0,
+            time_s=0.0,
+            states=copy.deepcopy(self.crane_states),
+            weather_state=copy.deepcopy(weather_state),
+            visibility_context=copy.deepcopy(visibility_context),
+            task_queues=copy.deepcopy(self.task_queues),
+            commands=copy.deepcopy(self.command_store.get_current_commands()),
+            status=self.episode_status,
+        )
+        self._initial_recorded = True
+
+    def _update_weather(
+        self,
+        time_s: float,
+    ) -> tuple[WeatherState, WeatherVisibilityContext]:
+        result = self.dependencies.weather.update(time_s)
+        if isinstance(result, tuple) and len(result) == 2:
+            return result
+        return result.weather_state, result.visibility_context
+
+    def _freeze_snapshot(self, *, frame_index: int, time_s: float) -> WorldSnapshot:
+        return freeze_world_snapshot(
+            episode_id=self.episode_id,
+            frame_index=frame_index,
+            time_s=time_s,
+            llm_decision_interval_s=self.config.llm_decision_interval_s,
+            crane_states=self.crane_states,
+            crane_configs=self.crane_configs,
+            weather_state=self.weather_state,
+            visibility_context=self.visibility_context,
+            tasks=self.tasks,
+            task_queues=self.task_queues,
+            task_contexts=self.task_contexts,
+            current_commands=self.command_store.get_current_commands(),
+            current_control_targets=self.current_control_targets,
+            recent_decisions=self._recent_decisions,
+            recent_events=self._recent_events,
+        )
+
+    def _decide_and_execute(
+        self,
+        *,
+        snapshot: WorldSnapshot,
+        decision_cranes: Sequence[str],
+    ) -> tuple[list[ExecutedCommand], list[Any]]:
+        predecision_risk = self.dependencies.risk.evaluate_predecision(
+            snapshot=snapshot,
+            commands=self.command_store.get_current_commands(),
+        )
+        observations = self.dependencies.observation_builder.build_batch(
+            snapshot=snapshot,
+            crane_ids=list(decision_cranes),
+            risk_hints=getattr(predecision_risk, "hints", {}),
+        )
+        if self.config.run_mode is RuntimeMode.OFFLINE_REPLAY:
+            if self.dependencies.replay is None:
+                raise SchedulerError(
+                    "offline_replay requires a replay command source",
+                    error_code=SCH_E_FRAME_LOOP,
+                    episode_status=EpisodeStatus.FAILED_REPLAY_MISMATCH,
+                )
+            commands = list(
+                self.dependencies.replay.commands_for_decision(
+                    snapshot=snapshot,
+                    crane_ids=list(decision_cranes),
+                    decision_indices={
+                        crane_id: self.decision_clock.decision_index(crane_id)
+                        for crane_id in decision_cranes
+                    },
+                )
+            )
+            self._validate_replay_commands(
+                commands,
+                snapshot=snapshot,
+                expected_crane_ids=decision_cranes,
+            )
+            return commands, []
+
+        decision_results = list(
+            self.dependencies.operator.decide(
+                observations,
+                llm_decision_interval_s=self.config.llm_decision_interval_s,
+            )
+        )
+        parsed_commands = [result.parsed_command for result in decision_results]
+        self._validate_decision_commands(
+            parsed_commands,
+            snapshot=snapshot,
+            expected_crane_ids=decision_cranes,
+        )
+        executed = self.dependencies.safety.apply_pipeline(
+            parsed_commands,
+            snapshot=snapshot,
+        )
+        return list(executed), decision_results
+
+    def _validate_decision_commands(
+        self,
+        commands: Sequence[Any],
+        *,
+        snapshot: WorldSnapshot,
+        expected_crane_ids: Sequence[str],
+    ) -> None:
+        expected = set(expected_crane_ids)
+        actual = {command.crane_id for command in commands}
+        if actual != expected:
+            raise SchedulerError(
+                "decision batch crane ids do not match due cranes",
+                error_code=SCH_E_FRAME_LOOP,
+                details={
+                    "expected_crane_ids": sorted(expected),
+                    "actual_crane_ids": sorted(actual),
+                },
+            )
+        for command in commands:
+            if command.source_snapshot_id != snapshot.snapshot_id:
+                raise SchedulerError(
+                    "decision command source_snapshot_id must match current snapshot",
+                    error_code=SCH_E_FRAME_LOOP,
+                    details={
+                        "command_id": command.command_id,
+                        "source_snapshot_id": command.source_snapshot_id,
+                        "snapshot_id": snapshot.snapshot_id,
+                    },
+                )
+
+    def _validate_replay_commands(
+        self,
+        commands: Sequence[ExecutedCommand],
+        *,
+        snapshot: WorldSnapshot,
+        expected_crane_ids: Sequence[str],
+    ) -> None:
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for command in commands:
+            if command.crane_id in seen:
+                duplicates.add(command.crane_id)
+            seen.add(command.crane_id)
+            if command.source_snapshot_id != snapshot.snapshot_id:
+                raise SchedulerError(
+                    "replay command source_snapshot_id must match current snapshot",
+                    error_code=SCH_E_FRAME_LOOP,
+                    episode_status=EpisodeStatus.FAILED_REPLAY_MISMATCH,
+                    details={
+                        "command_id": command.command_id,
+                        "source_snapshot_id": command.source_snapshot_id,
+                        "snapshot_id": snapshot.snapshot_id,
+                    },
+                )
+        expected = set(expected_crane_ids)
+        if seen != expected or duplicates:
+            raise SchedulerError(
+                "replay command batch must uniquely match due cranes",
+                error_code=SCH_E_FRAME_LOOP,
+                episode_status=EpisodeStatus.FAILED_REPLAY_MISMATCH,
+                details={
+                    "expected_crane_ids": sorted(expected),
+                    "actual_crane_ids": sorted(seen),
+                    "duplicate_crane_ids": sorted(duplicates),
+                },
+            )
+
+    def _apply_task_result(self, result: Any, *, states: Any = None) -> list[Any]:
+        self.task_queues = list(
+            copy.deepcopy(getattr(result, "queues", self.task_queues))
+        )
+        result_states = getattr(result, "states", states)
+        if result_states is not None:
+            self.crane_states = list(copy.deepcopy(result_states))
+        task_contexts = getattr(result, "task_contexts", None)
+        if task_contexts is not None:
+            self.task_contexts = copy.deepcopy(dict(task_contexts))
+        events = list(getattr(result, "events", []))
+        self._append_recent_events(events)
+        return events
+
+    def _append_recent_events(self, events: Sequence[Any]) -> None:
+        for event in events:
+            crane_id = _event_field(event, "crane_id")
+            if crane_id is None:
+                continue
+            self._recent_events.setdefault(str(crane_id), []).append(
+                _event_to_dict(event)
+            )
+
+    def _apply_terminal_status(
+        self,
+        status_or_candidate: EpisodeStatus | TerminalStatusCandidate,
+        sim_time: float,
+        frame_index: int,
+    ) -> None:
+        if isinstance(status_or_candidate, TerminalStatusCandidate):
+            self.episode_status = status_or_candidate.status
+            self._terminal_candidate = status_or_candidate
+            return
+        self.episode_status = EpisodeStatus(status_or_candidate)
+        if self.episode_status is not EpisodeStatus.RUNNING:
+            self._terminal_candidate = TerminalStatusCandidate(
+                status=self.episode_status,
+                source_module="J",
+                reason=self.episode_status.value,
+                time_s=sim_time,
+                frame_index=frame_index,
+            )
+        if all_ordinary_tasks_terminal(self.task_queues):
+            if self._all_tasks_done_since_s is None:
+                self._all_tasks_done_since_s = sim_time
+        else:
+            self._all_tasks_done_since_s = None
+
+    def _promote_completed_if_cooldown_met(
+        self,
+        sim_time: float,
+        frame_index: int,
+    ) -> None:
+        if self.episode_status is not EpisodeStatus.RUNNING:
+            return
+        if not self.config.stop_when_all_tasks_done:
+            return
+        if self._all_tasks_done_since_s is None:
+            return
+        if sim_time < self.config.min_duration_s:
+            return
+        if (
+            sim_time - self._all_tasks_done_since_s + 1.0e-9
+            < self.config.completion_cooldown_s
+        ):
+            return
+        self.episode_status = EpisodeStatus.COMPLETED
+        self._terminal_candidate = TerminalStatusCandidate(
+            status=EpisodeStatus.COMPLETED,
+            source_module="J",
+            reason="completed",
+            time_s=sim_time,
+            frame_index=frame_index,
+        )
+
+    def _commands_in_crane_order(
+        self,
+        commands: Mapping[str, ExecutedCommand],
+    ) -> list[ExecutedCommand]:
+        return [copy.deepcopy(commands[crane_id]) for crane_id in self.crane_ids]
+
+    def _models_by_crane_id(self) -> dict[str, Any]:
+        return {config.crane_id: config.model for config in self.crane_configs}
 
 
 class DecisionClock:
@@ -220,6 +800,105 @@ def to_observation_snapshot(
         recent_decisions=copy.deepcopy(snapshot.recent_decisions),
         recent_events=copy.deepcopy(snapshot.recent_events),
     )
+
+
+def update_terminal_status(
+    *,
+    current_status: EpisodeStatus,
+    sim_time: float,
+    frame_index: int,
+    states: Sequence[CraneState],
+    task_queues: Sequence[TaskQueue],
+    task_events: Sequence[Any],
+    collision_events: Sequence[Any],
+    llm_results: Sequence[Any] = (),
+    replay_mismatch: TerminalStatusCandidate | None = None,
+    config: SchedulerConfig,
+) -> EpisodeStatus | TerminalStatusCandidate:
+    if current_status is not EpisodeStatus.RUNNING:
+        return current_status
+    if replay_mismatch is not None:
+        return replay_mismatch
+    if collision_events:
+        return TerminalStatusCandidate(
+            status=EpisodeStatus.FAILED_COLLISION,
+            source_module="K",
+            reason="collision detected",
+            time_s=sim_time,
+            frame_index=frame_index,
+            details={"collision_count": len(collision_events)},
+        )
+    non_finite_path = _find_non_finite_in_object(states)
+    if non_finite_path is not None:
+        return TerminalStatusCandidate(
+            status=EpisodeStatus.FAILED_INVALID_STATE,
+            source_module="J",
+            reason="non-finite crane state",
+            time_s=sim_time,
+            frame_index=frame_index,
+            details={"field_path": non_finite_path},
+        )
+    for result in llm_results:
+        if getattr(result, "episode_failure_reason", None) == "llm_failed":
+            return TerminalStatusCandidate(
+                status=EpisodeStatus.LLM_FAILED,
+                source_module="G",
+                reason="llm_failed",
+                time_s=sim_time,
+                frame_index=frame_index,
+            )
+    for event in task_events:
+        failure_request = _event_field(event, "episode_failure_request") or _event_field(
+            event, "reason"
+        )
+        if failure_request == EpisodeStatus.FAILED_RECOVERY_BLOCKED.value:
+            return TerminalStatusCandidate(
+                status=EpisodeStatus.FAILED_RECOVERY_BLOCKED,
+                source_module="D",
+                reason=EpisodeStatus.FAILED_RECOVERY_BLOCKED.value,
+                time_s=sim_time,
+                frame_index=frame_index,
+            )
+        if failure_request == EpisodeStatus.FAILED_RECOVERY_TIMEOUT.value:
+            return TerminalStatusCandidate(
+                status=EpisodeStatus.FAILED_RECOVERY_TIMEOUT,
+                source_module="D",
+                reason=EpisodeStatus.FAILED_RECOVERY_TIMEOUT.value,
+                time_s=sim_time,
+                frame_index=frame_index,
+            )
+    if (
+        config.stop_when_all_tasks_done
+        and sim_time >= config.min_duration_s
+        and config.completion_cooldown_s <= 0
+        and all_ordinary_tasks_terminal(task_queues)
+    ):
+        return EpisodeStatus.COMPLETED
+    if sim_time >= config.duration_s:
+        return EpisodeStatus.TIMEOUT
+    return EpisodeStatus.RUNNING
+
+
+def should_stop(
+    *,
+    episode_status: EpisodeStatus,
+    sim_time: float,
+    config: SchedulerConfig,
+    all_tasks_done_since_s: float | None = None,
+) -> bool:
+    if episode_status is not EpisodeStatus.RUNNING:
+        return True
+    if sim_time >= config.duration_s:
+        return True
+    if (
+        config.stop_when_all_tasks_done
+        and all_tasks_done_since_s is not None
+        and sim_time >= config.min_duration_s
+        and sim_time - all_tasks_done_since_s + 1.0e-9
+        >= config.completion_cooldown_s
+    ):
+        return True
+    return False
 
 
 class CommandStore:
@@ -523,6 +1202,57 @@ def _validate_known_decision_cranes(
             error_code=SCH_E_FRAME_LOOP,
             details={"unknown_crane_ids": unknown},
         )
+
+
+def _event_to_dict(event: Any) -> dict[str, Any]:
+    if hasattr(event, "model_dump"):
+        return event.model_dump(mode="json")
+    if isinstance(event, Mapping):
+        return dict(event)
+    if hasattr(event, "__dict__"):
+        return dict(vars(event))
+    return {"value": event}
+
+
+def _events_to_dicts(events: Sequence[Any]) -> list[dict[str, Any]]:
+    return [_event_to_dict(event) for event in events]
+
+
+def _event_field(event: Any, field_name: str) -> Any:
+    if isinstance(event, Mapping):
+        if field_name in event:
+            return event[field_name]
+        details = event.get("details")
+        if isinstance(details, Mapping):
+            return details.get(field_name)
+        return None
+    if hasattr(event, field_name):
+        return getattr(event, field_name)
+    details = getattr(event, "details", None)
+    if isinstance(details, Mapping):
+        return details.get(field_name)
+    return None
+
+
+def _find_non_finite_in_object(value: Any, path: str = "") -> str | None:
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="python")
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return path or "<root>"
+        return None
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            found = _find_non_finite_in_object(child, child_path)
+            if found is not None:
+                return found
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            found = _find_non_finite_in_object(child, f"{path}[{index}]")
+            if found is not None:
+                return found
+    return None
 
 
 def _stored_command(
