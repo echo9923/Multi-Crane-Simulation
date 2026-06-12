@@ -18,16 +18,25 @@ from backend.app.schemas.recorder import (
     DataExportWarning,
     DecisionLogEntry,
     EventLogEntry,
+    EpisodeManifest,
     GraphEdgeRow,
     InterventionLogEntry,
     ObservationLogEntry,
+    OfflineFrameLabels,
     PairRiskRow,
     RecorderBaseModel,
+    SimFrame,
+    SimFrameCrane,
+    SimFramePair,
+    SimFrameWeather,
     TaskParquetRow,
     TrajectoryRow,
     WeatherParquetRow,
 )
+from backend.app.schemas.risk import OfflineRiskLabel
 from backend.app.schemas.resolved_config import ResolvedConfig
+from backend.app.schemas.state import CraneState
+from backend.app.schemas.weather import WeatherState
 
 FORBIDDEN_EXPORT_SECRET_KEYS = {
     "api_key",
@@ -409,6 +418,154 @@ class RecorderJsonlWriters:
         self.flush_all()
 
 
+def build_sim_frame(
+    *,
+    episode_id: str,
+    scenario_id: Optional[str],
+    frame_index: int,
+    time_s: float,
+    episode_status: object,
+    states: Sequence[CraneState],
+    weather_state: WeatherState,
+    commands: Optional[Mapping[str, Any]] = None,
+    pairs: Sequence[Any] = (),
+    tasks: Sequence[Any] = (),
+    task_queues: Sequence[Any] = (),
+    events: Sequence[Any] = (),
+    offline_labels: Sequence[OfflineRiskLabel] = (),
+    for_realtime: bool = False,
+) -> SimFrame:
+    if for_realtime and offline_labels:
+        raise DataExportError(
+            "realtime SimFrame must not include offline labels",
+            error_code="RECORDER_E_OFFLINE_LABEL_LEAK",
+            episode_id=episode_id,
+            frame=frame_index,
+            field_path="offline_labels",
+        )
+    command_map = dict(commands or {})
+    frame = SimFrame(
+        episode_id=episode_id,
+        scenario_id=scenario_id,
+        frame=frame_index,
+        time_s=time_s,
+        episode_status=_enum_or_value(episode_status),
+        cranes=[
+            _sim_frame_crane_from_state(state, command_map.get(state.crane_id))
+            for state in states
+        ],
+        pairs=[_sim_frame_pair_from_any(pair) for pair in pairs],
+        tasks=[_dump_for_json(task) for task in [*tasks, *task_queues]],
+        weather=_sim_frame_weather_from_state(weather_state),
+        events=[_dump_for_json(event) for event in events],
+        offline_labels=(
+            OfflineFrameLabels(
+                pair_labels=[
+                    _offline_label_to_frame_payload(label) for label in offline_labels
+                ]
+            )
+            if offline_labels
+            else None
+        ),
+    )
+    return frame
+
+
+def build_episode_manifest(
+    *,
+    episode_id: str,
+    scenario_id: Optional[str],
+    episode_status: object,
+    frame_count: int,
+    dt_s: float,
+    crane_configs: Sequence[Any],
+    resolved_config: Optional[object] = None,
+    offline_labels_available: bool = False,
+) -> EpisodeManifest:
+    resolved_payload = (
+        _dump_for_json(resolved_config) if resolved_config is not None else {}
+    )
+    return EpisodeManifest(
+        episode_id=episode_id,
+        scenario_id=scenario_id,
+        episode_status=_enum_or_value(episode_status),
+        frame_count=frame_count,
+        dt=dt_s,
+        coordinate_system="ENU",
+        cranes=[_dump_for_json(config) for config in crane_configs],
+        site=resolved_payload.get("scenario", {}).get("site", {})
+        if isinstance(resolved_payload, dict)
+        else {},
+        material_zones=resolved_payload.get("scenario", {})
+        .get("site", {})
+        .get("material_zones", [])
+        if isinstance(resolved_payload, dict)
+        else [],
+        work_zones=resolved_payload.get("scenario", {})
+        .get("site", {})
+        .get("work_zones", [])
+        if isinstance(resolved_payload, dict)
+        else [],
+        forbidden_zones=resolved_payload.get("scenario", {})
+        .get("site", {})
+        .get("forbidden_zones", [])
+        if isinstance(resolved_payload, dict)
+        else [],
+        overlap_zones=resolved_payload.get("scenario", {})
+        .get("site", {})
+        .get("overlap_zones", [])
+        if isinstance(resolved_payload, dict)
+        else [],
+        offline_labels_available=offline_labels_available,
+    )
+
+
+class VisualFrameWriter:
+    def __init__(self, *, frames_path: Path, manifest_path: Path) -> None:
+        self.frames_path = frames_path
+        self.manifest_path = manifest_path
+        self._frames: List[Dict[str, Any]] = []
+        self._manifest: Optional[Dict[str, Any]] = None
+
+    def append_frame(self, frame: SimFrame) -> None:
+        self._frames.append(frame.model_dump(mode="json"))
+
+    def write_manifest(self, manifest: EpisodeManifest) -> None:
+        self._manifest = manifest.model_dump(mode="json")
+
+    def flush(self) -> None:
+        try:
+            self.frames_path.parent.mkdir(parents=True, exist_ok=True)
+            if self._frames:
+                with self.frames_path.open("w", encoding="utf-8") as handle:
+                    for frame in self._frames:
+                        handle.write(
+                            json.dumps(frame, ensure_ascii=False, sort_keys=True)
+                        )
+                        handle.write("\n")
+            if self._manifest is not None:
+                self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                self.manifest_path.write_text(
+                    json.dumps(
+                        self._manifest,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+        except OSError as exc:
+            raise DataExportError(
+                "failed to write visual recorder files",
+                error_code="RECORDER_E_VISUAL_WRITE",
+                file_path=str(self.frames_path),
+                details={"exception_type": type(exc).__name__, "reason": str(exc)},
+            ) from exc
+
+    def close(self) -> None:
+        self.flush()
+
+
 def _coerce_resolved_config(config: object) -> ResolvedConfig:
     if isinstance(config, ResolvedConfig):
         return config
@@ -539,6 +696,138 @@ def _scenario_id_from_config(resolved_config: ResolvedConfig) -> Optional[str]:
     scenario = resolved_config.scenario
     value = scenario.get("scenario_id") if isinstance(scenario, dict) else None
     return str(value) if value is not None else None
+
+
+def _sim_frame_crane_from_state(
+    state: CraneState,
+    command: Optional[Any],
+) -> SimFrameCrane:
+    return SimFrameCrane(
+        crane_id=state.crane_id,
+        base=(
+            float(state.root_position[0]),
+            float(state.root_position[1]),
+            0.0,
+        ),
+        root=_xyz_tuple(state.root_position),
+        tip=_xyz_tuple(state.tip_position),
+        hook=_xyz_tuple(state.hook_position),
+        theta_rad=state.theta_rad,
+        trolley_r_m=state.trolley_r_m,
+        hook_h_m=state.hook_h_m,
+        load_attached=state.load_attached,
+        load_type=state.load_type,
+        load_size_m=_optional_xyz_tuple(state.load_size_m),
+        task_id=state.task_id,
+        task_stage=state.task_stage,
+        current_command=_command_for_frame(command),
+    )
+
+
+def _sim_frame_weather_from_state(weather_state: WeatherState) -> SimFrameWeather:
+    return SimFrameWeather(
+        wind_speed_m_s=weather_state.wind_speed_m_s,
+        wind_gust_m_s=weather_state.wind_gust_m_s,
+        wind_direction_deg=weather_state.wind_direction_deg,
+        visibility=_enum_or_value(weather_state.visibility_level),
+        rain_level=_enum_or_value(weather_state.rain_level),
+        fog_level=_enum_or_value(weather_state.fog_level),
+    )
+
+
+def _sim_frame_pair_from_any(pair: Any) -> SimFramePair:
+    payload = _dump_for_json(pair)
+    if not isinstance(payload, dict):
+        raise DataExportError(
+            "SimFrame pair must be a mapping-like object",
+            error_code="RECORDER_E_SIM_FRAME_PAIR",
+        )
+    return SimFramePair(
+        crane_i=payload.get("crane_i") or payload.get("crane_id_a"),
+        crane_j=payload.get("crane_j") or payload.get("crane_id_b"),
+        distance_min_raw_now_m=payload.get("distance_min_raw_now_m")
+        or payload.get("d_min_online_m"),
+        clearance_min_now_m=payload.get("clearance_min_now_m"),
+        risk_level_now=payload.get("risk_level_now") or payload.get("risk_level"),
+    )
+
+
+def _offline_label_to_frame_payload(label: OfflineRiskLabel) -> Dict[str, Any]:
+    payload = label.model_dump(mode="json")
+    label_15s = payload.get("future_window_labels", {}).get("15s")
+    return {
+        "crane_i": payload["crane_i"],
+        "crane_j": payload["crane_j"],
+        "frame": payload["frame"],
+        "time_s": payload["time_s"],
+        "min_clearance_future_5s_m": payload.get("min_clearance_future_5s_m"),
+        "min_clearance_future_10s_m": payload.get("min_clearance_future_10s_m"),
+        "min_clearance_future_15s_m": (
+            label_15s.get("min_clearance_future_m")
+            if isinstance(label_15s, dict)
+            else None
+        ),
+        "risk_level_5s": payload.get("risk_level_5s"),
+        "risk_level_10s": payload.get("risk_level_10s"),
+        "risk_level_15s": (
+            label_15s.get("risk_level") if isinstance(label_15s, dict) else None
+        ),
+        "collision_label_5s": payload.get("collision_label_5s"),
+        "collision_label_10s": payload.get("collision_label_10s"),
+        "collision_label_15s": (
+            label_15s.get("collision_label") if isinstance(label_15s, dict) else None
+        ),
+    }
+
+
+def _command_for_frame(command: Optional[Any]) -> Optional[Dict[str, Any]]:
+    if command is None:
+        return None
+    payload = _dump_for_json(command)
+    if not isinstance(payload, dict):
+        return None
+    return {
+        key: payload[key]
+        for key in [
+            "left_joystick",
+            "right_joystick",
+            "deadman_pressed",
+            "emergency_stop",
+            "horn",
+            "command_duration_s",
+            "task_action",
+        ]
+        if key in payload
+    }
+
+
+def _xyz_tuple(values: Sequence[float]) -> tuple:
+    return (float(values[0]), float(values[1]), float(values[2]))
+
+
+def _optional_xyz_tuple(values: Optional[Sequence[float]]) -> Optional[tuple]:
+    if values is None:
+        return None
+    return _xyz_tuple(values)
+
+
+def _dump_for_json(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, Mapping):
+        return {
+            str(key): _dump_for_json(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_dump_for_json(child) for child in value]
+    if isinstance(value, tuple):
+        return [_dump_for_json(child) for child in value]
+    return _enum_or_value(value)
+
+
+def _enum_or_value(value: Any) -> Any:
+    return getattr(value, "value", value)
 
 
 def _model_or_mapping_to_dict(row: object) -> Dict[str, Any]:

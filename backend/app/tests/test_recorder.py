@@ -10,6 +10,7 @@ from pydantic import ValidationError
 import pyarrow.parquet as pq
 
 from backend.app.core.config_resolver import resolve_config
+from backend.app.schemas.risk import OfflineRiskLabel
 from backend.app.schemas.recorder import (
     RECORDER_SCHEMA_VERSION,
     CommandLogEntry,
@@ -27,10 +28,15 @@ from backend.app.schemas.recorder import (
     TrajectoryRow,
     WeatherParquetRow,
 )
+from backend.app.schemas.state import CraneState
+from backend.app.schemas.weather import WeatherState
 from backend.app.sim.recorder import (
     DataExportError,
     RecorderJsonlWriters,
     RecorderParquetWriters,
+    VisualFrameWriter,
+    build_episode_manifest,
+    build_sim_frame,
     init_run_directory,
 )
 from backend.app.tests.test_config_schema import load_fixture
@@ -199,6 +205,102 @@ def _episode_summary_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def _crane_state(crane_id: str = "C1") -> CraneState:
+    return CraneState(
+        crane_id=crane_id,
+        theta_rad=0.4,
+        theta_sin=math.sin(0.4),
+        theta_cos=math.cos(0.4),
+        trolley_r_m=22.0,
+        hook_h_m=25.0,
+        root_position=[0.0, 0.0, 45.0],
+        tip_position=[42.0, 18.0, 45.0],
+        hook_position=[20.0, 8.0, 25.0],
+        cable_length_m=20.0,
+        load_attached=False,
+        load_type="rebar_bundle",
+        load_weight_t=1.0,
+        load_size_m=[6.0, 1.0, 1.0],
+        task_id="T1",
+        task_stage="move_to_pickup",
+    )
+
+
+def _weather_state() -> WeatherState:
+    return WeatherState(
+        time_s=1.0,
+        mode="constant",
+        wind_speed_m_s=8.0,
+        wind_gust_m_s=10.0,
+        wind_direction_deg=90.0,
+        visibility_level="medium",
+        rain_level="none",
+        fog_level="none",
+        source_segment_id="constant",
+        generation_seed=303,
+        generation_step=0,
+    )
+
+
+def _offline_label() -> OfflineRiskLabel:
+    return OfflineRiskLabel.model_validate(
+        {
+            "episode_id": "episode-001",
+            "scenario_id": "scenario-001",
+            "frame": 2,
+            "time_s": 1.0,
+            "crane_i": "C1",
+            "crane_j": "C2",
+            "pair_id": "C1-C2",
+            "distance_min_raw_now_m": 5.0,
+            "clearance_min_now_m": 4.0,
+            "distance_jib_jib_raw_now_m": 10.0,
+            "clearance_jib_jib_now_m": 9.0,
+            "distance_jib_i_hook_j_raw_now_m": 5.0,
+            "clearance_jib_i_hook_j_now_m": 4.0,
+            "distance_jib_j_hook_i_raw_now_m": 8.0,
+            "clearance_jib_j_hook_i_now_m": 7.0,
+            "distance_hook_hook_raw_now_m": 12.0,
+            "clearance_hook_hook_now_m": 11.0,
+            "min_clearance_future_5s_m": 2.0,
+            "min_clearance_future_10s_m": 1.0,
+            "ttc_5s_s": 4.0,
+            "ttc_10s_s": 4.0,
+            "risk_level_5s": "high",
+            "risk_level_10s": "high",
+            "collision_label_5s": 0,
+            "collision_label_10s": 0,
+            "future_window_labels": {
+                "5s": {
+                    "window_s": 5.0,
+                    "min_clearance_future_m": 2.0,
+                    "ttc_s": 4.0,
+                    "risk_level": "high",
+                    "collision_label": 0,
+                    "used_future_truth": True,
+                },
+                "10s": {
+                    "window_s": 10.0,
+                    "min_clearance_future_m": 1.0,
+                    "ttc_s": 4.0,
+                    "risk_level": "high",
+                    "collision_label": 0,
+                    "used_future_truth": True,
+                },
+                "15s": {
+                    "window_s": 15.0,
+                    "min_clearance_future_m": 0.5,
+                    "ttc_s": 4.0,
+                    "risk_level": "near_miss",
+                    "collision_label": 0,
+                    "used_future_truth": True,
+                },
+            },
+            "used_future_truth": True,
+        }
+    )
 
 
 def _resolved_config(tmp_path: Path):
@@ -850,3 +952,111 @@ def test_jsonl_writer_rejects_secret_keys_and_extra_fields(tmp_path: Path) -> No
 
     assert not layout.decisions_path.exists()
     assert not layout.observations_path.exists()
+
+
+def test_build_sim_frame_maps_state_weather_pairs_and_events() -> None:
+    frame = build_sim_frame(
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+        frame_index=2,
+        time_s=1.0,
+        episode_status="running",
+        states=[_crane_state("C1")],
+        weather_state=_weather_state(),
+        pairs=[
+            {
+                "crane_i": "C1",
+                "crane_j": "C2",
+                "distance_min_raw_now_m": 6.0,
+                "clearance_min_now_m": 4.5,
+                "risk_level_now": "medium",
+            }
+        ],
+        events=[{"event_type": "near_miss", "crane_ids": ["C1", "C2"]}],
+    )
+
+    dumped = frame.model_dump(mode="json")
+
+    assert dumped["type"] == "sim_frame"
+    assert dumped["frame"] == 2
+    assert dumped["cranes"][0]["hook"] == [20.0, 8.0, 25.0]
+    assert dumped["cranes"][0]["task_stage"] == "move_to_pickup"
+    assert dumped["weather"]["visibility"] == "medium"
+    assert dumped["pairs"][0]["risk_level_now"] == "medium"
+    assert dumped["events"][0]["event_type"] == "near_miss"
+
+
+def test_build_sim_frame_enforces_offline_label_isolation() -> None:
+    offline_label = _offline_label()
+
+    with pytest.raises(DataExportError):
+        build_sim_frame(
+            episode_id="episode-001",
+            scenario_id="scenario-001",
+            frame_index=2,
+            time_s=1.0,
+            episode_status="running",
+            states=[_crane_state("C1")],
+            weather_state=_weather_state(),
+            offline_labels=[offline_label],
+            for_realtime=True,
+        )
+
+    frame = build_sim_frame(
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+        frame_index=2,
+        time_s=1.0,
+        episode_status="running",
+        states=[_crane_state("C1")],
+        weather_state=_weather_state(),
+        offline_labels=[offline_label],
+        for_realtime=False,
+    )
+
+    dumped = frame.model_dump(mode="json")
+    assert dumped["offline_labels"]["pair_labels"][0]["crane_i"] == "C1"
+    assert "min_clearance_future_15s_m" in dumped["offline_labels"]["pair_labels"][0]
+
+
+def test_visual_frame_writer_roundtrips_frames_and_manifest(tmp_path: Path) -> None:
+    layout = init_run_directory(
+        config=_resolved_config(tmp_path),
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+    )
+    writer = VisualFrameWriter(
+        frames_path=layout.frames_jsonl_path,
+        manifest_path=layout.episode_manifest_path,
+    )
+    frame = build_sim_frame(
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+        frame_index=0,
+        time_s=0.0,
+        episode_status="running",
+        states=[_crane_state("C1")],
+        weather_state=_weather_state(),
+    )
+    manifest = build_episode_manifest(
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+        episode_status="completed",
+        frame_count=1,
+        dt_s=0.5,
+        crane_configs=[],
+        offline_labels_available=False,
+    )
+
+    writer.append_frame(frame)
+    writer.write_manifest(manifest)
+    writer.flush()
+
+    frame_payload = json.loads(layout.frames_jsonl_path.read_text(encoding="utf-8"))
+    manifest_payload = json.loads(
+        layout.episode_manifest_path.read_text(encoding="utf-8")
+    )
+
+    assert SimFrame.model_validate(frame_payload).episode_id == "episode-001"
+    assert manifest_payload["episode_status"] == "completed"
+    assert manifest_payload["frame_count"] == 1
