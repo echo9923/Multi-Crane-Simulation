@@ -572,6 +572,20 @@ class RiskConfig(ConfigBaseModel):
     thresholds_m: RiskThresholdsConfig
     ttc_threshold_level: PriorityLevel
     wind_safe_distance_factor: WindSafeDistanceFactorConfig
+    future_windows_s: List[float] = Field(default_factory=lambda: [5.0, 10.0, 15.0])
+
+    @field_validator("future_windows_s")
+    @classmethod
+    def validate_future_windows(cls, value: List[float]) -> List[float]:
+        if not value:
+            raise ValueError("future_windows_s must not be empty")
+        if any(window <= 0 for window in value):
+            raise ValueError("future_windows_s values must be positive")
+        normalized = sorted(set(float(window) for window in value))
+        required = {5.0, 10.0}
+        if not required.issubset(normalized):
+            raise ValueError("future_windows_s must include 5.0 and 10.0")
+        return normalized
 
 
 class ScenarioConfig(ConfigBaseModel):
