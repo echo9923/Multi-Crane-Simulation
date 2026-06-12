@@ -19,7 +19,10 @@ from backend.app.schemas.risk import (
     RiskPairResult,
 )
 from backend.app.sim.offline_label import (
+    OfflinePairGeometryDistanceAtTime,
     compute_pair_geometry_distances,
+    compute_future_window_label,
+    compute_future_window_labels,
     point_distance_3d,
 )
 
@@ -139,6 +142,27 @@ def _crane_state(
         tip_position=list(tip_position),
         hook_position=list(hook_position),
         cable_length_m=max(0.0, root_position[2] - hook_position[2]),
+    )
+
+
+def _geometry_at(frame: int, time_s: float, clearance: float):
+    return OfflinePairGeometryDistanceAtTime(
+        frame=frame,
+        time_s=time_s,
+        geometry={
+            "distance_min_raw_now_m": max(clearance + 1.0, 0.0),
+            "clearance_min_now_m": clearance,
+            "distance_jib_jib_raw_now_m": max(clearance + 1.0, 0.0),
+            "clearance_jib_jib_now_m": clearance,
+            "distance_jib_i_hook_j_raw_now_m": max(clearance + 5.0, 0.0),
+            "clearance_jib_i_hook_j_now_m": clearance + 4.0,
+            "distance_jib_j_hook_i_raw_now_m": max(clearance + 5.0, 0.0),
+            "clearance_jib_j_hook_i_now_m": clearance + 4.0,
+            "distance_hook_hook_raw_now_m": max(clearance + 10.0, 0.0),
+            "clearance_hook_hook_now_m": clearance + 9.0,
+            "nearest_object_i": "jib",
+            "nearest_object_j": "jib",
+        },
     )
 
 
@@ -389,5 +413,102 @@ def test_pair_geometry_rejects_duplicate_crane_id_and_invalid_points() -> None:
         compute_pair_geometry_distances(
             state_i=state_i,
             state_j=state_j,
+            risk_config=risk_config,
+        )
+
+
+def test_future_window_label_uses_true_future_min_clearance_and_ttc() -> None:
+    series = [
+        _geometry_at(0, 0.0, 12.0),
+        _geometry_at(1, 1.0, 9.0),
+        _geometry_at(2, 2.0, 7.5),
+        _geometry_at(3, 3.0, 2.0),
+    ]
+
+    label = compute_future_window_label(
+        current_index=0,
+        pair_series=series,
+        window_s=3.0,
+        risk_config=RiskConfig.model_validate(_risk_config_payload()),
+    )
+
+    assert label.window_s == 3.0
+    assert label.min_clearance_future_m == pytest.approx(2.0)
+    assert label.ttc_s == pytest.approx(2.0)
+    assert label.risk_level == "near_miss"
+    assert label.collision_label == 0
+    assert label.used_future_truth is True
+
+
+def test_future_window_label_marks_collision_only_for_windows_that_reach_collision() -> None:
+    series = [
+        _geometry_at(0, 0.0, 6.0),
+        _geometry_at(1, 4.0, 4.0),
+        _geometry_at(2, 7.0, -0.1),
+    ]
+    risk_config = RiskConfig.model_validate(_risk_config_payload())
+
+    labels = compute_future_window_labels(
+        current_index=0,
+        pair_series=series,
+        windows_s=[5.0, 10.0],
+        risk_config=risk_config,
+    )
+
+    assert labels["5s"].collision_label == 0
+    assert labels["5s"].risk_level == "high"
+    assert labels["10s"].collision_label == 1
+    assert labels["10s"].risk_level == "collision"
+
+
+def test_future_window_label_truncates_at_episode_tail_without_extrapolation() -> None:
+    series = [
+        _geometry_at(0, 0.0, 10.0),
+        _geometry_at(1, 2.0, 15.0),
+    ]
+
+    label = compute_future_window_label(
+        current_index=1,
+        pair_series=series,
+        window_s=10.0,
+        risk_config=RiskConfig.model_validate(_risk_config_payload()),
+    )
+
+    assert label.min_clearance_future_m == pytest.approx(15.0)
+    assert label.ttc_s is None
+    assert label.risk_level == "low"
+
+
+def test_future_window_label_reports_ttc_zero_when_current_frame_is_unsafe() -> None:
+    series = [_geometry_at(0, 0.0, -0.2), _geometry_at(1, 1.0, 3.0)]
+
+    label = compute_future_window_label(
+        current_index=0,
+        pair_series=series,
+        window_s=1.0,
+        risk_config=RiskConfig.model_validate(_risk_config_payload()),
+    )
+
+    assert label.ttc_s == pytest.approx(0.0)
+    assert label.collision_label == 1
+    assert label.risk_level == "collision"
+
+
+def test_future_window_label_rejects_invalid_window_and_non_monotonic_series() -> None:
+    risk_config = RiskConfig.model_validate(_risk_config_payload())
+
+    with pytest.raises(ValueError, match="OFFLINE_LABEL_E_INVALID_WINDOW"):
+        compute_future_window_label(
+            current_index=0,
+            pair_series=[_geometry_at(0, 0.0, 1.0)],
+            window_s=0.0,
+            risk_config=risk_config,
+        )
+
+    with pytest.raises(ValueError, match="OFFLINE_LABEL_E_MISSING_FRAME"):
+        compute_future_window_label(
+            current_index=0,
+            pair_series=[_geometry_at(1, 1.0, 1.0), _geometry_at(0, 0.0, 1.0)],
+            window_s=5.0,
             risk_config=risk_config,
         )
