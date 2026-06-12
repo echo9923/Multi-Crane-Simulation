@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
+from backend.app.core.config_resolver import resolve_config
 from backend.app.schemas.recorder import (
     RECORDER_SCHEMA_VERSION,
     CommandLogEntry,
@@ -23,6 +26,8 @@ from backend.app.schemas.recorder import (
     TrajectoryRow,
     WeatherParquetRow,
 )
+from backend.app.sim.recorder import DataExportError, init_run_directory
+from backend.app.tests.test_config_schema import load_fixture
 
 
 def _sim_frame_payload(**overrides):
@@ -188,6 +193,20 @@ def _episode_summary_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def _resolved_config(tmp_path: Path):
+    resolved = resolve_config(
+        load_fixture("scenario_valid.yaml"),
+        load_fixture("experiment_valid.yaml"),
+    )
+    return resolved.model_copy(
+        update={
+            "output": resolved.output.model_copy(
+                update={"run_root": str(tmp_path)}
+            )
+        }
+    )
 
 
 def test_sim_frame_schema_serializes_frontend_payload() -> None:
@@ -399,3 +418,79 @@ def test_data_export_warning_rejects_non_finite_values() -> None:
 
     assert SimFramePair(crane_i="C1", crane_j="C2").schema_version
     assert SimFrameWeather(wind_speed_m_s=1.0, visibility="good").schema_version
+
+
+def test_init_run_directory_creates_module_l_layout_and_metadata(tmp_path: Path) -> None:
+    resolved = _resolved_config(tmp_path)
+
+    layout = init_run_directory(
+        config=resolved,
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+    )
+
+    for directory in [
+        layout.config_dir,
+        layout.metadata_dir,
+        layout.logs_dir,
+        layout.data_dir,
+        layout.replay_dir,
+        layout.visual_dir,
+    ]:
+        assert directory.is_dir()
+
+    resolved_yaml = yaml.safe_load(
+        layout.resolved_config_path.read_text(encoding="utf-8")
+    )
+    metadata = json.loads(layout.episode_metadata_path.read_text(encoding="utf-8"))
+
+    assert resolved_yaml["resolved_config_hash"] == resolved.resolved_config_hash
+    assert metadata["schema_version"] == RECORDER_SCHEMA_VERSION
+    assert metadata["episode_id"] == "episode-001"
+    assert metadata["scenario_id"] == "scenario-001"
+    assert metadata["episode_status"] == "running"
+    assert metadata["files"]["trajectories"] == "data/trajectories.parquet"
+    assert layout.frames_jsonl_path == layout.visual_dir / "frames.jsonl"
+    assert layout.commands_path == layout.logs_dir / "commands.jsonl"
+
+
+def test_init_run_directory_is_idempotent_and_does_not_persist_full_secret(
+    tmp_path: Path,
+) -> None:
+    experiment = load_fixture("experiment_valid.yaml")
+    experiment["llm"]["api_key"] = "sk-inline-secret-123456"
+    resolved = resolve_config(load_fixture("scenario_valid.yaml"), experiment)
+    resolved = resolved.model_copy(
+        update={
+            "output": resolved.output.model_copy(
+                update={"run_root": str(tmp_path)}
+            )
+        }
+    )
+
+    first = init_run_directory(config=resolved, episode_id="episode-001")
+    second = init_run_directory(config=resolved, episode_id="episode-001")
+
+    assert first.run_root == second.run_root
+    combined = "\n".join(
+        [
+            first.resolved_config_path.read_text(encoding="utf-8"),
+            first.episode_metadata_path.read_text(encoding="utf-8"),
+        ]
+    )
+    assert "sk-inline-secret-123456" not in combined
+    assert "sk-i****3456" in combined
+
+
+def test_init_run_directory_maps_filesystem_errors_to_data_export_error(
+    tmp_path: Path,
+) -> None:
+    run_root_file = tmp_path / "not-a-directory"
+    run_root_file.write_text("occupied", encoding="utf-8")
+    resolved = _resolved_config(run_root_file)
+
+    with pytest.raises(DataExportError) as exc_info:
+        init_run_directory(config=resolved, episode_id="episode-001")
+
+    assert exc_info.value.category == "data_export_error"
+    assert exc_info.value.file_path is not None
