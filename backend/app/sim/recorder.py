@@ -19,6 +19,7 @@ from backend.app.schemas.recorder import (
     DecisionLogEntry,
     EventLogEntry,
     EpisodeManifest,
+    EpisodeSummary,
     GraphEdgeRow,
     InterventionLogEntry,
     ObservationLogEntry,
@@ -566,6 +567,169 @@ class VisualFrameWriter:
         self.flush()
 
 
+def build_episode_summary(
+    *,
+    episode_id: str,
+    scenario_id: Optional[str],
+    episode_status: object,
+    duration_s: float,
+    num_cranes: int,
+    tasks: Sequence[Any],
+    pair_risk_rows: Sequence[Any] = (),
+    command_logs: Sequence[Any] = (),
+    event_logs: Sequence[Any] = (),
+    warnings: Sequence[Any] = (),
+    state_jump_max_m: Optional[float] = None,
+    replay_available: bool = False,
+    dt_s: float = 0.0,
+) -> EpisodeSummary:
+    task_rows = [_validate_summary_row(TaskParquetRow, task) for task in tasks]
+    pair_rows = [_validate_summary_row(PairRiskRow, row) for row in pair_risk_rows]
+    command_rows = [
+        _validate_summary_row(CommandLogEntry, row) for row in command_logs
+    ]
+    event_rows = [_validate_summary_row(EventLogEntry, row) for row in event_logs]
+    warning_rows = [
+        warning
+        if isinstance(warning, DataExportWarning)
+        else DataExportWarning.model_validate(warning)
+        for warning in warnings
+    ]
+
+    total_tasks = len(task_rows)
+    completed_tasks = sum(1 for task in task_rows if task.status == "completed")
+    failed_tasks = sum(1 for task in task_rows if task.status == "failed")
+    completed_durations = [
+        task.completed_time_s - task.actual_start_s
+        for task in task_rows
+        if task.status == "completed"
+        and task.completed_time_s is not None
+        and task.actual_start_s is not None
+    ]
+    overtime_values = [task.overtime_s for task in task_rows]
+
+    risk_counts: Dict[str, int] = {}
+    clearances: List[float] = []
+    high_risk_rows = 0
+    for row in pair_rows:
+        if row.risk_level_now:
+            risk_counts[row.risk_level_now] = risk_counts.get(row.risk_level_now, 0) + 1
+            if row.risk_level_now in {"high", "near_miss", "collision"}:
+                high_risk_rows += 1
+        if row.clearance_min_now_m is not None:
+            clearances.append(row.clearance_min_now_m)
+    risk_total = sum(risk_counts.values())
+    risk_ratio = (
+        {level: count / risk_total for level, count in risk_counts.items()}
+        if risk_total
+        else {}
+    )
+
+    event_type_counts: Dict[str, int] = {}
+    for event in event_rows:
+        event_type_counts[event.event_type] = event_type_counts.get(event.event_type, 0) + 1
+
+    latencies = [
+        command.latency_ms
+        for command in command_rows
+        if command.latency_ms is not None
+    ]
+    profile_distribution: Dict[str, int] = {}
+    for command in command_rows:
+        if command.operator_profile:
+            profile_distribution[command.operator_profile] = (
+                profile_distribution.get(command.operator_profile, 0) + 1
+            )
+
+    has_nan = any(warning.warning_type == "nan_to_null" for warning in warning_rows)
+    has_inf = any(warning.warning_type == "inf_to_null" for warning in warning_rows)
+
+    return EpisodeSummary(
+        episode_id=episode_id,
+        scenario_id=scenario_id,
+        episode_status=_enum_or_value(episode_status),
+        duration_s=duration_s,
+        num_cranes=num_cranes,
+        num_tasks_total=total_tasks,
+        num_tasks_completed=completed_tasks,
+        num_tasks_failed=failed_tasks,
+        task_completion_rate=completed_tasks / total_tasks if total_tasks else 0.0,
+        mean_task_duration_s=(
+            sum(completed_durations) / len(completed_durations)
+            if completed_durations
+            else None
+        ),
+        deadline_missed_count=sum(1 for task in task_rows if task.deadline_missed),
+        overtime_mean_s=(
+            sum(overtime_values) / len(overtime_values) if overtime_values else 0.0
+        ),
+        risk_frame_ratio_by_level=risk_ratio,
+        near_miss_count=event_type_counts.get("near_miss", 0),
+        collision_count=event_type_counts.get("collision", 0),
+        min_clearance_over_episode=min(clearances) if clearances else None,
+        high_risk_duration_s=high_risk_rows * dt_s,
+        num_llm_calls=len(command_rows),
+        llm_invalid_output_count=sum(
+            1 for command in command_rows if command.validation_errors
+        )
+        + event_type_counts.get("llm_invalid_output", 0),
+        llm_timeout_count=event_type_counts.get("llm_timeout", 0),
+        mean_latency_ms=sum(latencies) / len(latencies) if latencies else None,
+        cache_hit_count=sum(1 for command in command_rows if command.cache_hit),
+        operator_profile_distribution=profile_distribution,
+        ignored_risk_hint_count=event_type_counts.get("ignored_risk_hint", 0),
+        emergency_stop_count=event_type_counts.get("emergency_stop_triggered", 0),
+        forbidden_zone_violation_count=event_type_counts.get(
+            "forbidden_zone_violation", 0
+        ),
+        overlap_zone_shared_count=event_type_counts.get("overlap_zone_shared", 0),
+        has_nan=has_nan,
+        has_inf=has_inf,
+        max_state_jump=state_jump_max_m,
+        replay_available=replay_available,
+        warnings=list(warning_rows),
+    )
+
+
+def write_episode_summary(
+    *,
+    layout: RunDirectoryLayout,
+    summary: EpisodeSummary,
+) -> None:
+    try:
+        layout.episode_summary_path.write_text(
+            json.dumps(
+                summary.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        metadata = {}
+        if layout.episode_metadata_path.exists():
+            metadata = json.loads(
+                layout.episode_metadata_path.read_text(encoding="utf-8")
+            )
+        metadata["episode_status"] = summary.episode_status
+        metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
+        files = dict(metadata.get("files", {}))
+        files["episode_summary"] = "metadata/episode_summary.json"
+        metadata["files"] = files
+        layout.episode_metadata_path.write_text(
+            json.dumps(metadata, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DataExportError(
+            "failed to write episode summary",
+            error_code="RECORDER_E_SUMMARY_WRITE",
+            episode_id=summary.episode_id,
+            file_path=str(layout.episode_summary_path),
+            details={"exception_type": type(exc).__name__, "reason": str(exc)},
+        ) from exc
+
+
 def _coerce_resolved_config(config: object) -> ResolvedConfig:
     if isinstance(config, ResolvedConfig):
         return config
@@ -840,6 +1004,20 @@ def _model_or_mapping_to_dict(row: object) -> Dict[str, Any]:
         error_code="RECORDER_E_PARQUET_ROW_TYPE",
         details={"row_type": type(row).__name__},
     )
+
+
+def _validate_summary_row(
+    row_model: Type[RecorderBaseModel],
+    row: Any,
+) -> RecorderBaseModel:
+    try:
+        return row_model.model_validate(_model_or_mapping_to_dict(row))
+    except ValidationError as exc:
+        raise DataExportError(
+            "invalid summary input row",
+            error_code="RECORDER_E_SUMMARY_SCHEMA",
+            details={"errors": exc.errors(), "row_model": row_model.__name__},
+        ) from exc
 
 
 def _sanitize_for_export(

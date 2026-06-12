@@ -36,8 +36,10 @@ from backend.app.sim.recorder import (
     RecorderParquetWriters,
     VisualFrameWriter,
     build_episode_manifest,
+    build_episode_summary,
     build_sim_frame,
     init_run_directory,
+    write_episode_summary,
 )
 from backend.app.tests.test_config_schema import load_fixture
 
@@ -1060,3 +1062,196 @@ def test_visual_frame_writer_roundtrips_frames_and_manifest(tmp_path: Path) -> N
     assert SimFrame.model_validate(frame_payload).episode_id == "episode-001"
     assert manifest_payload["episode_status"] == "completed"
     assert manifest_payload["frame_count"] == 1
+
+
+def test_build_episode_summary_computes_task_risk_llm_and_quality_metrics() -> None:
+    warning = DataExportWarning(
+        warning_id="warning-001",
+        warning_type="nan_to_null",
+        message="converted NaN to null",
+    )
+
+    summary = build_episode_summary(
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+        episode_status="completed",
+        duration_s=10.0,
+        num_cranes=2,
+        tasks=[
+            {
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "task_id": "T1",
+                "crane_id": "C1",
+                "task_type": "easy_task",
+                "status": "completed",
+                "pickup_x": 0.0,
+                "pickup_y": 0.0,
+                "pickup_z": 0.0,
+                "dropoff_x": 1.0,
+                "dropoff_y": 1.0,
+                "dropoff_z": 0.0,
+                "pickup_zone_id": "yard",
+                "dropoff_zone_id": "workface",
+                "load_type": "steel",
+                "load_weight_t": 1.0,
+                "load_size_x_m": 1.0,
+                "load_size_y_m": 1.0,
+                "load_size_z_m": 1.0,
+                "actual_start_s": 1.0,
+                "completed_time_s": 5.0,
+                "deadline_missed": False,
+                "overtime_s": 0.0,
+            },
+            {
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "task_id": "T2",
+                "crane_id": "C2",
+                "task_type": "overlap_task",
+                "status": "failed",
+                "pickup_x": 0.0,
+                "pickup_y": 0.0,
+                "pickup_z": 0.0,
+                "dropoff_x": 1.0,
+                "dropoff_y": 1.0,
+                "dropoff_z": 0.0,
+                "pickup_zone_id": "yard",
+                "dropoff_zone_id": "workface",
+                "load_type": "steel",
+                "load_weight_t": 1.0,
+                "load_size_x_m": 1.0,
+                "load_size_y_m": 1.0,
+                "load_size_z_m": 1.0,
+                "actual_start_s": 2.0,
+                "completed_time_s": None,
+                "deadline_missed": True,
+                "overtime_s": 2.0,
+            },
+        ],
+        pair_risk_rows=[
+            {
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "frame": 1,
+                "time_s": 0.5,
+                "crane_i": "C1",
+                "crane_j": "C2",
+                "clearance_min_now_m": 4.0,
+                "risk_level_now": "safe",
+            },
+            {
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "frame": 2,
+                "time_s": 1.0,
+                "crane_i": "C1",
+                "crane_j": "C2",
+                "clearance_min_now_m": 1.0,
+                "risk_level_now": "high",
+            },
+            {
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "frame": 3,
+                "time_s": 1.5,
+                "crane_i": "C1",
+                "crane_j": "C2",
+                "clearance_min_now_m": 0.5,
+                "risk_level_now": "near_miss",
+            },
+        ],
+        command_logs=[
+            {
+                "episode_id": "episode-001",
+                "time_s": 1.0,
+                "crane_id": "C1",
+                "operator_profile": "aggressive",
+                "latency_ms": 100.0,
+                "cache_hit": True,
+                "validation_errors": [],
+            },
+            {
+                "episode_id": "episode-001",
+                "time_s": 2.0,
+                "crane_id": "C2",
+                "operator_profile": "cautious",
+                "latency_ms": 300.0,
+                "cache_hit": False,
+                "validation_errors": [{"message": "bad json"}],
+            },
+        ],
+        event_logs=[
+            {
+                "event_id": "EVT-001",
+                "event_type": "near_miss",
+                "episode_id": "episode-001",
+                "frame": 2,
+                "time_s": 1.0,
+            },
+            {
+                "event_id": "EVT-002",
+                "event_type": "llm_timeout",
+                "episode_id": "episode-001",
+                "frame": 2,
+                "time_s": 1.0,
+            },
+            {
+                "event_id": "EVT-003",
+                "event_type": "ignored_risk_hint",
+                "episode_id": "episode-001",
+                "frame": 3,
+                "time_s": 1.5,
+            },
+        ],
+        warnings=[warning],
+        state_jump_max_m=0.75,
+        replay_available=True,
+        dt_s=0.5,
+    )
+
+    assert summary.num_tasks_total == 2
+    assert summary.num_tasks_completed == 1
+    assert summary.num_tasks_failed == 1
+    assert summary.task_completion_rate == 0.5
+    assert summary.mean_task_duration_s == 4.0
+    assert summary.deadline_missed_count == 1
+    assert summary.overtime_mean_s == 1.0
+    assert summary.risk_frame_ratio_by_level == {
+        "safe": pytest.approx(1 / 3),
+        "high": pytest.approx(1 / 3),
+        "near_miss": pytest.approx(1 / 3),
+    }
+    assert summary.min_clearance_over_episode == 0.5
+    assert summary.high_risk_duration_s == 1.0
+    assert summary.num_llm_calls == 2
+    assert summary.llm_invalid_output_count == 1
+    assert summary.llm_timeout_count == 1
+    assert summary.mean_latency_ms == 200.0
+    assert summary.cache_hit_count == 1
+    assert summary.operator_profile_distribution == {"aggressive": 1, "cautious": 1}
+    assert summary.ignored_risk_hint_count == 1
+    assert summary.has_nan is True
+    assert summary.has_inf is False
+    assert summary.max_state_jump == 0.75
+    assert summary.replay_available is True
+
+
+def test_write_episode_summary_updates_metadata_json(tmp_path: Path) -> None:
+    layout = init_run_directory(
+        config=_resolved_config(tmp_path),
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+    )
+    summary = EpisodeSummary.model_validate(_episode_summary_payload())
+
+    write_episode_summary(layout=layout, summary=summary)
+
+    summary_payload = json.loads(layout.episode_summary_path.read_text(encoding="utf-8"))
+    metadata_payload = json.loads(
+        layout.episode_metadata_path.read_text(encoding="utf-8")
+    )
+
+    assert EpisodeSummary.model_validate(summary_payload).episode_id == "episode-001"
+    assert metadata_payload["episode_status"] == "completed"
+    assert metadata_payload["files"]["episode_summary"] == "metadata/episode_summary.json"
