@@ -35,8 +35,12 @@ from backend.app.sim.observation import build_observations_for_snapshot
 from backend.app.sim.crane_model import build_crane_model_library
 from backend.app.sim.layout import build_crane_configs
 from backend.app.sim.physics import initialize_crane_state
-from backend.app.sim.scheduler import freeze_world_snapshot, to_observation_snapshot
-from backend.app.sim.scheduler import CommandStore
+from backend.app.sim.scheduler import (
+    CommandStore,
+    DecisionClock,
+    freeze_world_snapshot,
+    to_observation_snapshot,
+)
 from backend.app.sim.task_observation import TaskObservationContext
 from backend.app.sim.task_queue import IdleObservationContext
 from backend.app.tests.test_config_schema import load_fixture
@@ -849,3 +853,108 @@ def test_command_store_rejects_non_finite_time() -> None:
 
     with pytest.raises(SchedulerError):
         store.expire_or_neutral_stop(sim_time=math.inf)
+
+
+def test_decision_clock_first_frame_marks_all_cranes_due_in_order() -> None:
+    clock = DecisionClock(
+        crane_ids=["C2", "C1", "C3"],
+        llm_decision_interval_s=0.5,
+    )
+
+    assert clock.cranes_due_for_decision(sim_time=0.0) == ["C2", "C1", "C3"]
+    assert clock.decision_index("C2") == 0
+    assert clock.last_decision_time("C2") is None
+
+
+def test_decision_clock_respects_interval_and_updates_indices() -> None:
+    clock = DecisionClock(crane_ids=["C1", "C2"], llm_decision_interval_s=0.5)
+
+    clock.mark_decided(["C1", "C2"], decision_time_s=0.0)
+
+    assert clock.cranes_due_for_decision(sim_time=0.49) == []
+    assert clock.cranes_due_for_decision(sim_time=0.5) == ["C1", "C2"]
+
+    clock.mark_decided(["C1", "C2"], decision_time_s=0.5)
+
+    assert clock.decision_index("C1") == 2
+    assert clock.decision_index("C2") == 2
+    assert clock.last_decision_time("C1") == pytest.approx(0.5)
+
+
+def test_decision_clock_can_mark_subset_and_return_only_remaining_due() -> None:
+    clock = DecisionClock(crane_ids=["C1", "C2", "C3"], llm_decision_interval_s=1.0)
+
+    clock.mark_decided(["C1", "C3"], decision_time_s=0.0)
+
+    assert clock.cranes_due_for_decision(sim_time=0.2) == ["C2"]
+    assert clock.decision_index("C1") == 1
+    assert clock.decision_index("C2") == 0
+    assert clock.decision_index("C3") == 1
+
+
+def test_decision_clock_include_idle_false_filters_to_active_cranes() -> None:
+    clock = DecisionClock(crane_ids=["C1", "C2", "C3"], llm_decision_interval_s=1.0)
+
+    clock.mark_decided(["C1", "C2", "C3"], decision_time_s=0.0)
+
+    assert clock.cranes_due_for_decision(
+        sim_time=1.0,
+        include_idle=True,
+        active_crane_ids=["C2"],
+    ) == ["C1", "C2", "C3"]
+    assert clock.cranes_due_for_decision(
+        sim_time=1.0,
+        include_idle=False,
+        active_crane_ids=["C2"],
+    ) == ["C2"]
+    assert clock.cranes_due_for_decision(
+        sim_time=1.0,
+        include_idle=False,
+        active_crane_ids=[],
+    ) == []
+
+
+def test_decision_clock_handles_float_boundary() -> None:
+    clock = DecisionClock(crane_ids=["C1"], llm_decision_interval_s=0.1)
+
+    clock.mark_decided(["C1"], decision_time_s=0.2)
+
+    assert clock.cranes_due_for_decision(sim_time=0.30000000000000004) == ["C1"]
+
+
+def test_decision_clock_uses_same_due_list_for_all_driver_types() -> None:
+    clock = DecisionClock(crane_ids=["C1", "C2"], llm_decision_interval_s=0.5)
+
+    clock.mark_decided(["C1", "C2"], decision_time_s=0.0)
+    due_by_driver = {
+        driver_type: clock.cranes_due_for_decision(sim_time=0.5)
+        for driver_type in ("rule", "llm", "mock", "replay")
+    }
+
+    assert due_by_driver == {
+        "rule": ["C1", "C2"],
+        "llm": ["C1", "C2"],
+        "mock": ["C1", "C2"],
+        "replay": ["C1", "C2"],
+    }
+
+
+def test_decision_clock_rejects_invalid_inputs() -> None:
+    with pytest.raises(SchedulerError):
+        DecisionClock(crane_ids=["C1", "C1"], llm_decision_interval_s=0.5)
+
+    with pytest.raises(SchedulerError):
+        DecisionClock(crane_ids=["C1"], llm_decision_interval_s=0.0)
+
+    clock = DecisionClock(crane_ids=["C1"], llm_decision_interval_s=0.5)
+
+    with pytest.raises(SchedulerError):
+        clock.mark_decided(["C2"], decision_time_s=0.0)
+
+    with pytest.raises(SchedulerError):
+        clock.mark_decided(["C1"], decision_time_s=math.nan)
+
+    clock.mark_decided(["C1"], decision_time_s=1.0)
+
+    with pytest.raises(SchedulerError):
+        clock.cranes_due_for_decision(sim_time=0.9)

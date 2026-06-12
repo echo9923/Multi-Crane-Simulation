@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Any, Literal, Mapping, Optional, Sequence
+from typing import Any, Collection, Literal, Mapping, Optional, Sequence
 
 from backend.app.schemas.command import ExecutedCommand, build_neutral_stop_command
 from backend.app.schemas.control import ControlTarget
 from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.scheduler import (
     SCH_E_COMMAND_STORE,
+    SCH_E_FRAME_LOOP,
     SCH_E_INVALID_SNAPSHOT,
     CommandStoreSnapshot,
     SchedulerError,
@@ -21,6 +22,126 @@ from backend.app.schemas.weather import WeatherState, WeatherVisibilityContext
 from backend.app.sim.observation import ObservationWorldSnapshot
 
 CommandReplacementSource = Literal["decision", "replay"]
+
+
+class DecisionClock:
+    def __init__(
+        self,
+        *,
+        crane_ids: Sequence[str],
+        llm_decision_interval_s: float,
+        epsilon_s: float = 1.0e-9,
+    ) -> None:
+        self._crane_ids = _validate_decision_crane_ids(crane_ids)
+        if not math.isfinite(llm_decision_interval_s) or llm_decision_interval_s <= 0:
+            raise SchedulerError(
+                "llm_decision_interval_s must be finite and positive",
+                error_code=SCH_E_FRAME_LOOP,
+                details={"llm_decision_interval_s": llm_decision_interval_s},
+            )
+        if not math.isfinite(epsilon_s) or epsilon_s < 0:
+            raise SchedulerError(
+                "epsilon_s must be finite and non-negative",
+                error_code=SCH_E_FRAME_LOOP,
+                details={"epsilon_s": epsilon_s},
+            )
+        self._llm_decision_interval_s = llm_decision_interval_s
+        self._epsilon_s = epsilon_s
+        self._last_decision_time_s: dict[str, float | None] = {
+            crane_id: None for crane_id in self._crane_ids
+        }
+        self._decision_indices: dict[str, int] = {
+            crane_id: 0 for crane_id in self._crane_ids
+        }
+
+    def cranes_due_for_decision(
+        self,
+        *,
+        sim_time: float,
+        include_idle: bool = True,
+        active_crane_ids: Collection[str] | None = None,
+    ) -> list[str]:
+        _validate_decision_time(sim_time, field_name="sim_time")
+        if active_crane_ids is not None:
+            _validate_known_decision_cranes(
+                active_crane_ids,
+                known_crane_ids=self._crane_ids,
+                field_name="active_crane_ids",
+            )
+        active_ids = set(active_crane_ids or ())
+
+        candidates = (
+            self._crane_ids
+            if include_idle
+            else tuple(crane_id for crane_id in self._crane_ids if crane_id in active_ids)
+        )
+        due: list[str] = []
+        for crane_id in candidates:
+            last_time = self._last_decision_time_s[crane_id]
+            if last_time is None:
+                due.append(crane_id)
+                continue
+            if sim_time + self._epsilon_s < last_time:
+                raise SchedulerError(
+                    "sim_time must not go backward before last decision time",
+                    error_code=SCH_E_FRAME_LOOP,
+                    details={
+                        "crane_id": crane_id,
+                        "sim_time": sim_time,
+                        "last_decision_time_s": last_time,
+                    },
+                )
+            if (
+                sim_time - last_time + self._epsilon_s
+                >= self._llm_decision_interval_s
+            ):
+                due.append(crane_id)
+        return due
+
+    def mark_decided(
+        self,
+        crane_ids: Sequence[str],
+        *,
+        decision_time_s: float,
+    ) -> None:
+        _validate_decision_time(decision_time_s, field_name="decision_time_s")
+        _validate_known_decision_cranes(
+            crane_ids,
+            known_crane_ids=self._crane_ids,
+            field_name="crane_ids",
+        )
+        ids = tuple(crane_ids)
+        for crane_id in ids:
+            last_time = self._last_decision_time_s[crane_id]
+            if last_time is not None and decision_time_s + self._epsilon_s < last_time:
+                raise SchedulerError(
+                    "decision_time_s must not go backward",
+                    error_code=SCH_E_FRAME_LOOP,
+                    details={
+                        "crane_id": crane_id,
+                        "decision_time_s": decision_time_s,
+                        "last_decision_time_s": last_time,
+                    },
+                )
+        for crane_id in ids:
+            self._last_decision_time_s[crane_id] = decision_time_s
+            self._decision_indices[crane_id] += 1
+
+    def decision_index(self, crane_id: str) -> int:
+        self._validate_known_crane_id(crane_id)
+        return self._decision_indices[crane_id]
+
+    def last_decision_time(self, crane_id: str) -> float | None:
+        self._validate_known_crane_id(crane_id)
+        return self._last_decision_time_s[crane_id]
+
+    def _validate_known_crane_id(self, crane_id: str) -> None:
+        if crane_id not in self._decision_indices:
+            raise SchedulerError(
+                "unknown crane_id",
+                error_code=SCH_E_FRAME_LOOP,
+                details={"crane_id": crane_id},
+            )
 
 
 def freeze_world_snapshot(
@@ -340,6 +461,15 @@ def _validate_positive_duration(value: float) -> None:
         )
 
 
+def _validate_decision_time(value: float, *, field_name: str) -> None:
+    if not math.isfinite(value) or value < 0:
+        raise SchedulerError(
+            f"{field_name} must be finite and non-negative",
+            error_code=SCH_E_FRAME_LOOP,
+            details={field_name: value},
+        )
+
+
 def _validate_crane_ids(crane_ids: Sequence[str]) -> tuple[str, ...]:
     ids = tuple(crane_ids)
     if not ids:
@@ -354,6 +484,45 @@ def _validate_crane_ids(crane_ids: Sequence[str]) -> tuple[str, ...]:
             details={"crane_ids": list(ids)},
         )
     return ids
+
+
+def _validate_decision_crane_ids(crane_ids: Sequence[str]) -> tuple[str, ...]:
+    ids = tuple(crane_ids)
+    if not ids:
+        raise SchedulerError(
+            "decision clock requires at least one crane",
+            error_code=SCH_E_FRAME_LOOP,
+        )
+    if len(set(ids)) != len(ids):
+        raise SchedulerError(
+            "decision clock crane_ids must be unique",
+            error_code=SCH_E_FRAME_LOOP,
+            details={"crane_ids": list(ids)},
+        )
+    return ids
+
+
+def _validate_known_decision_cranes(
+    crane_ids: Collection[str],
+    *,
+    known_crane_ids: Sequence[str],
+    field_name: str,
+) -> None:
+    known = set(known_crane_ids)
+    ids = tuple(crane_ids)
+    if len(set(ids)) != len(ids):
+        raise SchedulerError(
+            f"{field_name} must be unique",
+            error_code=SCH_E_FRAME_LOOP,
+            details={field_name: list(ids)},
+        )
+    unknown = sorted(set(ids) - known)
+    if unknown:
+        raise SchedulerError(
+            f"{field_name} contains unknown crane ids",
+            error_code=SCH_E_FRAME_LOOP,
+            details={"unknown_crane_ids": unknown},
+        )
 
 
 def _stored_command(
