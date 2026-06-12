@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -213,6 +214,7 @@ class FakeOperator:
         self.log = log
         self.calls: list[list[SimpleNamespace]] = []
         self.episode_failure_reason: str | None = None
+        self.snapshot_id_override: str | None = None
 
     def decide(self, observations, *, llm_decision_interval_s):
         observations = list(observations)
@@ -223,7 +225,8 @@ class FakeOperator:
             SimpleNamespace(
                 parsed_command=_parsed_command(
                     crane_id=observation.crane_id,
-                    snapshot_id=observation.source_snapshot_id,
+                    snapshot_id=self.snapshot_id_override
+                    or observation.source_snapshot_id,
                     observation_id=observation.observation_id,
                     time_s=observation.time_s,
                 ),
@@ -368,8 +371,9 @@ def _runner(
     *,
     config: SchedulerConfig | None = None,
     dependencies: SchedulerDependencies | None = None,
+    crane_count: int = 2,
 ) -> EpisodeRunner:
-    configs = _crane_configs(2)
+    configs = _crane_configs(crane_count)
     states = [initialize_crane_state(config) for config in configs]
     return EpisodeRunner(
         config=config or _scheduler_config(),
@@ -633,3 +637,134 @@ def test_episode_runner_maps_non_finite_state_to_failed_invalid_state() -> None:
     assert result.status is EpisodeStatus.FAILED_INVALID_STATE
     assert runner.episode_status is EpisodeStatus.FAILED_INVALID_STATE
     assert runner.dependencies.recorder.step_calls[-1]["status"] is EpisodeStatus.FAILED_INVALID_STATE
+
+
+def test_episode_runner_stop_maps_to_stopped_by_user_without_stepping() -> None:
+    log: list[str] = []
+    runner = _runner(log)
+
+    runner.stop("api stop")
+    result = runner.run_one_frame()
+
+    assert result.status is EpisodeStatus.STOPPED_BY_USER
+    assert runner.episode_status is EpisodeStatus.STOPPED_BY_USER
+    assert runner.dependencies.recorder.step_calls == []
+    assert log == []
+
+
+def test_episode_runner_supports_one_crane_without_neighbors() -> None:
+    log: list[str] = []
+    runner = _runner(log, crane_count=1)
+
+    result = runner.run_one_frame()
+
+    assert result.status is EpisodeStatus.RUNNING
+    assert result.snapshot_id == "SNAP_EPJ_000000"
+    assert len(runner.dependencies.operator.calls[0]) == 1
+    assert runner.dependencies.safety.batch_sizes == [1]
+
+
+def test_operator_wrong_snapshot_maps_failed_invalid_state() -> None:
+    log: list[str] = []
+    dependencies = _dependencies(log)
+    dependencies.operator.snapshot_id_override = "SNAP_OTHER_000000"
+    runner = _runner(log, dependencies=dependencies)
+
+    result = runner.run_one_frame()
+
+    assert result.status is EpisodeStatus.FAILED_INVALID_STATE
+    assert runner.episode_status is EpisodeStatus.FAILED_INVALID_STATE
+    assert dependencies.safety.batch_sizes == []
+
+
+def test_offline_replay_duplicate_or_wrong_snapshot_maps_replay_mismatch() -> None:
+    configs = _crane_configs(2)
+    duplicate_log: list[str] = []
+    duplicate_command = ExecutedCommand.from_raw(
+        command_id="EXEC_REPLAY_DUP_C1",
+        raw_command=_parsed_command(
+            crane_id="C1",
+            snapshot_id="SNAP_EPJ_000000",
+            observation_id="OBS_REPLAY_DUP_C1",
+            time_s=0.0,
+        ),
+    )
+    duplicate_runner = EpisodeRunner(
+        config=_scheduler_config(mode="offline_replay"),
+        dependencies=_dependencies(
+            duplicate_log,
+            replay=FakeReplaySource([duplicate_command, duplicate_command]),
+        ),
+        episode_id="EPJ",
+        crane_configs=configs,
+        crane_states=[initialize_crane_state(config) for config in configs],
+        weather_state=_weather_state(0.0),
+        visibility_context=_visibility_context(0.0),
+        task_queues=[],
+        task_contexts=_task_contexts_for([config.crane_id for config in configs], 0.0),
+    )
+
+    duplicate_result = duplicate_runner.run_one_frame()
+
+    assert duplicate_result.status is EpisodeStatus.FAILED_REPLAY_MISMATCH
+
+    wrong_snapshot_log: list[str] = []
+    wrong_snapshot_commands = [
+        ExecutedCommand.from_raw(
+            command_id="EXEC_REPLAY_C1_WRONG",
+            raw_command=_parsed_command(
+                crane_id="C1",
+                snapshot_id="SNAP_OTHER_000000",
+                observation_id="OBS_REPLAY_C1_WRONG",
+                time_s=0.0,
+            ),
+        ),
+        ExecutedCommand.from_raw(
+            command_id="EXEC_REPLAY_C2",
+            raw_command=_parsed_command(
+                crane_id="C2",
+                snapshot_id="SNAP_EPJ_000000",
+                observation_id="OBS_REPLAY_C2",
+                time_s=0.0,
+            ),
+        ),
+    ]
+    wrong_snapshot_runner = EpisodeRunner(
+        config=_scheduler_config(mode="offline_replay"),
+        dependencies=_dependencies(
+            wrong_snapshot_log,
+            replay=FakeReplaySource(wrong_snapshot_commands),
+        ),
+        episode_id="EPJ",
+        crane_configs=configs,
+        crane_states=[initialize_crane_state(config) for config in configs],
+        weather_state=_weather_state(0.0),
+        visibility_context=_visibility_context(0.0),
+        task_queues=[],
+        task_contexts=_task_contexts_for([config.crane_id for config in configs], 0.0),
+    )
+
+    wrong_snapshot_result = wrong_snapshot_runner.run_one_frame()
+
+    assert wrong_snapshot_result.status is EpisodeStatus.FAILED_REPLAY_MISMATCH
+
+
+def test_scheduler_static_boundaries_do_not_embed_neighbor_business_logic() -> None:
+    source = Path("backend/app/sim/scheduler.py").read_text()
+
+    forbidden_fragments = [
+        "ProviderRequest",
+        "parse_raw_llm_response",
+        "requests.",
+        "httpx.",
+        "deepseek",
+        "minimax",
+        "DEFAULT_SLEW_GEAR_SPEEDS",
+        "gear_speeds",
+        "detect_pair_collision",
+        "distance_between",
+        "request_attach",
+        "release_pending",
+    ]
+
+    assert not any(fragment in source for fragment in forbidden_fragments)

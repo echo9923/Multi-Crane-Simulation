@@ -39,7 +39,9 @@ from backend.app.sim.scheduler import (
     CommandStore,
     DecisionClock,
     freeze_world_snapshot,
+    should_stop,
     to_observation_snapshot,
+    update_terminal_status,
 )
 from backend.app.sim.task_observation import TaskObservationContext
 from backend.app.sim.task_queue import IdleObservationContext
@@ -958,3 +960,75 @@ def test_decision_clock_rejects_invalid_inputs() -> None:
 
     with pytest.raises(SchedulerError):
         clock.cranes_due_for_decision(sim_time=0.9)
+
+
+def test_update_terminal_status_maps_recovery_failures() -> None:
+    config = SchedulerConfig(
+        dt_s=0.5,
+        duration_s=10.0,
+        controller_hz=20.0,
+        llm_decision_interval_s=1.0,
+        run_mode="offline_batch",
+    )
+    states = [initialize_crane_state(config_item) for config_item in _crane_configs(1)]
+
+    blocked = update_terminal_status(
+        current_status=EpisodeStatus.RUNNING,
+        sim_time=1.0,
+        frame_index=2,
+        states=states,
+        task_queues=[],
+        task_events=[{"reason": "failed_recovery_blocked"}],
+        collision_events=[],
+        config=config,
+    )
+    timeout = update_terminal_status(
+        current_status=EpisodeStatus.RUNNING,
+        sim_time=1.0,
+        frame_index=2,
+        states=states,
+        task_queues=[],
+        task_events=[{"details": {"episode_failure_request": "failed_recovery_timeout"}}],
+        collision_events=[],
+        config=config,
+    )
+
+    assert isinstance(blocked, TerminalStatusCandidate)
+    assert blocked.status is EpisodeStatus.FAILED_RECOVERY_BLOCKED
+    assert isinstance(timeout, TerminalStatusCandidate)
+    assert timeout.status is EpisodeStatus.FAILED_RECOVERY_TIMEOUT
+
+
+def test_should_stop_covers_terminal_timeout_and_completion_cooldown() -> None:
+    config = SchedulerConfig(
+        dt_s=0.5,
+        duration_s=2.0,
+        controller_hz=20.0,
+        llm_decision_interval_s=1.0,
+        run_mode="offline_batch",
+        stop_when_all_tasks_done=True,
+        completion_cooldown_s=0.5,
+    )
+
+    assert should_stop(
+        episode_status=EpisodeStatus.FAILED_COLLISION,
+        sim_time=0.5,
+        config=config,
+    )
+    assert should_stop(
+        episode_status=EpisodeStatus.RUNNING,
+        sim_time=2.0,
+        config=config,
+    )
+    assert not should_stop(
+        episode_status=EpisodeStatus.RUNNING,
+        sim_time=0.75,
+        config=config,
+        all_tasks_done_since_s=0.5,
+    )
+    assert should_stop(
+        episode_status=EpisodeStatus.RUNNING,
+        sim_time=1.0,
+        config=config,
+        all_tasks_done_since_s=0.5,
+    )
