@@ -19,7 +19,10 @@ from backend.app.schemas.risk import (
     RiskPairResult,
 )
 from backend.app.sim.offline_label import (
+    OfflineEpisodeInput,
+    OfflineLabelGenerator,
     OfflinePairGeometryDistanceAtTime,
+    OfflineTrajectoryFrame,
     compute_pair_geometry_distances,
     compute_future_window_label,
     compute_future_window_labels,
@@ -163,6 +166,15 @@ def _geometry_at(frame: int, time_s: float, clearance: float):
             "nearest_object_i": "jib",
             "nearest_object_j": "jib",
         },
+    )
+
+
+def _trajectory_frame(frame: int, time_s: float, *states: CraneState):
+    return OfflineTrajectoryFrame(
+        episode_id="ep-001",
+        frame=frame,
+        time_s=time_s,
+        crane_states=list(states),
     )
 
 
@@ -510,5 +522,176 @@ def test_future_window_label_rejects_invalid_window_and_non_monotonic_series() -
             current_index=0,
             pair_series=[_geometry_at(1, 1.0, 1.0), _geometry_at(0, 0.0, 1.0)],
             window_s=5.0,
+            risk_config=risk_config,
+        )
+
+
+def test_offline_label_generator_creates_one_label_per_frame_for_two_cranes() -> None:
+    states = [
+        _crane_state(
+            "C1",
+            root_position=[0.0, 0.0, 10.0],
+            tip_position=[10.0, 0.0, 10.0],
+            hook_position=[5.0, 0.0, 6.0],
+        ),
+        _crane_state(
+            "C2",
+            root_position=[0.0, 3.0, 10.0],
+            tip_position=[10.0, 3.0, 10.0],
+            hook_position=[5.0, 3.0, 6.0],
+        ),
+    ]
+    generator = OfflineLabelGenerator()
+
+    labels = generator.generate(
+        episode_id="ep-001",
+        scenario_id="scenario-001",
+        trajectory_frames=[
+            _trajectory_frame(0, 0.0, *states),
+            _trajectory_frame(1, 1.0, *states),
+            _trajectory_frame(2, 2.0, *states),
+        ],
+        crane_configs=[],
+        risk_config=RiskConfig.model_validate(_risk_config_payload()),
+    )
+
+    assert len(labels) == 3
+    assert [(label.frame, label.pair_id) for label in labels] == [
+        (0, "C1-C2"),
+        (1, "C1-C2"),
+        (2, "C1-C2"),
+    ]
+    assert labels[0].future_window_labels["15s"].used_future_truth is True
+    assert labels[0].min_clearance_future_5s_m == pytest.approx(
+        labels[0].future_window_labels["5s"].min_clearance_future_m
+    )
+
+
+def test_offline_label_generator_creates_all_pairs_for_three_cranes_in_stable_order() -> None:
+    state_1 = _crane_state(
+        "C1",
+        root_position=[0.0, 0.0, 10.0],
+        tip_position=[10.0, 0.0, 10.0],
+        hook_position=[5.0, 0.0, 6.0],
+    )
+    state_2 = _crane_state(
+        "C2",
+        root_position=[0.0, 5.0, 10.0],
+        tip_position=[10.0, 5.0, 10.0],
+        hook_position=[5.0, 5.0, 6.0],
+    )
+    state_3 = _crane_state(
+        "C3",
+        root_position=[0.0, 10.0, 10.0],
+        tip_position=[10.0, 10.0, 10.0],
+        hook_position=[5.0, 10.0, 6.0],
+    )
+
+    labels = OfflineLabelGenerator().generate(
+        episode_id="ep-001",
+        trajectory_frames=[
+            _trajectory_frame(0, 0.0, state_3, state_1, state_2),
+            _trajectory_frame(1, 1.0, state_3, state_1, state_2),
+            _trajectory_frame(2, 2.0, state_3, state_1, state_2),
+            _trajectory_frame(3, 3.0, state_3, state_1, state_2),
+        ],
+        crane_configs=[],
+        risk_config=RiskConfig.model_validate(_risk_config_payload()),
+    )
+
+    assert len(labels) == 12
+    assert [(label.frame, label.pair_id) for label in labels[:3]] == [
+        (0, "C1-C2"),
+        (0, "C1-C3"),
+        (0, "C2-C3"),
+    ]
+
+
+def test_offline_label_generator_generate_many_returns_pair_records_per_episode() -> None:
+    state_1 = _crane_state(
+        "C1",
+        root_position=[0.0, 0.0, 10.0],
+        tip_position=[10.0, 0.0, 10.0],
+        hook_position=[5.0, 0.0, 6.0],
+    )
+    state_2 = _crane_state(
+        "C2",
+        root_position=[0.0, 3.0, 10.0],
+        tip_position=[10.0, 3.0, 10.0],
+        hook_position=[5.0, 3.0, 6.0],
+    )
+    risk_config = RiskConfig.model_validate(_risk_config_payload())
+    episode = OfflineEpisodeInput(
+        episode_id="ep-001",
+        scenario_id="scenario-001",
+        trajectory_frames=[
+            _trajectory_frame(0, 0.0, state_1, state_2),
+            _trajectory_frame(1, 1.0, state_1, state_2),
+        ],
+        crane_configs=[],
+        risk_config=risk_config,
+    )
+
+    records = OfflineLabelGenerator().generate_many(episodes=[episode])
+
+    assert len(records) == 1
+    assert records[0].episode_id == "ep-001"
+    assert records[0].pair_id == "C1-C2"
+    assert [label.frame for label in records[0].labels] == [0, 1]
+
+
+def test_offline_label_generator_reports_clear_errors_for_bad_trajectory_inputs() -> None:
+    risk_config = RiskConfig.model_validate(_risk_config_payload())
+    state_1 = _crane_state(
+        "C1",
+        root_position=[0.0, 0.0, 10.0],
+        tip_position=[10.0, 0.0, 10.0],
+        hook_position=[5.0, 0.0, 6.0],
+    )
+    state_2 = _crane_state(
+        "C2",
+        root_position=[0.0, 3.0, 10.0],
+        tip_position=[10.0, 3.0, 10.0],
+        hook_position=[5.0, 3.0, 6.0],
+    )
+    generator = OfflineLabelGenerator()
+
+    with pytest.raises(ValueError, match="OFFLINE_LABEL_E_EMPTY_TRAJECTORY"):
+        generator.generate(
+            episode_id="ep-001",
+            trajectory_frames=[],
+            crane_configs=[],
+            risk_config=risk_config,
+        )
+
+    with pytest.raises(ValueError, match="OFFLINE_LABEL_E_MISSING_FRAME"):
+        generator.generate(
+            episode_id="ep-001",
+            trajectory_frames=[
+                _trajectory_frame(0, 0.0, state_1, state_2),
+                _trajectory_frame(2, 1.0, state_1, state_2),
+            ],
+            crane_configs=[],
+            risk_config=risk_config,
+        )
+
+    with pytest.raises(ValueError, match="OFFLINE_LABEL_E_CRANE_ID_MISMATCH"):
+        generator.generate(
+            episode_id="ep-001",
+            trajectory_frames=[
+                _trajectory_frame(0, 0.0, state_1, state_2),
+                _trajectory_frame(1, 1.0, state_1),
+            ],
+            crane_configs=[],
+            risk_config=risk_config,
+        )
+
+    with pytest.raises(ValueError, match="OFFLINE_LABEL_E_DUPLICATE_TRAJECTORY_ROW"):
+        generator.generate(
+            episode_id="ep-001",
+            trajectory_frames=[
+                _trajectory_frame(0, 0.0, state_1, state_1),
+            ],
+            crane_configs=[],
             risk_config=risk_config,
         )

@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Sequence
+from itertools import combinations
+from collections import defaultdict
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from pydantic import Field
+from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.config import RiskConfig
 from backend.app.schemas.risk import (
     OFFLINE_LABEL_E_EMPTY_TRAJECTORY,
+    OFFLINE_LABEL_E_CRANE_ID_MISMATCH,
+    OFFLINE_LABEL_E_DUPLICATE_TRAJECTORY_ROW,
     OFFLINE_LABEL_E_INVALID_GEOMETRY,
     OFFLINE_LABEL_E_INVALID_WINDOW,
     OFFLINE_LABEL_E_MISSING_FRAME,
     OFFLINE_LABEL_SCHEMA_VERSION,
     OfflineFutureWindowLabel,
+    OfflineLabelError,
     OfflinePairGeometryDistance,
+    OfflinePairRiskRecord,
+    OfflineRiskLabel,
     RiskBaseModel,
     RiskLevel,
 )
@@ -25,6 +33,183 @@ class OfflinePairGeometryDistanceAtTime(RiskBaseModel):
     frame: int = Field(ge=0)
     time_s: float = Field(ge=0)
     geometry: OfflinePairGeometryDistance
+
+
+class OfflineTrajectoryFrame(RiskBaseModel):
+    schema_version: str = OFFLINE_LABEL_SCHEMA_VERSION
+    episode_id: str
+    frame: int = Field(ge=0)
+    time_s: float = Field(ge=0)
+    crane_states: List[CraneState]
+
+
+class OfflineEpisodeInput(RiskBaseModel):
+    schema_version: str = OFFLINE_LABEL_SCHEMA_VERSION
+    episode_id: str
+    scenario_id: Optional[str] = None
+    trajectory_frames: List[OfflineTrajectoryFrame]
+    crane_configs: List[CraneConfig]
+    risk_config: RiskConfig
+    online_risks: list[object] = Field(default_factory=list)
+
+
+class OfflineLabelGenerator:
+    def __init__(self, *, future_windows_s: Optional[Sequence[float]] = None) -> None:
+        self.future_windows_s = list(future_windows_s) if future_windows_s else None
+
+    @classmethod
+    def from_config(cls, config: object) -> "OfflineLabelGenerator":
+        windows = None
+        risk_config = getattr(config, "risk", None)
+        if risk_config is not None and hasattr(risk_config, "future_windows_s"):
+            windows = risk_config.future_windows_s
+        elif hasattr(config, "future_windows_s"):
+            windows = getattr(config, "future_windows_s")
+        return cls(future_windows_s=windows)
+
+    def generate(
+        self,
+        *,
+        episode_id: str,
+        trajectory_frames: Sequence[OfflineTrajectoryFrame],
+        crane_configs: Sequence[CraneConfig],
+        risk_config: RiskConfig,
+        scenario_id: Optional[str] = None,
+        online_risks: Optional[Sequence[object]] = None,
+    ) -> List[OfflineRiskLabel]:
+        del online_risks
+        frames = list(trajectory_frames)
+        _validate_trajectory_frames(
+            episode_id=episode_id,
+            trajectory_frames=frames,
+            crane_configs=crane_configs,
+        )
+        if not frames:
+            return []
+
+        crane_ids = sorted(state.crane_id for state in frames[0].crane_states)
+        pair_series_by_id: Dict[str, List[OfflinePairGeometryDistanceAtTime]] = {
+            _pair_id(left, right): [] for left, right in combinations(crane_ids, 2)
+        }
+        for frame in frames:
+            states_by_id = {state.crane_id: state for state in frame.crane_states}
+            for crane_i, crane_j in combinations(crane_ids, 2):
+                pair_id = _pair_id(crane_i, crane_j)
+                geometry = compute_pair_geometry_distances(
+                    state_i=states_by_id[crane_i],
+                    state_j=states_by_id[crane_j],
+                    risk_config=risk_config,
+                )
+                pair_series_by_id[pair_id].append(
+                    OfflinePairGeometryDistanceAtTime(
+                        frame=frame.frame,
+                        time_s=frame.time_s,
+                        geometry=geometry,
+                    )
+                )
+
+        windows_s = self.future_windows_s or risk_config.future_windows_s
+        labels: List[OfflineRiskLabel] = []
+        for crane_i, crane_j in combinations(crane_ids, 2):
+            pair_id = _pair_id(crane_i, crane_j)
+            pair_series = pair_series_by_id[pair_id]
+            for index, sample in enumerate(pair_series):
+                future_labels = compute_future_window_labels(
+                    current_index=index,
+                    pair_series=pair_series,
+                    windows_s=windows_s,
+                    risk_config=risk_config,
+                )
+                label_5s = future_labels["5s"]
+                label_10s = future_labels["10s"]
+                labels.append(
+                    OfflineRiskLabel(
+                        episode_id=episode_id,
+                        scenario_id=scenario_id,
+                        frame=sample.frame,
+                        time_s=sample.time_s,
+                        crane_i=crane_i,
+                        crane_j=crane_j,
+                        pair_id=pair_id,
+                        distance_min_raw_now_m=sample.geometry.distance_min_raw_now_m,
+                        clearance_min_now_m=sample.geometry.clearance_min_now_m,
+                        distance_jib_jib_raw_now_m=(
+                            sample.geometry.distance_jib_jib_raw_now_m
+                        ),
+                        clearance_jib_jib_now_m=(
+                            sample.geometry.clearance_jib_jib_now_m
+                        ),
+                        distance_jib_i_hook_j_raw_now_m=(
+                            sample.geometry.distance_jib_i_hook_j_raw_now_m
+                        ),
+                        clearance_jib_i_hook_j_now_m=(
+                            sample.geometry.clearance_jib_i_hook_j_now_m
+                        ),
+                        distance_jib_j_hook_i_raw_now_m=(
+                            sample.geometry.distance_jib_j_hook_i_raw_now_m
+                        ),
+                        clearance_jib_j_hook_i_now_m=(
+                            sample.geometry.clearance_jib_j_hook_i_now_m
+                        ),
+                        distance_hook_hook_raw_now_m=(
+                            sample.geometry.distance_hook_hook_raw_now_m
+                        ),
+                        clearance_hook_hook_now_m=(
+                            sample.geometry.clearance_hook_hook_now_m
+                        ),
+                        min_clearance_future_5s_m=(
+                            label_5s.min_clearance_future_m
+                        ),
+                        min_clearance_future_10s_m=(
+                            label_10s.min_clearance_future_m
+                        ),
+                        ttc_5s_s=label_5s.ttc_s,
+                        ttc_10s_s=label_10s.ttc_s,
+                        risk_level_5s=label_5s.risk_level,
+                        risk_level_10s=label_10s.risk_level,
+                        collision_label_5s=label_5s.collision_label,
+                        collision_label_10s=label_10s.collision_label,
+                        future_window_labels=future_labels,
+                        used_future_truth=True,
+                    )
+                )
+        return sorted(labels, key=lambda item: (item.frame, item.crane_i, item.crane_j))
+
+    def generate_pair_records(
+        self,
+        *,
+        episode_id: str,
+        trajectory_frames: Sequence[OfflineTrajectoryFrame],
+        crane_configs: Sequence[CraneConfig],
+        risk_config: RiskConfig,
+        scenario_id: Optional[str] = None,
+    ) -> List[OfflinePairRiskRecord]:
+        labels = self.generate(
+            episode_id=episode_id,
+            scenario_id=scenario_id,
+            trajectory_frames=trajectory_frames,
+            crane_configs=crane_configs,
+            risk_config=risk_config,
+        )
+        return _labels_to_pair_records(labels)
+
+    def generate_many(
+        self,
+        *,
+        episodes: Sequence[OfflineEpisodeInput],
+    ) -> List[OfflinePairRiskRecord]:
+        records: List[OfflinePairRiskRecord] = []
+        for episode in episodes:
+            labels = self.generate(
+                episode_id=episode.episode_id,
+                scenario_id=episode.scenario_id,
+                trajectory_frames=episode.trajectory_frames,
+                crane_configs=episode.crane_configs,
+                risk_config=episode.risk_config,
+                online_risks=episode.online_risks,
+            )
+            records.extend(_labels_to_pair_records(labels))
+        return records
 
 
 def compute_pair_geometry_distances(
@@ -102,7 +287,7 @@ def compute_future_window_label(
     pair_series: Sequence[OfflinePairGeometryDistanceAtTime],
     window_s: float,
     risk_config: RiskConfig,
-    d_safe_effective_m: float | None = None,
+    d_safe_effective_m: Optional[float] = None,
 ) -> OfflineFutureWindowLabel:
     if window_s <= 0:
         _raise_window_error("window_s must be positive")
@@ -152,7 +337,7 @@ def compute_future_window_labels(
     pair_series: Sequence[OfflinePairGeometryDistanceAtTime],
     windows_s: Sequence[float],
     risk_config: RiskConfig,
-    d_safe_effective_m: float | None = None,
+    d_safe_effective_m: Optional[float] = None,
 ) -> Dict[str, OfflineFutureWindowLabel]:
     labels: Dict[str, OfflineFutureWindowLabel] = {}
     for window_s in windows_s:
@@ -191,7 +376,7 @@ def _first_time_to_threshold(
     current_time_s: float,
     samples: Sequence[OfflinePairGeometryDistanceAtTime],
     threshold_m: float,
-) -> float | None:
+) -> Optional[float]:
     for item in samples:
         if item.geometry.clearance_min_now_m <= threshold_m:
             return item.time_s - current_time_s
@@ -201,7 +386,7 @@ def _first_time_to_threshold(
 def _classify_future_risk_level(
     *,
     min_clearance_future_m: float,
-    ttc_s: float | None,
+    ttc_s: Optional[float],
     thresholds,
 ) -> RiskLevel:
     if min_clearance_future_m <= 0:
@@ -224,8 +409,8 @@ def _validate_pair_series(
 ) -> None:
     if not pair_series:
         _raise_empty_trajectory("pair_series must not be empty")
-    previous_frame: int | None = None
-    previous_time_s: float | None = None
+    previous_frame: Optional[int] = None
+    previous_time_s: Optional[float] = None
     for item in pair_series:
         if previous_frame is not None and item.frame <= previous_frame:
             _raise_missing_frame("pair_series frames must increase")
@@ -235,12 +420,87 @@ def _validate_pair_series(
         previous_time_s = item.time_s
 
 
+def _validate_trajectory_frames(
+    *,
+    episode_id: str,
+    trajectory_frames: Sequence[OfflineTrajectoryFrame],
+    crane_configs: Sequence[CraneConfig],
+) -> None:
+    if not trajectory_frames:
+        _raise_empty_trajectory("trajectory_frames must not be empty")
+    config_ids = [config.crane_id for config in crane_configs]
+    if len(config_ids) != len(set(config_ids)):
+        _raise_duplicate_row("duplicate crane config ids")
+    expected_ids = set(config_ids) if config_ids else None
+    previous_frame: Optional[int] = None
+    previous_time_s: Optional[float] = None
+    for item in trajectory_frames:
+        if item.episode_id != episode_id:
+            _raise_missing_frame("frame episode_id must match requested episode_id")
+        if previous_frame is not None and item.frame != previous_frame + 1:
+            _raise_missing_frame("trajectory frame index must be continuous")
+        if previous_time_s is not None and item.time_s <= previous_time_s:
+            _raise_missing_frame("trajectory time_s must increase")
+        ids = [state.crane_id for state in item.crane_states]
+        if len(ids) != len(set(ids)):
+            _raise_duplicate_row("duplicate crane states in frame")
+        frame_ids = set(ids)
+        if expected_ids is None:
+            expected_ids = frame_ids
+        elif frame_ids != expected_ids:
+            _raise_crane_mismatch("frame crane ids must match expected crane ids")
+        previous_frame = item.frame
+        previous_time_s = item.time_s
+
+
+def _labels_to_pair_records(labels: Sequence[OfflineRiskLabel]) -> List[OfflinePairRiskRecord]:
+    grouped: Dict[
+        Tuple[str, str, Optional[str], str, str, str], List[OfflineRiskLabel]
+    ] = defaultdict(list)
+    for label in labels:
+        grouped[
+            (
+                label.episode_id,
+                label.pair_id,
+                label.scenario_id,
+                label.crane_i,
+                label.crane_j,
+                label.pair_id,
+            )
+        ].append(label)
+    records: List[OfflinePairRiskRecord] = []
+    for (
+        episode_id,
+        _pair_key,
+        scenario_id,
+        crane_i,
+        crane_j,
+        pair_id,
+    ), pair_labels in sorted(grouped.items()):
+        records.append(
+            OfflinePairRiskRecord(
+                episode_id=episode_id,
+                scenario_id=scenario_id,
+                crane_i=crane_i,
+                crane_j=crane_j,
+                pair_id=pair_id,
+                labels=sorted(pair_labels, key=lambda item: item.frame),
+            )
+        )
+    return records
+
+
 def _window_key(window_s: float) -> str:
     if not math.isfinite(window_s) or window_s <= 0:
         _raise_window_error("window_s must be positive and finite")
     if float(window_s).is_integer():
         return f"{int(window_s)}s"
     return f"{window_s:g}s"
+
+
+def _pair_id(crane_id_a: str, crane_id_b: str) -> str:
+    left, right = sorted([crane_id_a, crane_id_b])
+    return f"{left}-{right}"
 
 
 def _validated_point(point: Sequence[float]) -> list[float]:
@@ -266,3 +526,11 @@ def _raise_empty_trajectory(reason: str) -> None:
 
 def _raise_missing_frame(reason: str) -> None:
     raise ValueError(f"{OFFLINE_LABEL_E_MISSING_FRAME}: {reason}")
+
+
+def _raise_crane_mismatch(reason: str) -> None:
+    raise ValueError(f"{OFFLINE_LABEL_E_CRANE_ID_MISMATCH}: {reason}")
+
+
+def _raise_duplicate_row(reason: str) -> None:
+    raise ValueError(f"{OFFLINE_LABEL_E_DUPLICATE_TRAJECTORY_ROW}: {reason}")
