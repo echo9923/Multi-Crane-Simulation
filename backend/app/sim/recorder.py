@@ -164,6 +164,10 @@ class Recorder:
             task_queues=task_queues,
             events=events,
             status=status,
+            online_risk=None,
+            observations=(),
+            llm_calls=(),
+            interventions=(),
         )
 
     def record_step(
@@ -198,6 +202,10 @@ class Recorder:
             task_queues=task_queues,
             events=events,
             status=status,
+            online_risk=online_risk,
+            observations=observations,
+            llm_calls=llm_calls,
+            interventions=interventions,
         )
 
     def write_offline_labels(self, labels: Sequence[OfflineRiskLabel]) -> None:
@@ -263,11 +271,16 @@ class Recorder:
         task_queues: Sequence[Any],
         events: Sequence[Any],
         status: object,
+        online_risk: Optional[Any],
+        observations: Sequence[Any],
+        llm_calls: Sequence[Any],
+        interventions: Sequence[Any],
     ) -> SimFrame:
         self._ensure_started(episode_id)
         assert self.parquet_writers is not None
         assert self.jsonl_writers is not None
         assert self.visual_writer is not None
+        command_map = dict(commands or {})
         trajectory_rows = [
             _trajectory_row_from_state(
                 state=state,
@@ -275,7 +288,7 @@ class Recorder:
                 scenario_id=self.scenario_id,
                 frame_index=frame_index,
                 time_s=time_s,
-                command=(commands or {}).get(state.crane_id) if commands else None,
+                command=command_map.get(state.crane_id),
                 weather_state=weather_state,
             )
             for state in states
@@ -297,6 +310,52 @@ class Recorder:
             )
             for event in events
         ]
+        pair_risk_rows = _pair_risk_rows_from_online_risk(
+            online_risk,
+            episode_id=episode_id,
+            scenario_id=self.scenario_id,
+            frame_index=frame_index,
+            time_s=time_s,
+        )
+        graph_edge_rows = _graph_edge_rows_from_online_risk(
+            online_risk,
+            episode_id=episode_id,
+            frame_index=frame_index,
+            time_s=time_s,
+        )
+        observation_rows = [
+            _observation_log_entry_from_any(
+                observation,
+                episode_id=episode_id,
+                time_s=time_s,
+            )
+            for observation in observations
+        ]
+        decision_rows = [
+            _decision_log_entry_from_any(
+                call,
+                episode_id=episode_id,
+                time_s=time_s,
+            )
+            for call in llm_calls
+        ]
+        command_rows = _command_log_entries_from_calls(
+            llm_calls=llm_calls,
+            commands=command_map,
+            episode_id=episode_id,
+            time_s=time_s,
+        )
+        intervention_rows = [
+            _intervention_log_entry_from_any(
+                intervention,
+                episode_id=episode_id,
+                time_s=time_s,
+            )
+            for intervention in [
+                *interventions,
+                *_interventions_from_commands(command_map.values()),
+            ]
+        ]
         frame = build_sim_frame(
             episode_id=episode_id,
             scenario_id=self.scenario_id,
@@ -306,14 +365,23 @@ class Recorder:
             states=states,
             weather_state=weather_state,
             commands=commands,
+            pairs=_online_risk_pairs(online_risk),
             events=[row.model_dump(mode="json") for row in event_rows],
             for_realtime=False,
         )
         self.parquet_writers.write_trajectories(trajectory_rows)
+        self.parquet_writers.write_pair_risks(pair_risk_rows)
+        self.parquet_writers.write_graph_edges(graph_edge_rows)
         self.parquet_writers.write_weather([weather_row])
+        self.jsonl_writers.write_observations(observation_rows)
+        self.jsonl_writers.write_decisions(decision_rows)
+        self.jsonl_writers.write_commands(command_rows)
+        self.jsonl_writers.write_interventions(intervention_rows)
         self.jsonl_writers.write_events(event_rows)
         self.visual_writer.append_frame(frame)
         self._trajectory_rows.extend(trajectory_rows)
+        self._pair_risk_rows.extend(pair_risk_rows)
+        self._command_logs.extend(command_rows)
         self._event_logs.extend(event_rows)
         self._last_time_s = time_s
         self._last_frame_index = frame_index
@@ -1226,7 +1294,16 @@ def _dump_for_json(value: Any) -> Any:
         return [_dump_for_json(child) for child in value]
     if isinstance(value, tuple):
         return [_dump_for_json(child) for child in value]
-    return _enum_or_value(value)
+    enum_value = _enum_or_value(value)
+    if enum_value is not value:
+        return enum_value
+    if hasattr(value, "__dict__"):
+        return {
+            str(key): _dump_for_json(child)
+            for key, child in vars(value).items()
+            if not str(key).startswith("_")
+        }
+    return value
 
 
 def _enum_or_value(value: Any) -> Any:
@@ -1360,6 +1437,284 @@ def _event_log_entry_from_any(
     )
 
 
+def _observation_log_entry_from_any(
+    observation: Any,
+    *,
+    episode_id: str,
+    time_s: float,
+) -> ObservationLogEntry:
+    payload = _payload_dict(observation)
+    observation_body = payload.get("observation")
+    if observation_body is None:
+        observation_body = {
+            key: value
+            for key, value in payload.items()
+            if key
+            not in {
+                "schema_version",
+                "observation_id",
+                "episode_id",
+                "time_s",
+                "crane_id",
+                "risk_prompt_mode",
+                "source_snapshot_id",
+            }
+        }
+    return ObservationLogEntry(
+        observation_id=payload.get("observation_id"),
+        episode_id=str(payload.get("episode_id", episode_id)),
+        time_s=float(payload.get("time_s", time_s)),
+        crane_id=payload.get("crane_id"),
+        risk_prompt_mode=str(_enum_or_value(payload.get("risk_prompt_mode", "unknown"))),
+        observation=dict(observation_body),
+        source_snapshot_id=payload.get("source_snapshot_id", "unknown"),
+    )
+
+
+def _decision_log_entry_from_any(
+    call: Any,
+    *,
+    episode_id: str,
+    time_s: float,
+) -> DecisionLogEntry:
+    payload = _payload_dict(call)
+    parsed = _nested_payload(payload, "parsed_command")
+    raw = _nested_payload(payload, "raw_response")
+    return DecisionLogEntry(
+        episode_id=episode_id,
+        time_s=float(
+            payload.get("time_s")
+            or parsed.get("time_s")
+            or raw.get("time_s")
+            or time_s
+        ),
+        crane_id=str(
+            payload.get("crane_id")
+            or parsed.get("crane_id")
+            or raw.get("crane_id")
+            or "unknown"
+        ),
+        provider=str(_enum_or_value(payload.get("provider", "unknown"))),
+        model=str(payload.get("model", raw.get("model", "unknown"))),
+        call_record=payload,
+    )
+
+
+def _command_log_entries_from_calls(
+    *,
+    llm_calls: Sequence[Any],
+    commands: Mapping[str, Any],
+    episode_id: str,
+    time_s: float,
+) -> List[CommandLogEntry]:
+    if llm_calls:
+        return [
+            _command_log_entry_from_call(
+                call,
+                executed_command=commands.get(
+                    str(
+                        _nested_payload(_payload_dict(call), "parsed_command").get(
+                            "crane_id", ""
+                        )
+                    )
+                ),
+                episode_id=episode_id,
+                time_s=time_s,
+            )
+            for call in llm_calls
+        ]
+    return [
+        _command_log_entry_from_executed_command(
+            command,
+            episode_id=episode_id,
+            time_s=time_s,
+        )
+        for command in commands.values()
+    ]
+
+
+def _command_log_entry_from_call(
+    call: Any,
+    *,
+    executed_command: Optional[Any],
+    episode_id: str,
+    time_s: float,
+) -> CommandLogEntry:
+    payload = _payload_dict(call)
+    parsed = _nested_payload(payload, "parsed_command")
+    raw = _nested_payload(payload, "raw_response")
+    executed = _payload_dict(executed_command) if executed_command is not None else {}
+    return CommandLogEntry(
+        episode_id=episode_id,
+        time_s=float(payload.get("time_s") or parsed.get("time_s") or time_s),
+        decision_index=payload.get("attempt_index"),
+        crane_id=str(parsed.get("crane_id") or raw.get("crane_id") or "unknown"),
+        operator_id=parsed.get("operator_id") or raw.get("operator_id"),
+        observation_id=parsed.get("observation_id") or raw.get("observation_id"),
+        provider=str(_enum_or_value(payload.get("provider", raw.get("provider"))))
+        if payload.get("provider", raw.get("provider")) is not None
+        else None,
+        model=payload.get("model") or raw.get("model"),
+        raw_llm_response=raw or None,
+        parsed_command=parsed or None,
+        executed_command=executed or None,
+        modified_by_intervention=bool(executed.get("interventions")),
+        modified_by_mechanical_safety=bool(
+            executed.get("mechanical_limit") or executed.get("forbidden_zone")
+        ),
+        intervention_reason=_joined_reasons(executed.get("modification_reasons")),
+        latency_ms=payload.get("latency_ms") or raw.get("latency_ms"),
+        token_usage=payload.get("token_usage") or raw.get("token_usage"),
+        retry_count=int(payload.get("attempt_index", 0)),
+        validation_errors=list(payload.get("validation_errors", [])),
+        cache_hit=bool(payload.get("cache_hit", False)),
+        confidence=parsed.get("confidence"),
+        attention_target=parsed.get("attention_target"),
+        reason=parsed.get("reason"),
+    )
+
+
+def _command_log_entry_from_executed_command(
+    command: Any,
+    *,
+    episode_id: str,
+    time_s: float,
+) -> CommandLogEntry:
+    payload = _payload_dict(command)
+    parsed = _nested_payload(payload, "raw_command")
+    return CommandLogEntry(
+        episode_id=episode_id,
+        time_s=float(payload.get("time_s") or parsed.get("time_s") or time_s),
+        crane_id=str(payload.get("crane_id") or parsed.get("crane_id") or "unknown"),
+        operator_id=payload.get("operator_id") or parsed.get("operator_id"),
+        observation_id=payload.get("observation_id") or parsed.get("observation_id"),
+        parsed_command=parsed or None,
+        executed_command=payload,
+        modified_by_intervention=bool(payload.get("interventions")),
+        modified_by_mechanical_safety=bool(
+            payload.get("mechanical_limit") or payload.get("forbidden_zone")
+        ),
+        intervention_reason=_joined_reasons(payload.get("modification_reasons")),
+        confidence=parsed.get("confidence"),
+        attention_target=parsed.get("attention_target"),
+        reason=parsed.get("reason"),
+    )
+
+
+def _interventions_from_commands(commands: Sequence[Any]) -> List[Any]:
+    interventions: List[Any] = []
+    for command in commands:
+        payload = _payload_dict(command)
+        interventions.extend(payload.get("interventions", []) or [])
+    return interventions
+
+
+def _intervention_log_entry_from_any(
+    intervention: Any,
+    *,
+    episode_id: str,
+    time_s: float,
+) -> InterventionLogEntry:
+    payload = _payload_dict(intervention)
+    return InterventionLogEntry(
+        episode_id=episode_id,
+        time_s=float(payload.get("time_s", time_s)),
+        intervention_id=payload.get("intervention_id"),
+        crane_id=payload.get("crane_id"),
+        safety_mode=str(_enum_or_value(payload.get("safety_mode")))
+        if payload.get("safety_mode") is not None
+        else None,
+        risk_level=payload.get("risk_level"),
+        action=payload.get("action", "none"),
+        modified=bool(payload.get("modified", False)),
+        reason=payload.get("reason", ""),
+        pair_ids=list(payload.get("pair_ids", [])),
+    )
+
+
+def _pair_risk_rows_from_online_risk(
+    online_risk: Optional[Any],
+    *,
+    episode_id: str,
+    scenario_id: Optional[str],
+    frame_index: int,
+    time_s: float,
+) -> List[PairRiskRow]:
+    rows: List[PairRiskRow] = []
+    for pair in _online_risk_pairs(online_risk):
+        pair_payload = _payload_dict(pair)
+        rows.append(
+            PairRiskRow(
+                episode_id=episode_id,
+                scenario_id=scenario_id,
+                frame=frame_index,
+                time_s=float(pair_payload.get("time_s", time_s)),
+                crane_i=str(
+                    pair_payload.get("crane_i")
+                    or pair_payload.get("crane_id_a")
+                    or pair_payload.get("src_crane_id")
+                ),
+                crane_j=str(
+                    pair_payload.get("crane_j")
+                    or pair_payload.get("crane_id_b")
+                    or pair_payload.get("dst_crane_id")
+                ),
+                distance_min_raw_now_m=pair_payload.get("distance_min_raw_now_m")
+                or pair_payload.get("d_min_online_m"),
+                clearance_min_now_m=pair_payload.get("clearance_min_now_m")
+                or pair_payload.get("d_hat_min_m"),
+                ttc_5s_s=pair_payload.get("ttc_5s_s")
+                or pair_payload.get("ttc_hat_s"),
+                risk_level_now=pair_payload.get("risk_level_now")
+                or pair_payload.get("risk_level"),
+            )
+        )
+    return rows
+
+
+def _graph_edge_rows_from_online_risk(
+    online_risk: Optional[Any],
+    *,
+    episode_id: str,
+    frame_index: int,
+    time_s: float,
+) -> List[GraphEdgeRow]:
+    rows: List[GraphEdgeRow] = []
+    for pair in _online_risk_pairs(online_risk):
+        pair_payload = _payload_dict(pair)
+        crane_i = str(pair_payload.get("crane_i") or pair_payload.get("crane_id_a"))
+        crane_j = str(pair_payload.get("crane_j") or pair_payload.get("crane_id_b"))
+        for src, dst in [(crane_i, crane_j), (crane_j, crane_i)]:
+            rows.append(
+                GraphEdgeRow(
+                    episode_id=episode_id,
+                    frame=frame_index,
+                    time_s=float(pair_payload.get("time_s", time_s)),
+                    src_crane_id=src,
+                    dst_crane_id=dst,
+                    edge_distance_m=pair_payload.get("edge_distance_m")
+                    or pair_payload.get("d_min_online_m"),
+                    edge_ttc_s=pair_payload.get("edge_ttc_s")
+                    or pair_payload.get("ttc_hat_s"),
+                    edge_risk_level=pair_payload.get("edge_risk_level")
+                    or pair_payload.get("risk_level"),
+                    edge_weight_physics_prior=pair_payload.get(
+                        "edge_weight_physics_prior"
+                    )
+                    or pair_payload.get("confidence"),
+                )
+            )
+    return rows
+
+
+def _online_risk_pairs(online_risk: Optional[Any]) -> List[Any]:
+    if online_risk is None:
+        return []
+    payload = _payload_dict(online_risk)
+    pairs = payload.get("pairs", [])
+    return list(pairs or [])
+
+
 def _pair_risk_row_from_offline_label(label: OfflineRiskLabel) -> PairRiskRow:
     payload = label.model_dump(mode="json")
     label_15s = payload.get("future_window_labels", {}).get("15s", {})
@@ -1430,6 +1785,30 @@ def _model_or_mapping_to_dict(row: object) -> Dict[str, Any]:
         error_code="RECORDER_E_PARQUET_ROW_TYPE",
         details={"row_type": type(row).__name__},
     )
+
+
+def _payload_dict(value: Any) -> Dict[str, Any]:
+    payload = _dump_for_json(value)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    raise DataExportError(
+        "recorder export payload must be mapping-like",
+        error_code="RECORDER_E_EXPORT_PAYLOAD_TYPE",
+        details={"payload_type": type(value).__name__},
+    )
+
+
+def _nested_payload(payload: Mapping[str, Any], key: str) -> Dict[str, Any]:
+    value = payload.get(key)
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _joined_reasons(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return "; ".join(str(item) for item in value) or None
+    return str(value)
 
 
 def _validate_summary_row(

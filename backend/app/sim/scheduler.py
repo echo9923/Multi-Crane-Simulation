@@ -325,6 +325,9 @@ class EpisodeRunner:
             events=copy.deepcopy(frame_events),
             status=self.episode_status,
             snapshot_id=snapshot.snapshot_id if snapshot is not None else None,
+            online_risk=copy.deepcopy(risk_now),
+            observations=copy.deepcopy(_observations_from_decision_results(decision_results)),
+            llm_calls=copy.deepcopy(_llm_calls_from_decision_results(decision_results)),
         )
         if (
             self.config.run_mode is RuntimeMode.INTERACTIVE_SERVER
@@ -1216,6 +1219,22 @@ def _event_to_dict(event: Any) -> dict[str, Any]:
 
 def _events_to_dicts(events: Sequence[Any]) -> list[dict[str, Any]]:
     return [_event_to_dict(event) for event in events]
+
+
+def _observations_from_decision_results(results: Sequence[Any]) -> list[Any]:
+    observations = []
+    for result in results:
+        observation = getattr(result, "observation", None)
+        if observation is not None:
+            observations.append(observation)
+    return observations
+
+
+def _llm_calls_from_decision_results(results: Sequence[Any]) -> list[Any]:
+    calls = []
+    for result in results:
+        calls.extend(list(getattr(result, "call_records", []) or []))
+    return calls
 
 
 def _event_field(event: Any, field_name: str) -> Any:
