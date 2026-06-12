@@ -31,9 +31,13 @@ from backend.app.schemas.scheduler import (
 )
 from backend.app.schemas.task import Task, TaskPoint, TaskQueue
 from backend.app.schemas.weather import WeatherState, WeatherVisibilityContext
+from backend.app.sim.observation import build_observations_for_snapshot
 from backend.app.sim.crane_model import build_crane_model_library
 from backend.app.sim.layout import build_crane_configs
 from backend.app.sim.physics import initialize_crane_state
+from backend.app.sim.scheduler import freeze_world_snapshot, to_observation_snapshot
+from backend.app.sim.task_observation import TaskObservationContext
+from backend.app.sim.task_queue import IdleObservationContext
 from backend.app.tests.test_config_schema import load_fixture
 
 
@@ -222,6 +226,58 @@ def _world_snapshot_payload() -> dict:
         },
         "recent_decisions": {"C1": [{"time_s": 0.5, "command_summary": "neutral"}]},
         "recent_events": {"C1": [{"event_type": "task_started", "time_s": 0.0}]},
+    }
+
+
+def _task_contexts(time_s: float = 1.0) -> dict:
+    return {
+        "C1": TaskObservationContext(
+            crane_id="C1",
+            time_s=time_s,
+            has_active_task=True,
+            task_id="T_C1_001",
+            task_type="easy_task",
+            task_stage="move_to_pickup",
+            priority="medium",
+            deadline_s=180.0,
+            deadline_missed=False,
+            overtime_s=0.0,
+            pickup=TaskPoint(
+                x=10.0,
+                y=0.0,
+                z=1.0,
+                zone_id="material_zone",
+                zone_type="material",
+            ),
+            dropoff=TaskPoint(
+                x=30.0,
+                y=10.0,
+                z=20.0,
+                zone_id="work_zone",
+                zone_type="work",
+            ),
+            current_target=TaskPoint(
+                x=10.0,
+                y=0.0,
+                z=1.0,
+                zone_id="material_zone",
+                zone_type="material",
+            ),
+            load_type="rebar_bundle",
+            load_weight_t=2.0,
+            load_size_m=[6.0, 1.0, 1.0],
+            load_attached=False,
+            ground_signal_hint="吊钩在目标点附近，请微调。",
+        ),
+        "C2": IdleObservationContext(
+            crane_id="C2",
+            time_s=time_s,
+            has_active_task=False,
+            task_id=None,
+            task_stage="idle",
+            current_target=None,
+            ground_signal_hint="当前无任务，请保持塔吊安全静止并观察现场。",
+        ),
     }
 
 
@@ -480,3 +536,172 @@ def test_replay_validation_config_has_strict_defaults() -> None:
     assert replay.position_tolerance_m == pytest.approx(1.0e-5)
     assert replay.angle_tolerance_rad == pytest.approx(1.0e-7)
     assert replay.velocity_tolerance == pytest.approx(1.0e-6)
+
+
+def test_freeze_world_snapshot_is_stable_and_detached_from_inputs() -> None:
+    configs = _crane_configs(2)
+    states = [initialize_crane_state(config) for config in configs]
+    tasks = [_task("C1")]
+    queues = [TaskQueue(crane_id="C1", tasks=tasks)]
+    control_targets = {
+        "C1": ControlTarget(
+            crane_id="C1",
+            target_slew_velocity_rad_s=0.1,
+            target_trolley_velocity_m_s=0.0,
+            target_hoist_velocity_m_s=0.0,
+        )
+    }
+
+    snapshot = freeze_world_snapshot(
+        episode_id="EP",
+        frame_index=3,
+        time_s=0.30000000000000004,
+        llm_decision_interval_s=0.1,
+        crane_states=states,
+        crane_configs=configs,
+        weather_state=_weather_state(0.3),
+        visibility_context=_visibility_context(0.3),
+        tasks=tasks,
+        task_queues=queues,
+        task_contexts=_task_contexts(0.3),
+        current_commands={"C1": _executed_command(crane_id="C1")},
+        current_control_targets=control_targets,
+        recent_decisions={"C1": [{"time_s": 0.2, "command_summary": "neutral"}]},
+        recent_events={"C1": [{"event_type": "task_started", "time_s": 0.0}]},
+    )
+    repeated = freeze_world_snapshot(
+        episode_id="EP",
+        frame_index=3,
+        time_s=0.30000000000000004,
+        llm_decision_interval_s=0.1,
+        crane_states=states,
+        crane_configs=configs,
+        weather_state=_weather_state(0.3),
+        visibility_context=_visibility_context(0.3),
+        tasks=tasks,
+        task_queues=queues,
+        task_contexts=_task_contexts(0.3),
+        current_commands={"C1": _executed_command(crane_id="C1")},
+        current_control_targets=control_targets,
+        recent_decisions={"C1": [{"time_s": 0.2, "command_summary": "neutral"}]},
+        recent_events={"C1": [{"event_type": "task_started", "time_s": 0.0}]},
+    )
+
+    assert snapshot.snapshot_id == "SNAP_EP_000003"
+    assert snapshot.decision_time_bucket == 3
+    assert snapshot.model_dump(mode="json") == repeated.model_dump(mode="json")
+
+    states[0] = states[0].model_copy(update={"theta_rad": 99.0})
+    tasks[0] = tasks[0].model_copy(update={"status": "completed"})
+    control_targets["C1"] = control_targets["C1"].model_copy(
+        update={"target_slew_velocity_rad_s": 9.9}
+    )
+
+    assert snapshot.crane_states[0].theta_rad != 99.0
+    assert snapshot.tasks[0].status == "pending"
+    assert (
+        snapshot.current_control_targets["C1"].target_slew_velocity_rad_s
+        == pytest.approx(0.1)
+    )
+
+
+def test_to_observation_snapshot_uses_same_snapshot_id_and_control_targets() -> None:
+    configs = _crane_configs(2)
+    states = [initialize_crane_state(config) for config in configs]
+    snapshot = freeze_world_snapshot(
+        episode_id="EP",
+        frame_index=42,
+        time_s=4.2,
+        llm_decision_interval_s=0.1,
+        crane_states=states,
+        crane_configs=configs,
+        weather_state=_weather_state(4.2),
+        visibility_context=_visibility_context(4.2),
+        tasks=[_task("C1")],
+        task_queues=[TaskQueue(crane_id="C1", tasks=[_task("C1")])],
+        task_contexts=_task_contexts(4.2),
+        current_commands={"C1": _executed_command(crane_id="C1")},
+        current_control_targets={
+            "C1": ControlTarget(
+                crane_id="C1",
+                target_slew_velocity_rad_s=-0.1,
+                target_trolley_velocity_m_s=0.2,
+                target_hoist_velocity_m_s=0.0,
+            )
+        },
+        recent_decisions={"C1": [{"time_s": 4.0, "command_summary": "slew left"}]},
+        recent_events={"C1": [{"event_type": "task_started", "time_s": 4.0}]},
+    )
+
+    observation_snapshot = to_observation_snapshot(
+        snapshot,
+        neighbor_map={"C1": ["C2"], "C2": ["C1"]},
+    )
+    observations = build_observations_for_snapshot(
+        snapshot=observation_snapshot,
+        crane_ids=["C1", "C2"],
+        risk_prompt_mode="R0",
+        operator_profiles={"C1": "normal", "C2": "conservative"},
+    )
+
+    assert observation_snapshot.snapshot_id == snapshot.snapshot_id
+    assert set(observation_snapshot.current_commands) == {"C1"}
+    assert observation_snapshot.current_commands["C1"].crane_id == "C1"
+    assert observation_snapshot.current_commands["C1"].source_command_id is None
+    assert {observation.source_snapshot_id for observation in observations} == {
+        snapshot.snapshot_id
+    }
+
+
+@pytest.mark.parametrize(
+    ("time_s", "interval"),
+    [
+        (-0.1, 0.1),
+        (0.0, 0.0),
+        (math.nan, 0.1),
+        (0.0, math.inf),
+    ],
+)
+def test_freeze_world_snapshot_rejects_invalid_time_inputs(
+    time_s: float, interval: float
+) -> None:
+    configs = _crane_configs(2)
+    states = [initialize_crane_state(config) for config in configs]
+
+    with pytest.raises(SchedulerError):
+        freeze_world_snapshot(
+            episode_id="EP",
+            frame_index=0,
+            time_s=time_s,
+            llm_decision_interval_s=interval,
+            crane_states=states,
+            crane_configs=configs,
+            weather_state=_weather_state(0.0),
+            visibility_context=_visibility_context(0.0),
+        )
+
+
+def test_freeze_world_snapshot_rejects_recent_decision_leaks() -> None:
+    configs = _crane_configs(2)
+    states = [initialize_crane_state(config) for config in configs]
+
+    with pytest.raises(SchedulerError):
+        freeze_world_snapshot(
+            episode_id="EP",
+            frame_index=1,
+            time_s=1.0,
+            llm_decision_interval_s=0.5,
+            crane_states=states,
+            crane_configs=configs,
+            weather_state=_weather_state(1.0),
+            visibility_context=_visibility_context(1.0),
+            recent_decisions={
+                "C1": [
+                    {
+                        "time_s": 0.5,
+                        "command_summary": "neutral",
+                        "future_min_distance_m": 0.1,
+                    }
+                ]
+            },
+        )
