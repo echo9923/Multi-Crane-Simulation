@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from itertools import combinations
 from collections import defaultdict
+from collections import Counter
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from pydantic import Field
@@ -20,7 +21,10 @@ from backend.app.schemas.risk import (
     OfflineLabelError,
     OfflinePairGeometryDistance,
     OfflinePairRiskRecord,
+    OfflineRiskAggregate,
     OfflineRiskLabel,
+    OfflineRiskReport,
+    OFFLINE_LABEL_W_LOW_POSITIVE_RATIO,
     RiskBaseModel,
     RiskLevel,
 )
@@ -281,6 +285,61 @@ def compute_pair_geometry_distances(
     )
 
 
+def build_offline_risk_report(
+    *,
+    labels: Sequence[OfflineRiskLabel],
+    positive_collision_ratio_warning_threshold: float = 0.01,
+) -> OfflineRiskReport:
+    if not 0.0 <= positive_collision_ratio_warning_threshold <= 1.0:
+        raise ValueError("positive collision ratio warning threshold must be in [0, 1]")
+    aggregates: List[OfflineRiskAggregate] = []
+    for group_by in ["global", "episode", "scenario", "crane_pair"]:
+        aggregates.extend(
+            aggregate_offline_labels(
+                labels=labels,
+                group_by=group_by,
+            )
+        )
+    warnings = _low_positive_ratio_warnings(
+        aggregates=aggregates,
+        threshold=positive_collision_ratio_warning_threshold,
+    )
+    return OfflineRiskReport(
+        total_labels=len(labels),
+        aggregates=aggregates,
+        warnings=warnings,
+    )
+
+
+def aggregate_offline_labels(
+    *,
+    labels: Sequence[OfflineRiskLabel],
+    group_by: str,
+) -> List[OfflineRiskAggregate]:
+    grouped: Dict[str, List[OfflineRiskLabel]] = defaultdict(list)
+    if group_by == "global":
+        grouped["all"] = list(labels)
+    elif group_by == "episode":
+        for label in labels:
+            grouped[label.episode_id].append(label)
+    elif group_by == "scenario":
+        for label in labels:
+            grouped[label.scenario_id or "unknown"].append(label)
+    elif group_by == "crane_pair":
+        for label in labels:
+            grouped[label.pair_id].append(label)
+    else:
+        raise ValueError("unsupported aggregate group_by")
+
+    if not grouped:
+        grouped["all" if group_by == "global" else "none"] = []
+
+    return [
+        _build_aggregate(group_by=group_by, group_key=key, labels=items)
+        for key, items in sorted(grouped.items())
+    ]
+
+
 def compute_future_window_label(
     *,
     current_index: int,
@@ -488,6 +547,57 @@ def _labels_to_pair_records(labels: Sequence[OfflineRiskLabel]) -> List[OfflineP
             )
         )
     return records
+
+
+def _build_aggregate(
+    *,
+    group_by: str,
+    group_key: str,
+    labels: Sequence[OfflineRiskLabel],
+) -> OfflineRiskAggregate:
+    sample_count = len(labels)
+    positive_count_5s = sum(label.collision_label_5s for label in labels)
+    positive_count_10s = sum(label.collision_label_10s for label in labels)
+    return OfflineRiskAggregate(
+        group_by=group_by,
+        group_key=group_key,
+        sample_count=sample_count,
+        positive_count_5s=positive_count_5s,
+        positive_ratio_5s=(
+            positive_count_5s / sample_count if sample_count else 0.0
+        ),
+        positive_count_10s=positive_count_10s,
+        positive_ratio_10s=(
+            positive_count_10s / sample_count if sample_count else 0.0
+        ),
+        risk_level_counts_5s=dict(Counter(label.risk_level_5s for label in labels)),
+        risk_level_counts_10s=dict(Counter(label.risk_level_10s for label in labels)),
+    )
+
+
+def _low_positive_ratio_warnings(
+    *,
+    aggregates: Sequence[OfflineRiskAggregate],
+    threshold: float,
+) -> List[Dict[str, object]]:
+    warnings: List[Dict[str, object]] = []
+    for aggregate in aggregates:
+        if aggregate.sample_count == 0 or min(
+            aggregate.positive_ratio_5s,
+            aggregate.positive_ratio_10s,
+        ) < threshold:
+            warnings.append(
+                {
+                    "code": OFFLINE_LABEL_W_LOW_POSITIVE_RATIO,
+                    "group_by": aggregate.group_by,
+                    "group_key": aggregate.group_key,
+                    "positive_ratio_5s": aggregate.positive_ratio_5s,
+                    "positive_ratio_10s": aggregate.positive_ratio_10s,
+                    "threshold": threshold,
+                    "message": "collision positive ratio is below threshold",
+                }
+            )
+    return warnings
 
 
 def _window_key(window_s: float) -> str:

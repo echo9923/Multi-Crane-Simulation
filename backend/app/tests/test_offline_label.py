@@ -23,6 +23,8 @@ from backend.app.sim.offline_label import (
     OfflineLabelGenerator,
     OfflinePairGeometryDistanceAtTime,
     OfflineTrajectoryFrame,
+    aggregate_offline_labels,
+    build_offline_risk_report,
     compute_pair_geometry_distances,
     compute_future_window_label,
     compute_future_window_labels,
@@ -694,4 +696,100 @@ def test_offline_label_generator_reports_clear_errors_for_bad_trajectory_inputs(
             ],
             crane_configs=[],
             risk_config=risk_config,
+        )
+
+
+def test_build_offline_risk_report_counts_positive_ratio_and_risk_levels() -> None:
+    labels = [
+        OfflineRiskLabel.model_validate(_offline_label_payload(frame=0)),
+        OfflineRiskLabel.model_validate(
+            _offline_label_payload(
+                frame=1,
+                min_clearance_future_5s_m=11.0,
+                min_clearance_future_10s_m=11.0,
+                ttc_5s_s=None,
+                ttc_10s_s=None,
+                risk_level_5s="medium",
+                risk_level_10s="medium",
+                collision_label_5s=0,
+                collision_label_10s=0,
+                future_window_labels={
+                    "5s": _future_label(
+                        window_s=5.0,
+                        min_clearance=11.0,
+                        ttc_s=None,
+                        risk_level="medium",
+                        collision_label=0,
+                    ),
+                    "10s": _future_label(
+                        window_s=10.0,
+                        min_clearance=11.0,
+                        ttc_s=None,
+                        risk_level="medium",
+                        collision_label=0,
+                    ),
+                },
+            )
+        ),
+    ]
+
+    report = build_offline_risk_report(
+        labels=labels,
+        positive_collision_ratio_warning_threshold=0.01,
+    )
+    global_aggregate = next(
+        aggregate for aggregate in report.aggregates if aggregate.group_by == "global"
+    )
+
+    assert report.total_labels == 2
+    assert global_aggregate.positive_count_5s == 0
+    assert global_aggregate.positive_ratio_5s == pytest.approx(0.0)
+    assert global_aggregate.positive_count_10s == 1
+    assert global_aggregate.positive_ratio_10s == pytest.approx(0.5)
+    assert global_aggregate.risk_level_counts_5s == {"high": 1, "medium": 1}
+    assert global_aggregate.risk_level_counts_10s == {"collision": 1, "medium": 1}
+    assert any(
+        warning["code"] == "OFFLINE_LABEL_W_LOW_POSITIVE_RATIO"
+        for warning in report.warnings
+    )
+
+
+def test_aggregate_offline_labels_groups_by_episode_scenario_and_pair() -> None:
+    labels = [
+        OfflineRiskLabel.model_validate(_offline_label_payload(frame=0)),
+        OfflineRiskLabel.model_validate(
+            _offline_label_payload(
+                episode_id="ep-002",
+                scenario_id=None,
+                frame=0,
+                crane_i="C1",
+                crane_j="C3",
+                pair_id="C1-C3",
+            )
+        ),
+    ]
+
+    episode_groups = aggregate_offline_labels(labels=labels, group_by="episode")
+    scenario_groups = aggregate_offline_labels(labels=labels, group_by="scenario")
+    pair_groups = aggregate_offline_labels(labels=labels, group_by="crane_pair")
+
+    assert {group.group_key for group in episode_groups} == {"ep-001", "ep-002"}
+    assert {group.group_key for group in scenario_groups} == {
+        "scenario-001",
+        "unknown",
+    }
+    assert {group.group_key for group in pair_groups} == {"C1-C2", "C1-C3"}
+
+
+def test_build_offline_risk_report_handles_empty_labels_and_invalid_threshold() -> None:
+    report = build_offline_risk_report(labels=[])
+
+    assert report.total_labels == 0
+    assert report.aggregates[0].sample_count == 0
+    assert report.warnings[0]["code"] == "OFFLINE_LABEL_W_LOW_POSITIVE_RATIO"
+
+    with pytest.raises(ValueError):
+        build_offline_risk_report(
+            labels=[],
+            positive_collision_ratio_warning_threshold=-0.1,
         )
