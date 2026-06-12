@@ -32,6 +32,7 @@ from backend.app.schemas.state import CraneState
 from backend.app.schemas.weather import WeatherState
 from backend.app.sim.recorder import (
     DataExportError,
+    Recorder,
     RecorderJsonlWriters,
     RecorderParquetWriters,
     VisualFrameWriter,
@@ -1255,3 +1256,86 @@ def test_write_episode_summary_updates_metadata_json(tmp_path: Path) -> None:
     assert EpisodeSummary.model_validate(summary_payload).episode_id == "episode-001"
     assert metadata_payload["episode_status"] == "completed"
     assert metadata_payload["files"]["episode_summary"] == "metadata/episode_summary.json"
+
+
+def test_recorder_orchestrates_initial_step_offline_labels_and_finalize(
+    tmp_path: Path,
+) -> None:
+    config = _resolved_config(tmp_path)
+    recorder = Recorder.from_config(config)
+    initial_state = _crane_state("C1")
+    initial_dump = initial_state.model_dump(mode="json")
+
+    initial_frame = recorder.record_initial_frame(
+        episode_id="episode-001",
+        frame_index=0,
+        time_s=0.0,
+        states=[initial_state],
+        weather_state=_weather_state(),
+        status="running",
+    )
+    step_frame = recorder.record_step(
+        episode_id="episode-001",
+        frame_index=1,
+        time_s=0.5,
+        states=[initial_state],
+        weather_state=_weather_state(),
+        events=[
+            {
+                "event_id": "EVT-001",
+                "event_type": "near_miss",
+                "episode_id": "episode-001",
+                "scenario_id": "site_001",
+                "frame": 1,
+                "time_s": 0.5,
+                "crane_ids": ["C1", "C2"],
+                "risk_level": "high",
+                "details": {},
+            }
+        ],
+        status="running",
+    )
+    recorder.write_offline_labels([_offline_label()])
+    summary = recorder.finalize(episode_status="completed")
+
+    layout = recorder.layout
+    assert layout is not None
+    assert initial_frame.frame == 0
+    assert step_frame.frame == 1
+    assert summary.episode_status == "completed"
+    assert initial_state.model_dump(mode="json") == initial_dump
+
+    trajectories = pq.read_table(layout.trajectories_path)
+    weather = pq.read_table(layout.weather_path)
+    pair_risks = pq.read_table(layout.pair_risks_path)
+    frames = [
+        json.loads(line)
+        for line in layout.frames_jsonl_path.read_text(encoding="utf-8").splitlines()
+    ]
+    events = [
+        json.loads(line)
+        for line in layout.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    summary_payload = json.loads(layout.episode_summary_path.read_text(encoding="utf-8"))
+
+    assert trajectories.num_rows == 2
+    assert weather.num_rows == 2
+    assert pair_risks.num_rows == 1
+    assert frames[0]["frame"] == 0
+    assert frames[1]["frame"] == 1
+    assert events[0]["event_type"] == "near_miss"
+    assert summary_payload["near_miss_count"] == 1
+
+
+def test_record_initial_frame_requires_zero_time_and_frame(tmp_path: Path) -> None:
+    recorder = Recorder.from_config(_resolved_config(tmp_path))
+
+    with pytest.raises(DataExportError):
+        recorder.record_initial_frame(
+            episode_id="episode-001",
+            frame_index=1,
+            time_s=0.5,
+            states=[_crane_state("C1")],
+            weather_state=_weather_state(),
+            status="running",
+        )

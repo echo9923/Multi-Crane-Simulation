@@ -104,6 +104,245 @@ class RunDirectoryLayout:
     events_path: Path
 
 
+class Recorder:
+    def __init__(
+        self,
+        *,
+        resolved_config: ResolvedConfig,
+        scenario_id: Optional[str] = None,
+    ) -> None:
+        self.resolved_config = resolved_config
+        self.scenario_id = scenario_id or _scenario_id_from_config(resolved_config)
+        self.layout: Optional[RunDirectoryLayout] = None
+        self.parquet_writers: Optional[RecorderParquetWriters] = None
+        self.jsonl_writers: Optional[RecorderJsonlWriters] = None
+        self.visual_writer: Optional[VisualFrameWriter] = None
+        self._episode_id: Optional[str] = None
+        self._last_time_s = 0.0
+        self._last_frame_index = 0
+        self._last_num_cranes = 0
+        self._trajectory_rows: List[TrajectoryRow] = []
+        self._pair_risk_rows: List[PairRiskRow] = []
+        self._task_rows: List[TaskParquetRow] = []
+        self._command_logs: List[CommandLogEntry] = []
+        self._event_logs: List[EventLogEntry] = []
+
+    @classmethod
+    def from_config(cls, config: object) -> "Recorder":
+        resolved_config = _coerce_resolved_config(config)
+        return cls(resolved_config=resolved_config)
+
+    def record_initial_frame(
+        self,
+        *,
+        episode_id: str,
+        frame_index: int,
+        time_s: float,
+        states: Sequence[CraneState],
+        weather_state: WeatherState,
+        visibility_context: Optional[Any] = None,
+        commands: Optional[Mapping[str, Any]] = None,
+        task_queues: Sequence[Any] = (),
+        events: Sequence[Any] = (),
+        status: object = "running",
+        **extra: Any,
+    ) -> SimFrame:
+        if frame_index != 0 or not math.isclose(time_s, 0.0):
+            raise DataExportError(
+                "initial frame must be recorded at frame_index=0 and time_s=0",
+                error_code="RECORDER_E_INITIAL_FRAME_TIME",
+                episode_id=episode_id,
+                frame=frame_index,
+            )
+        return self._record_frame(
+            episode_id=episode_id,
+            frame_index=frame_index,
+            time_s=time_s,
+            states=states,
+            weather_state=weather_state,
+            commands=commands,
+            task_queues=task_queues,
+            events=events,
+            status=status,
+        )
+
+    def record_step(
+        self,
+        *,
+        episode_id: str,
+        frame_index: int,
+        time_s: float,
+        states: Sequence[CraneState],
+        weather_state: WeatherState,
+        visibility_context: Optional[Any] = None,
+        commands: Optional[Mapping[str, Any]] = None,
+        control_targets: Sequence[Any] = (),
+        controller_diagnostics: Sequence[Any] = (),
+        task_queues: Sequence[Any] = (),
+        events: Sequence[Any] = (),
+        status: object = "running",
+        snapshot_id: Optional[str] = None,
+        online_risk: Optional[Any] = None,
+        observations: Sequence[Any] = (),
+        llm_calls: Sequence[Any] = (),
+        interventions: Sequence[Any] = (),
+        **extra: Any,
+    ) -> SimFrame:
+        return self._record_frame(
+            episode_id=episode_id,
+            frame_index=frame_index,
+            time_s=time_s,
+            states=states,
+            weather_state=weather_state,
+            commands=commands,
+            task_queues=task_queues,
+            events=events,
+            status=status,
+        )
+
+    def write_offline_labels(self, labels: Sequence[OfflineRiskLabel]) -> None:
+        if not labels:
+            return
+        episode_id = labels[0].episode_id
+        self._ensure_started(episode_id)
+        rows = [_pair_risk_row_from_offline_label(label) for label in labels]
+        assert self.parquet_writers is not None
+        self.parquet_writers.write_pair_risks(rows)
+        self._pair_risk_rows.extend(rows)
+
+    def finalize(self, *, episode_status: object) -> EpisodeSummary:
+        if self.layout is None or self._episode_id is None:
+            raise DataExportError(
+                "cannot finalize recorder before any frame is recorded",
+                error_code="RECORDER_E_FINALIZE_EMPTY",
+            )
+        assert self.parquet_writers is not None
+        assert self.jsonl_writers is not None
+        assert self.visual_writer is not None
+        summary = build_episode_summary(
+            episode_id=self._episode_id,
+            scenario_id=self.scenario_id,
+            episode_status=episode_status,
+            duration_s=self._last_time_s,
+            num_cranes=self._last_num_cranes,
+            tasks=self._task_rows,
+            pair_risk_rows=self._pair_risk_rows,
+            command_logs=self._command_logs,
+            event_logs=self._event_logs,
+            warnings=[*self.parquet_writers.warnings, *self.jsonl_writers.warnings],
+            state_jump_max_m=None,
+            replay_available=False,
+            dt_s=_infer_dt_s(self._trajectory_rows),
+        )
+        self.parquet_writers.flush_all()
+        self.jsonl_writers.flush_all()
+        manifest = build_episode_manifest(
+            episode_id=self._episode_id,
+            scenario_id=self.scenario_id,
+            episode_status=episode_status,
+            frame_count=self._last_frame_index + 1,
+            dt_s=max(_infer_dt_s(self._trajectory_rows), 1.0e-9),
+            crane_configs=[],
+            resolved_config=self.resolved_config,
+            offline_labels_available=bool(self._pair_risk_rows),
+        )
+        self.visual_writer.write_manifest(manifest)
+        self.visual_writer.flush()
+        write_episode_summary(layout=self.layout, summary=summary)
+        return summary
+
+    def _record_frame(
+        self,
+        *,
+        episode_id: str,
+        frame_index: int,
+        time_s: float,
+        states: Sequence[CraneState],
+        weather_state: WeatherState,
+        commands: Optional[Mapping[str, Any]],
+        task_queues: Sequence[Any],
+        events: Sequence[Any],
+        status: object,
+    ) -> SimFrame:
+        self._ensure_started(episode_id)
+        assert self.parquet_writers is not None
+        assert self.jsonl_writers is not None
+        assert self.visual_writer is not None
+        trajectory_rows = [
+            _trajectory_row_from_state(
+                state=state,
+                episode_id=episode_id,
+                scenario_id=self.scenario_id,
+                frame_index=frame_index,
+                time_s=time_s,
+                command=(commands or {}).get(state.crane_id) if commands else None,
+                weather_state=weather_state,
+            )
+            for state in states
+        ]
+        weather_row = _weather_row_from_state(
+            episode_id=episode_id,
+            scenario_id=self.scenario_id,
+            frame_index=frame_index,
+            time_s=time_s,
+            weather_state=weather_state,
+        )
+        event_rows = [
+            _event_log_entry_from_any(
+                event,
+                episode_id=episode_id,
+                scenario_id=self.scenario_id,
+                frame_index=frame_index,
+                time_s=time_s,
+            )
+            for event in events
+        ]
+        frame = build_sim_frame(
+            episode_id=episode_id,
+            scenario_id=self.scenario_id,
+            frame_index=frame_index,
+            time_s=time_s,
+            episode_status=status,
+            states=states,
+            weather_state=weather_state,
+            commands=commands,
+            events=[row.model_dump(mode="json") for row in event_rows],
+            for_realtime=False,
+        )
+        self.parquet_writers.write_trajectories(trajectory_rows)
+        self.parquet_writers.write_weather([weather_row])
+        self.jsonl_writers.write_events(event_rows)
+        self.visual_writer.append_frame(frame)
+        self._trajectory_rows.extend(trajectory_rows)
+        self._event_logs.extend(event_rows)
+        self._last_time_s = time_s
+        self._last_frame_index = frame_index
+        self._last_num_cranes = len(states)
+        return frame
+
+    def _ensure_started(self, episode_id: str) -> None:
+        if self.layout is not None:
+            if episode_id != self._episode_id:
+                raise DataExportError(
+                    "recorder cannot switch episode_id after start",
+                    error_code="RECORDER_E_EPISODE_SWITCH",
+                    episode_id=episode_id,
+                )
+            return
+        self._episode_id = episode_id
+        self.layout = init_run_directory(
+            config=self.resolved_config,
+            episode_id=episode_id,
+            scenario_id=self.scenario_id,
+        )
+        self.parquet_writers = RecorderParquetWriters.from_layout(self.layout)
+        self.jsonl_writers = RecorderJsonlWriters.from_layout(self.layout)
+        self.visual_writer = VisualFrameWriter(
+            frames_path=self.layout.frames_jsonl_path,
+            manifest_path=self.layout.episode_manifest_path,
+        )
+
+
 def init_run_directory(
     *,
     config: object,
@@ -992,6 +1231,193 @@ def _dump_for_json(value: Any) -> Any:
 
 def _enum_or_value(value: Any) -> Any:
     return getattr(value, "value", value)
+
+
+def _trajectory_row_from_state(
+    *,
+    state: CraneState,
+    episode_id: str,
+    scenario_id: Optional[str],
+    frame_index: int,
+    time_s: float,
+    command: Optional[Any],
+    weather_state: Optional[WeatherState],
+) -> TrajectoryRow:
+    command_payload = _command_for_frame(command) or {}
+    load_size = state.load_size_m or [None, None, None]
+    return TrajectoryRow(
+        episode_id=episode_id,
+        scenario_id=scenario_id,
+        frame=frame_index,
+        time_s=time_s,
+        crane_id=state.crane_id,
+        theta_rad=state.theta_rad,
+        theta_sin=state.theta_sin,
+        theta_cos=state.theta_cos,
+        theta_dot_rad_s=state.theta_dot_rad_s,
+        theta_ddot_rad_s2=state.theta_ddot_rad_s2,
+        trolley_r_m=state.trolley_r_m,
+        trolley_v_m_s=state.trolley_v_m_s,
+        hook_h_m=state.hook_h_m,
+        hoist_v_m_s=state.hoist_v_m_s,
+        root_x=state.root_position[0],
+        root_y=state.root_position[1],
+        root_z=state.root_position[2],
+        tip_x=state.tip_position[0],
+        tip_y=state.tip_position[1],
+        tip_z=state.tip_position[2],
+        hook_x=state.hook_position[0],
+        hook_y=state.hook_position[1],
+        hook_z=state.hook_position[2],
+        load_attached=state.load_attached,
+        load_type=state.load_type,
+        load_weight_t=state.load_weight_t,
+        load_size_x_m=load_size[0],
+        load_size_y_m=load_size[1],
+        load_size_z_m=load_size[2],
+        task_id=state.task_id,
+        task_stage=state.task_stage,
+        executed_slew_direction=_nested_get(
+            command_payload, ["left_joystick", "slew", "direction"]
+        ),
+        executed_slew_gear=_nested_get(
+            command_payload, ["left_joystick", "slew", "gear"]
+        ),
+        executed_trolley_direction=_nested_get(
+            command_payload, ["left_joystick", "trolley", "direction"]
+        ),
+        executed_trolley_gear=_nested_get(
+            command_payload, ["left_joystick", "trolley", "gear"]
+        ),
+        executed_hoist_direction=_nested_get(
+            command_payload, ["right_joystick", "hoist", "direction"]
+        ),
+        executed_hoist_gear=_nested_get(
+            command_payload, ["right_joystick", "hoist", "gear"]
+        ),
+        executed_deadman_pressed=command_payload.get("deadman_pressed"),
+        executed_emergency_stop=command_payload.get("emergency_stop"),
+        executed_task_action=command_payload.get("task_action"),
+        wind_speed_m_s=weather_state.wind_speed_m_s if weather_state else None,
+        wind_gust_m_s=weather_state.wind_gust_m_s if weather_state else None,
+        wind_direction_deg=weather_state.wind_direction_deg if weather_state else None,
+        visibility_level=(
+            _enum_or_value(weather_state.visibility_level) if weather_state else None
+        ),
+    )
+
+
+def _weather_row_from_state(
+    *,
+    episode_id: str,
+    scenario_id: Optional[str],
+    frame_index: int,
+    time_s: float,
+    weather_state: WeatherState,
+) -> WeatherParquetRow:
+    return WeatherParquetRow(
+        episode_id=episode_id,
+        scenario_id=scenario_id,
+        frame=frame_index,
+        time_s=time_s,
+        wind_speed_m_s=weather_state.wind_speed_m_s,
+        wind_gust_m_s=weather_state.wind_gust_m_s,
+        wind_direction_deg=weather_state.wind_direction_deg,
+        visibility_level=_enum_or_value(weather_state.visibility_level),
+        rain_level=_enum_or_value(weather_state.rain_level),
+    )
+
+
+def _event_log_entry_from_any(
+    event: Any,
+    *,
+    episode_id: str,
+    scenario_id: Optional[str],
+    frame_index: int,
+    time_s: float,
+) -> EventLogEntry:
+    payload = _dump_for_json(event)
+    if not isinstance(payload, dict):
+        payload = {
+            "event_type": str(payload),
+            "details": {"raw_event": str(payload)},
+        }
+    event_id = payload.get("event_id") or (
+        f"EVT_{frame_index:06d}_{abs(hash(str(payload))) % 100000:05d}"
+    )
+    return EventLogEntry(
+        event_id=event_id,
+        event_type=str(payload.get("event_type", "unknown")),
+        episode_id=str(payload.get("episode_id", episode_id)),
+        scenario_id=payload.get("scenario_id", scenario_id),
+        frame=int(payload.get("frame", payload.get("frame_index", frame_index))),
+        time_s=float(payload.get("time_s", time_s)),
+        crane_ids=list(payload.get("crane_ids", [])),
+        risk_level=payload.get("risk_level"),
+        distance_min_raw_now_m=payload.get("distance_min_raw_now_m"),
+        clearance_min_now_m=payload.get("clearance_min_now_m"),
+        details=dict(payload.get("details", {})),
+    )
+
+
+def _pair_risk_row_from_offline_label(label: OfflineRiskLabel) -> PairRiskRow:
+    payload = label.model_dump(mode="json")
+    label_15s = payload.get("future_window_labels", {}).get("15s", {})
+    return PairRiskRow(
+        episode_id=payload["episode_id"],
+        scenario_id=payload.get("scenario_id"),
+        frame=payload["frame"],
+        time_s=payload["time_s"],
+        crane_i=payload["crane_i"],
+        crane_j=payload["crane_j"],
+        distance_min_raw_now_m=payload.get("distance_min_raw_now_m"),
+        clearance_min_now_m=payload.get("clearance_min_now_m"),
+        distance_jib_jib_raw_now_m=payload.get("distance_jib_jib_raw_now_m"),
+        clearance_jib_jib_now_m=payload.get("clearance_jib_jib_now_m"),
+        distance_jib_i_hook_j_raw_now_m=payload.get(
+            "distance_jib_i_hook_j_raw_now_m"
+        ),
+        clearance_jib_i_hook_j_now_m=payload.get("clearance_jib_i_hook_j_now_m"),
+        distance_jib_j_hook_i_raw_now_m=payload.get(
+            "distance_jib_j_hook_i_raw_now_m"
+        ),
+        clearance_jib_j_hook_i_now_m=payload.get("clearance_jib_j_hook_i_now_m"),
+        distance_hook_hook_raw_now_m=payload.get("distance_hook_hook_raw_now_m"),
+        clearance_hook_hook_now_m=payload.get("clearance_hook_hook_now_m"),
+        min_clearance_future_5s_m=payload.get("min_clearance_future_5s_m"),
+        min_clearance_future_10s_m=payload.get("min_clearance_future_10s_m"),
+        min_clearance_future_15s_m=label_15s.get("min_clearance_future_m"),
+        ttc_5s_s=payload.get("ttc_5s_s"),
+        ttc_10s_s=payload.get("ttc_10s_s"),
+        ttc_15s_s=label_15s.get("ttc_s"),
+        risk_level_5s=payload.get("risk_level_5s"),
+        risk_level_10s=payload.get("risk_level_10s"),
+        risk_level_15s=label_15s.get("risk_level"),
+        collision_label_5s=payload.get("collision_label_5s"),
+        collision_label_10s=payload.get("collision_label_10s"),
+        collision_label_15s=label_15s.get("collision_label"),
+    )
+
+
+def _infer_dt_s(rows: Sequence[TrajectoryRow]) -> float:
+    times = sorted({row.time_s for row in rows})
+    if len(times) < 2:
+        return 0.0
+    deltas = [
+        right - left
+        for left, right in zip(times, times[1:])
+        if right > left
+    ]
+    return min(deltas) if deltas else 0.0
+
+
+def _nested_get(payload: Mapping[str, Any], path: Sequence[str]) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, Mapping) or key not in current:
+            return None
+        current = current[key]
+    return current
 
 
 def _model_or_mapping_to_dict(row: object) -> Dict[str, Any]:
