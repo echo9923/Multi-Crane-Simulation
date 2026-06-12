@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from backend.app.schemas.config import RiskConfig
+from backend.app.schemas.state import CraneState
 from backend.app.schemas.risk import (
     OFFLINE_LABEL_SCHEMA_VERSION,
     RISK_E_FUTURE_TRUTH_FORBIDDEN,
@@ -16,6 +17,10 @@ from backend.app.schemas.risk import (
     OfflineRiskLabel,
     OfflineRiskReport,
     RiskPairResult,
+)
+from backend.app.sim.offline_label import (
+    compute_pair_geometry_distances,
+    point_distance_3d,
 )
 
 
@@ -114,6 +119,27 @@ def _offline_label_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def _crane_state(
+    crane_id: str,
+    *,
+    root_position,
+    tip_position,
+    hook_position,
+) -> CraneState:
+    return CraneState(
+        crane_id=crane_id,
+        theta_rad=0.0,
+        theta_sin=0.0,
+        theta_cos=1.0,
+        trolley_r_m=0.0,
+        hook_h_m=hook_position[2],
+        root_position=list(root_position),
+        tip_position=list(tip_position),
+        hook_position=list(hook_position),
+        cable_length_m=max(0.0, root_position[2] - hook_position[2]),
+    )
 
 
 def test_offline_risk_label_schema_serializes_and_preserves_k2_fields() -> None:
@@ -260,3 +286,108 @@ def test_online_risk_pair_still_rejects_future_truth() -> None:
         RiskPairResult.model_validate(payload)
 
     assert RISK_E_FUTURE_TRUTH_FORBIDDEN in str(exc_info.value)
+
+
+def test_point_distance_3d_uses_euclidean_distance() -> None:
+    assert point_distance_3d([0.0, 0.0, 0.0], [3.0, 4.0, 12.0]) == pytest.approx(13.0)
+
+
+def test_pair_geometry_distances_include_raw_values_and_clearance() -> None:
+    state_i = _crane_state(
+        "C1",
+        root_position=[0.0, 0.0, 10.0],
+        tip_position=[10.0, 0.0, 10.0],
+        hook_position=[5.0, 0.0, 6.0],
+    )
+    state_j = _crane_state(
+        "C2",
+        root_position=[0.0, 3.0, 10.0],
+        tip_position=[10.0, 3.0, 10.0],
+        hook_position=[5.0, 3.0, 6.0],
+    )
+    risk_config = RiskConfig.model_validate(_risk_config_payload())
+
+    distances = compute_pair_geometry_distances(
+        state_i=state_i,
+        state_j=state_j,
+        risk_config=risk_config,
+    )
+
+    assert distances.distance_jib_jib_raw_now_m == pytest.approx(3.0)
+    assert distances.clearance_jib_jib_now_m == pytest.approx(2.0)
+    assert distances.distance_jib_i_hook_j_raw_now_m == pytest.approx(5.0)
+    assert distances.clearance_jib_i_hook_j_now_m == pytest.approx(4.0)
+    assert distances.distance_jib_j_hook_i_raw_now_m == pytest.approx(5.0)
+    assert distances.clearance_jib_j_hook_i_now_m == pytest.approx(4.0)
+    assert distances.distance_hook_hook_raw_now_m == pytest.approx(3.0)
+    assert distances.clearance_hook_hook_now_m == pytest.approx(2.0)
+
+
+def test_pair_geometry_minimum_uses_clearance_not_raw_distance() -> None:
+    risk_config = RiskConfig.model_validate(
+        _risk_config_payload(
+            geometry_envelope={
+                "jib_radius_m": 3.0,
+                "hook_radius_m": 0.25,
+                "load_radius_m": 0.8,
+            }
+        )
+    )
+    state_i = _crane_state(
+        "C1",
+        root_position=[0.0, 0.0, 10.0],
+        tip_position=[10.0, 0.0, 10.0],
+        hook_position=[0.0, 50.0, 0.0],
+    )
+    state_j = _crane_state(
+        "C2",
+        root_position=[0.0, 5.0, 10.0],
+        tip_position=[10.0, 5.0, 10.0],
+        hook_position=[0.0, 50.0, 2.0],
+    )
+
+    distances = compute_pair_geometry_distances(
+        state_i=state_i,
+        state_j=state_j,
+        risk_config=risk_config,
+    )
+
+    assert distances.distance_hook_hook_raw_now_m == pytest.approx(2.0)
+    assert distances.clearance_hook_hook_now_m == pytest.approx(1.5)
+    assert distances.distance_jib_jib_raw_now_m == pytest.approx(5.0)
+    assert distances.clearance_jib_jib_now_m == pytest.approx(-1.0)
+    assert distances.distance_min_raw_now_m == pytest.approx(5.0)
+    assert distances.clearance_min_now_m == pytest.approx(-1.0)
+    assert distances.nearest_object_i == "jib"
+    assert distances.nearest_object_j == "jib"
+
+
+def test_pair_geometry_rejects_duplicate_crane_id_and_invalid_points() -> None:
+    risk_config = RiskConfig.model_validate(_risk_config_payload())
+    state_i = _crane_state(
+        "C1",
+        root_position=[0.0, 0.0, 10.0],
+        tip_position=[10.0, 0.0, 10.0],
+        hook_position=[5.0, 0.0, 6.0],
+    )
+
+    with pytest.raises(ValueError, match="OFFLINE_LABEL_E_INVALID_GEOMETRY"):
+        compute_pair_geometry_distances(
+            state_i=state_i,
+            state_j=state_i,
+            risk_config=risk_config,
+        )
+
+    state_j = _crane_state(
+        "C2",
+        root_position=[0.0, 3.0, 10.0],
+        tip_position=[math.nan, 3.0, 10.0],
+        hook_position=[5.0, 3.0, 6.0],
+    )
+
+    with pytest.raises(ValueError, match="OFFLINE_LABEL_E_INVALID_GEOMETRY"):
+        compute_pair_geometry_distances(
+            state_i=state_i,
+            state_j=state_j,
+            risk_config=risk_config,
+        )
