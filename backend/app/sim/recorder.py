@@ -14,8 +14,13 @@ from pydantic import BaseModel, ValidationError
 
 from backend.app.schemas.recorder import (
     RECORDER_SCHEMA_VERSION,
+    CommandLogEntry,
     DataExportWarning,
+    DecisionLogEntry,
+    EventLogEntry,
     GraphEdgeRow,
+    InterventionLogEntry,
+    ObservationLogEntry,
     PairRiskRow,
     RecorderBaseModel,
     TaskParquetRow,
@@ -23,6 +28,17 @@ from backend.app.schemas.recorder import (
     WeatherParquetRow,
 )
 from backend.app.schemas.resolved_config import ResolvedConfig
+
+FORBIDDEN_EXPORT_SECRET_KEYS = {
+    "api_key",
+    "resolved_full_api_key",
+    "raw_api_key",
+    "secret",
+    "token",
+    "authorization",
+}
+
+ALLOWED_MASKED_SECRET_KEYS = {"key_source", "key_env_name", "key_masked"}
 
 
 class DataExportError(RuntimeError):
@@ -255,6 +271,144 @@ class RecorderParquetWriters:
         self.flush_all()
 
 
+class JsonlWriter:
+    def __init__(
+        self,
+        *,
+        output_path: Path,
+        row_model: Type[RecorderBaseModel],
+    ) -> None:
+        self.output_path = output_path
+        self.row_model = row_model
+        self._rows: List[Dict[str, Any]] = []
+        self.warnings: List[DataExportWarning] = []
+
+    def append(self, rows: Sequence[Any]) -> None:
+        for index, row in enumerate(rows):
+            row_payload = _model_or_mapping_to_dict(row)
+            secret_path = _find_forbidden_secret_key(row_payload)
+            if secret_path is not None:
+                raise DataExportError(
+                    "refusing to write secret-bearing JSONL payload",
+                    error_code="RECORDER_E_SECRET_FIELD",
+                    file_path=str(self.output_path),
+                    field_path=secret_path,
+                )
+            sanitized = _sanitize_for_export(
+                row_payload,
+                file_name=str(self.output_path),
+                warning_sink=self.warnings,
+            )
+            try:
+                validated = self.row_model.model_validate(sanitized)
+            except ValidationError as exc:
+                raise DataExportError(
+                    "invalid JSONL row",
+                    error_code="RECORDER_E_JSONL_SCHEMA",
+                    file_path=str(self.output_path),
+                    field_path=str(index),
+                    details={"errors": exc.errors()},
+                ) from exc
+            self._rows.append(validated.model_dump(mode="json"))
+
+    def flush(self) -> None:
+        if not self._rows:
+            return
+        try:
+            self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.output_path.open("w", encoding="utf-8") as handle:
+                for row in self._rows:
+                    handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+                    handle.write("\n")
+        except (OSError, TypeError, ValueError) as exc:
+            raise DataExportError(
+                "failed to write JSONL file",
+                error_code="RECORDER_E_JSONL_WRITE",
+                file_path=str(self.output_path),
+                details={"exception_type": type(exc).__name__, "reason": str(exc)},
+            ) from exc
+
+    def close(self) -> None:
+        self.flush()
+
+
+class RecorderJsonlWriters:
+    def __init__(
+        self,
+        *,
+        observations: JsonlWriter,
+        decisions: JsonlWriter,
+        commands: JsonlWriter,
+        interventions: JsonlWriter,
+        events: JsonlWriter,
+    ) -> None:
+        self.observations = observations
+        self.decisions = decisions
+        self.commands = commands
+        self.interventions = interventions
+        self.events = events
+
+    @classmethod
+    def from_layout(cls, layout: RunDirectoryLayout) -> "RecorderJsonlWriters":
+        return cls(
+            observations=JsonlWriter(
+                output_path=layout.observations_path,
+                row_model=ObservationLogEntry,
+            ),
+            decisions=JsonlWriter(
+                output_path=layout.decisions_path,
+                row_model=DecisionLogEntry,
+            ),
+            commands=JsonlWriter(
+                output_path=layout.commands_path,
+                row_model=CommandLogEntry,
+            ),
+            interventions=JsonlWriter(
+                output_path=layout.interventions_path,
+                row_model=InterventionLogEntry,
+            ),
+            events=JsonlWriter(
+                output_path=layout.events_path,
+                row_model=EventLogEntry,
+            ),
+        )
+
+    @property
+    def warnings(self) -> List[DataExportWarning]:
+        return [
+            *self.observations.warnings,
+            *self.decisions.warnings,
+            *self.commands.warnings,
+            *self.interventions.warnings,
+            *self.events.warnings,
+        ]
+
+    def write_observations(self, rows: Sequence[Any]) -> None:
+        self.observations.append(rows)
+
+    def write_decisions(self, rows: Sequence[Any]) -> None:
+        self.decisions.append(rows)
+
+    def write_commands(self, rows: Sequence[Any]) -> None:
+        self.commands.append(rows)
+
+    def write_interventions(self, rows: Sequence[Any]) -> None:
+        self.interventions.append(rows)
+
+    def write_events(self, rows: Sequence[Any]) -> None:
+        self.events.append(rows)
+
+    def flush_all(self) -> None:
+        self.observations.flush()
+        self.decisions.flush()
+        self.commands.flush()
+        self.interventions.flush()
+        self.events.flush()
+
+    def close_all(self) -> None:
+        self.flush_all()
+
+
 def _coerce_resolved_config(config: object) -> ResolvedConfig:
     if isinstance(config, ResolvedConfig):
         return config
@@ -439,3 +593,25 @@ def _sanitize_for_export(
             for index, child in enumerate(value)
         ]
     return value
+
+
+def _find_forbidden_secret_key(value: Any, path: str = "") -> Optional[str]:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            current_path = f"{path}.{key_text}" if path else key_text
+            key_lower = key_text.lower()
+            if (
+                key_lower in FORBIDDEN_EXPORT_SECRET_KEYS
+                and key_lower not in ALLOWED_MASKED_SECRET_KEYS
+            ):
+                return current_path
+            found = _find_forbidden_secret_key(child, current_path)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            found = _find_forbidden_secret_key(child, f"{path}[{index}]")
+            if found is not None:
+                return found
+    return None

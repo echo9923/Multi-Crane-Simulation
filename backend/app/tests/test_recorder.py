@@ -29,6 +29,7 @@ from backend.app.schemas.recorder import (
 )
 from backend.app.sim.recorder import (
     DataExportError,
+    RecorderJsonlWriters,
     RecorderParquetWriters,
     init_run_directory,
 )
@@ -656,3 +657,196 @@ def test_parquet_writer_rejects_extra_fields_without_authoritative_file(
         )
 
     assert not layout.trajectories_path.exists()
+
+
+def test_jsonl_writers_append_utf8_and_schema_version(tmp_path: Path) -> None:
+    layout = init_run_directory(
+        config=_resolved_config(tmp_path),
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+    )
+    writers = RecorderJsonlWriters.from_layout(layout)
+
+    writers.write_observations(
+        [
+            {
+                "observation_id": "OBS-001",
+                "episode_id": "episode-001",
+                "time_s": 1.0,
+                "crane_id": "C1",
+                "risk_prompt_mode": "R1",
+                "observation": {"self": {"crane_id": "C1"}},
+                "source_snapshot_id": "SNAP-001",
+            }
+        ]
+    )
+    writers.write_decisions(
+        [
+            {
+                "episode_id": "episode-001",
+                "time_s": 1.0,
+                "crane_id": "C1",
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "call_record": {"call_id": "CALL-001"},
+            }
+        ]
+    )
+    writers.write_commands(
+        [
+            {
+                "episode_id": "episode-001",
+                "time_s": 1.0,
+                "decision_index": 1,
+                "crane_id": "C1",
+                "operator_id": "OP_C1",
+                "operator_profile": "aggressive",
+                "operator_mode": "llm",
+                "observation_id": "OBS-001",
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "raw_llm_response": "{...}",
+                "parsed_command": {"command_id": "CMD-001"},
+                "executed_command": {"command_id": "EXEC-001"},
+                "modified_by_intervention": False,
+                "modified_by_mechanical_safety": False,
+                "latency_ms": 820.0,
+                "token_usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                "retry_count": 0,
+                "validation_errors": [],
+                "cache_hit": False,
+                "reason": "取货点在右前方，低速接近。",
+            }
+        ]
+    )
+    writers.write_interventions(
+        [
+            {
+                "episode_id": "episode-001",
+                "time_s": 1.0,
+                "intervention_id": "INT-001",
+                "crane_id": "C1",
+                "safety_mode": "S2",
+                "risk_level": "high",
+                "action": "limit_speed_on_high_risk",
+                "modified": True,
+                "reason": "risk high",
+                "pair_ids": ["C1-C2"],
+            }
+        ]
+    )
+    writers.write_events(
+        [
+            {
+                "event_id": "EVT-001",
+                "event_type": "near_miss",
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "frame": 2,
+                "time_s": 1.0,
+                "crane_ids": ["C1", "C2"],
+                "risk_level": "high",
+                "details": {"nearest_object_type": "jib-hook"},
+            }
+        ]
+    )
+    writers.flush_all()
+
+    paths = [
+        layout.observations_path,
+        layout.decisions_path,
+        layout.commands_path,
+        layout.interventions_path,
+        layout.events_path,
+    ]
+    for path in paths:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        payload = json.loads(lines[0])
+        assert payload["schema_version"] == RECORDER_SCHEMA_VERSION
+
+    command_payload = json.loads(
+        layout.commands_path.read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert command_payload["reason"] == "取货点在右前方，低速接近。"
+
+
+def test_jsonl_writer_converts_non_finite_values_to_null_and_warns(
+    tmp_path: Path,
+) -> None:
+    layout = init_run_directory(
+        config=_resolved_config(tmp_path),
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+    )
+    writers = RecorderJsonlWriters.from_layout(layout)
+
+    writers.write_events(
+        [
+            {
+                "event_id": "EVT-001",
+                "event_type": "near_miss",
+                "episode_id": "episode-001",
+                "scenario_id": "scenario-001",
+                "frame": 2,
+                "time_s": 1.0,
+                "crane_ids": ["C1", "C2"],
+                "risk_level": "high",
+                "clearance_min_now_m": math.nan,
+                "distance_min_raw_now_m": math.inf,
+                "details": {},
+            }
+        ]
+    )
+    writers.flush_all()
+
+    payload = json.loads(layout.events_path.read_text(encoding="utf-8").splitlines()[0])
+
+    assert payload["clearance_min_now_m"] is None
+    assert payload["distance_min_raw_now_m"] is None
+    assert {warning.warning_type for warning in writers.warnings} == {
+        "nan_to_null",
+        "inf_to_null",
+    }
+
+
+def test_jsonl_writer_rejects_secret_keys_and_extra_fields(tmp_path: Path) -> None:
+    layout = init_run_directory(
+        config=_resolved_config(tmp_path),
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+    )
+    writers = RecorderJsonlWriters.from_layout(layout)
+
+    with pytest.raises(DataExportError):
+        writers.write_decisions(
+            [
+                {
+                    "episode_id": "episode-001",
+                    "time_s": 1.0,
+                    "crane_id": "C1",
+                    "provider": "deepseek",
+                    "model": "deepseek-chat",
+                    "call_record": {"api_key": "sk-secret"},
+                }
+            ]
+        )
+
+    with pytest.raises(DataExportError):
+        writers.write_observations(
+            [
+                {
+                    "observation_id": "OBS-001",
+                    "episode_id": "episode-001",
+                    "time_s": 1.0,
+                    "crane_id": "C1",
+                    "risk_prompt_mode": "R1",
+                    "observation": {"self": {"crane_id": "C1"}},
+                    "source_snapshot_id": "SNAP-001",
+                    "offline_label": "not allowed",
+                }
+            ]
+        )
+
+    assert not layout.decisions_path.exists()
+    assert not layout.observations_path.exists()
