@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from typing import Optional
 
 import pytest
 from pydantic import ValidationError
@@ -59,7 +60,7 @@ def _future_label(
     *,
     window_s: float,
     min_clearance: float,
-    ttc_s: float | None,
+    ttc_s: Optional[float],
     risk_level: str,
     collision_label: int,
 ):
