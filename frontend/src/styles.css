@@ -1,0 +1,121 @@
+:root {
+  --bg: #0f1115;
+  --panel: #161a21;
+  --panel-2: #1c212b;
+  --line: #2a313d;
+  --text: #e6e9ef;
+  --muted: #8a93a3;
+  --accent: #4cc2ff;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.app-top {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.app-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px 1fr 360px;
+  min-height: 0;
+}
+
+.app-left,
+.app-right {
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  overflow: auto;
+  padding: 12px;
+}
+
+.app-right {
+  border-right: none;
+  border-left: 1px solid var(--line);
+}
+
+.app-center {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: #0a0c10;
+}
+
+.app-bottom {
+  height: 72px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 8px 16px;
+}
+
+.placeholder {
+  color: var(--muted);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.display-only {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #3a2a12;
+  color: #ffcf8a;
+  border: 1px solid #5a3f1a;
+  margin-left: 6px;
+  vertical-align: middle;
+}

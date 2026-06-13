@@ -1,0 +1,255 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "E-DEMO0001",
+  "scenario_id": "demo_scenario",
+  "episode_status": "running",
+  "frame_count": 30,
+  "dt": 0.5,
+  "coordinate_system": "ENU",
+  "cranes": [
+    {
+      "crane_id": "C1",
+      "model_id": "TC7032",
+      "base": [
+        0,
+        0,
+        0
+      ],
+      "root": [
+        0,
+        0,
+        40
+      ],
+      "mast_height_m": 40,
+      "jib_length_m": 55,
+      "counter_jib_length_m": 18,
+      "trolley_r_min_m": 3,
+      "trolley_r_max_m": 55,
+      "hook_h_min_world_m": 2,
+      "hook_h_max_world_m": 35,
+      "cable_length_min_m": 5,
+      "cable_length_max_m": 38,
+      "theta_init_rad": 0,
+      "theta_init_deg": 0,
+      "theta_sin": 0,
+      "theta_cos": 1,
+      "slew_mode": "continuous",
+      "theta_limit_rad": null,
+      "source": "manual",
+      "_color": 5030655
+    },
+    {
+      "crane_id": "C2",
+      "model_id": "TC6015",
+      "base": [
+        78,
+        4,
+        0
+      ],
+      "root": [
+        78,
+        4,
+        46
+      ],
+      "mast_height_m": 46,
+      "jib_length_m": 50,
+      "counter_jib_length_m": 16,
+      "trolley_r_min_m": 3,
+      "trolley_r_max_m": 50,
+      "hook_h_min_world_m": 6,
+      "hook_h_max_world_m": 41,
+      "cable_length_min_m": 5,
+      "cable_length_max_m": 40,
+      "theta_init_rad": 3.141593,
+      "theta_init_deg": 180,
+      "theta_sin": 0,
+      "theta_cos": -1,
+      "slew_mode": "continuous",
+      "theta_limit_rad": null,
+      "source": "manual",
+      "_color": 16757844
+    },
+    {
+      "crane_id": "C3",
+      "model_id": "TC5518",
+      "base": [
+        36,
+        62,
+        0
+      ],
+      "root": [
+        36,
+        62,
+        42
+      ],
+      "mast_height_m": 42,
+      "jib_length_m": 50,
+      "counter_jib_length_m": 16,
+      "trolley_r_min_m": 3,
+      "trolley_r_max_m": 50,
+      "hook_h_min_world_m": 6,
+      "hook_h_max_world_m": 37,
+      "cable_length_min_m": 5,
+      "cable_length_max_m": 36,
+      "theta_init_rad": -1.570796,
+      "theta_init_deg": 270,
+      "theta_sin": -1,
+      "theta_cos": 0,
+      "slew_mode": "continuous",
+      "theta_limit_rad": null,
+      "source": "manual",
+      "_color": 10194175
+    }
+  ],
+  "site": {
+    "coordinate_system": "ENU",
+    "boundary": {
+      "x_min": -30,
+      "x_max": 140,
+      "y_min": -30,
+      "y_max": 140,
+      "z_min": 0,
+      "z_max": 80
+    },
+    "forbidden_zone_policy": {
+      "mode": "hard",
+      "record_violation": true
+    }
+  },
+  "material_zones": [
+    {
+      "zone_id": "rebar_yard",
+      "type": "polygon",
+      "points": [
+        [
+          -20,
+          -20,
+          0
+        ],
+        [
+          -4,
+          -20,
+          0
+        ],
+        [
+          -4,
+          -4,
+          0
+        ],
+        [
+          -20,
+          -4,
+          0
+        ]
+      ],
+      "z_range_m": [
+        0,
+        2
+      ],
+      "load_types": [
+        "rebar_bundle",
+        "steel_beam"
+      ]
+    },
+    {
+      "zone_id": "concrete_yard",
+      "type": "box",
+      "center": [
+        8,
+        72,
+        1
+      ],
+      "size": [
+        20,
+        20,
+        2
+      ],
+      "z_range_m": [
+        0,
+        2
+      ],
+      "load_types": [
+        "concrete_bucket"
+      ]
+    }
+  ],
+  "work_zones": [
+    {
+      "zone_id": "floorA",
+      "type": "box",
+      "center": [
+        40,
+        20,
+        15
+      ],
+      "size": [
+        30,
+        30,
+        6
+      ],
+      "z_range_m": [
+        12,
+        18
+      ],
+      "accepted_load_types": [
+        "rebar_bundle",
+        "formwork"
+      ]
+    },
+    {
+      "zone_id": "floorB",
+      "type": "box",
+      "center": [
+        64,
+        40,
+        20
+      ],
+      "size": [
+        26,
+        26,
+        8
+      ],
+      "z_range_m": [
+        16,
+        24
+      ],
+      "accepted_load_types": [
+        "concrete_bucket"
+      ]
+    }
+  ],
+  "forbidden_zones": [
+    {
+      "zone_id": "power_corridor",
+      "type": "polygon",
+      "points": [
+        [
+          30,
+          30,
+          0
+        ],
+        [
+          70,
+          30,
+          0
+        ],
+        [
+          70,
+          34,
+          0
+        ],
+        [
+          30,
+          34,
+          0
+        ]
+      ],
+      "z_range_m": [
+        0,
+        30
+      ]
+    }
+  ],
+  "overlap_zones": [],
+  "offline_labels_available": false
+}
