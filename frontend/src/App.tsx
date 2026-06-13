@@ -1,7 +1,13 @@
+import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { Layout } from "@/components/Layout";
+import { SceneView } from "@/components/SceneView";
+import { ensureDemoLoaded } from "@/bootstrap";
+import { useStore } from "@/state/store";
 
 function TopNav() {
+  const mode = useStore((s) => s.mode);
+  const episodeId = useStore((s) => s.episodeId);
   return (
     <>
       <strong>群塔仿真 3D 展示</strong>
@@ -11,12 +17,18 @@ function TopNav() {
         </NavLink>
         <NavLink to="/config">配置</NavLink>
       </nav>
+      <span className="muted" style={{ marginLeft: "auto" }}>
+        {mode !== "idle" ? `${mode} · ${episodeId ?? ""}` : ""}
+      </span>
     </>
   );
 }
 
 function HomePage() {
-  return <Layout top={<TopNav />} />;
+  useEffect(() => {
+    ensureDemoLoaded();
+  }, []);
+  return <Layout top={<TopNav />} center={<SceneView />} />;
 }
 
 function ConfigPage() {
