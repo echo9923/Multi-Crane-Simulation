@@ -225,3 +225,32 @@ def test_download_returns_zip_and_honors_include_logs_false(tmp_path: Path) -> N
     assert "data/placeholder.txt" in names
     assert "logs/events.jsonl" not in names
     assert all(not name.startswith("/") and ".." not in Path(name).parts for name in names)
+
+
+def test_download_archive_failure_returns_uniform_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    service = _service()
+    service.handles["E-query"] = EpisodeHandle(
+        episode_id="E-query",
+        runner=NoopRunner(),
+        run_dir=run_dir,
+        status=EpisodeStatus.COMPLETED,
+    )
+    client = _client_with_service(service)
+
+    def fail_write(self, filename, arcname=None, compress_type=None, compresslevel=None):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", fail_write)
+
+    response = client.get("/episodes/E-query/download")
+
+    assert response.status_code == 500
+    payload = response.json()
+    assert payload["code"] == "M_E_DOWNLOAD_FAILED"
+    assert payload["data"] is None
+    assert payload["message"] == "failed to build episode download"
+    assert payload["details"]["exception_type"] == "OSError"

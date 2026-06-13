@@ -5,7 +5,7 @@
 - API schema：统一成功/错误响应、分页、episode/dataset 请求响应模型、extra 字段拒绝和 secret 字段静态扫描。
 - Health/config：`GET /health`、`GET /openapi.json`、`POST /scenarios/validate` 的有效配置、inline 配置、歧义输入、缺失路径和 secret redaction。
 - Episode lifecycle：`start`、`pause`、`resume`、`stop`，重复 episode、缺失 episode、terminal state 和 runner factory 失败。
-- Episode query/download：运行态 state、summary 文件读取、frames fallback、zip 下载和 `include_logs=false`。
+- Episode query/download：运行态 state、summary 文件读取、frames fallback、zip 下载、`include_logs=false` 和归档写入失败统一错误。
 - Dataset API：空 root、分页、summary 文件读取、dataset missing、未配置 root、路径穿越。
 - WebSocket：缺失 episode error、已有 episode connect、multi-client `SimFrame` 广播、10 frame 基础速率、heartbeat、无客户端 no-op、offline label 拒绝和重复 schema 静态检查。
 - CLI：三个脚本 `--help`、`run_episode` fake factory JSON 输出、`run_episode.py` 默认本地 runner 子进程运行并写出 `episode_summary.json`/`visual/frames.jsonl`、缺失 config、replay 缺失文件、batch not implemented、`--max-episodes` 边界和不依赖 FastAPI app。
