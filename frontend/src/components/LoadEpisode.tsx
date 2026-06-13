@@ -6,10 +6,7 @@
 import { useRef } from "react";
 import { useStore } from "@/state/store";
 import { loadEpisodeFromFiles, loadEpisodeFromZip } from "@/api/loader";
-
-function readFile(file: File): Promise<string> {
-  return file.text();
-}
+import { fileText } from "@/api/file";
 
 export function LoadEpisode() {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -39,9 +36,9 @@ export function LoadEpisode() {
         return;
       }
       const [framesText, manifestText, commandsText] = await Promise.all([
-        readFile(framesFile),
-        manifestFile ? readFile(manifestFile) : Promise.resolve(null),
-        commandsFile ? readFile(commandsFile) : Promise.resolve(null),
+        fileText(framesFile),
+        manifestFile ? fileText(manifestFile) : Promise.resolve(null),
+        commandsFile ? fileText(commandsFile) : Promise.resolve(null),
       ]);
       const loaded = loadEpisodeFromFiles(framesText, manifestText, commandsText);
       loadEpisode(loaded.frames, loaded.manifest, null, loaded.summary, loaded.commandLog);

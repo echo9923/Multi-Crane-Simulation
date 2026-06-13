@@ -6,6 +6,7 @@ import { LeftControls } from "@/components/LeftControls";
 import { Panels } from "@/components/panels/Panels";
 import { Timeline } from "@/components/Timeline";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
+import { ConfigPage as ConfigPageView } from "@/components/ConfigPage";
 import { useRealtimeEpisode } from "@/hooks/useRealtimeEpisode";
 import { ensureDemoLoaded } from "@/bootstrap";
 import { useStore } from "@/state/store";
@@ -87,11 +88,7 @@ function ConfigPage() {
   return (
     <Layout
       top={<TopNav />}
-      center={
-        <div className="placeholder" style={{ padding: 24 }}>
-          场景配置上传 / 选择入口（Task 08 实现）
-        </div>
-      }
+      center={<ConfigPageView />}
     />
   );
 }

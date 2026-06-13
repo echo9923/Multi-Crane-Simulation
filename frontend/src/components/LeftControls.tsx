@@ -3,6 +3,7 @@
 
 import { useStore } from "@/state/store";
 import { LoadEpisode } from "@/components/LoadEpisode";
+import { DownloadBar } from "@/components/DownloadBar";
 
 export function LeftControls() {
   const ui = useStore((s) => s.ui);
@@ -12,6 +13,7 @@ export function LeftControls() {
   return (
     <div>
       <LoadEpisode />
+      <DownloadBar />
       <section className="panel" data-testid="display-toggles">
         <h3>显示</h3>
         <div className="panel-body">
@@ -43,6 +45,7 @@ export function LeftControls() {
             cranes.map((c) => {
               const id = (c as { crane_id?: string }).crane_id ?? "?";
               const selected = ui.selectedCraneId === id;
+              const following = ui.followCraneId === id;
               return (
                 <div
                   key={id}
@@ -51,9 +54,23 @@ export function LeftControls() {
                 >
                   <span className="swatch" style={{ background: "#4cc2ff" }} />
                   {id}
+                  {following && <span className="chip" style={{ marginLeft: "auto" }}>跟随</span>}
                 </div>
               );
             })
+          )}
+          {ui.selectedCraneId && (
+            <button
+              data-testid="follow-toggle"
+              style={{ marginTop: 8, width: "100%" }}
+              onClick={() =>
+                setUI({
+                  followCraneId: ui.followCraneId === ui.selectedCraneId ? null : ui.selectedCraneId,
+                })
+              }
+            >
+              {ui.followCraneId === ui.selectedCraneId ? "取消跟随" : `跟随 ${ui.selectedCraneId}`}
+            </button>
           )}
         </div>
       </section>

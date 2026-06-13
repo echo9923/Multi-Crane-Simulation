@@ -6,6 +6,7 @@
 // no factory and gets a real WebGLRenderer bound to the canvas.
 
 import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { ResolvedConfig, CraneConfig, BoundaryConfig } from "@/types/config";
 import type { EpisodeManifest, ZoneManifest, SimFrame, SimFrameWeather } from "@/types/sim";
 import { worldToThree, type Vec3 } from "@/coord";
@@ -71,8 +72,10 @@ export class ThreeSceneController {
   private showZones = true;
   private readonly animate: boolean;
   private pulseRaf = 0;
+  private controls: OrbitControls | null = null;
+  private readonly raycaster = new THREE.Raycaster();
 
-  constructor(opts: { canvas: HTMLCanvasElement; createRenderer?: RendererFactory; animate?: boolean }) {
+  constructor(opts: { canvas: HTMLCanvasElement; createRenderer?: RendererFactory; animate?: boolean; controls?: boolean }) {
     this.canvas = opts.canvas;
     this.animate = opts.animate ?? true;
     const factory = opts.createRenderer ?? defaultRenderer;
@@ -84,6 +87,11 @@ export class ThreeSceneController {
     dir.position.set(120, 200, 80);
     this.scene.add(dir);
     this.scene.background = new THREE.Color(0x0a0c10);
+
+    if (opts.controls) {
+      this.controls = new OrbitControls(this.camera, this.canvas);
+      this.controls.addEventListener("change", () => this.render());
+    }
   }
 
   /** (Re)build the static scene from a resolved config and/or manifest. */
@@ -293,6 +301,41 @@ export class ThreeSceneController {
     this.showZones = visible;
     const g = this.getObjectByName("zones");
     if (g) g.visible = visible;
+    this.render();
+  }
+
+  /**
+   * Pick the crane under a normalized-device-coordinate pointer. Returns the
+   * crane_id whose group (or descendant) is hit first, or null for empty space.
+   */
+  pickCrane(ndc: { x: number; y: number }): string | null {
+    this.raycaster.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.camera);
+    const hits = this.raycaster.intersectObjects(this.root.children, true);
+    for (const hit of hits) {
+      let obj: THREE.Object3D | null = hit.object;
+      while (obj) {
+        if (obj.name && this.cranes.has(obj.name)) return obj.name;
+        obj = obj.parent;
+      }
+    }
+    return null;
+  }
+
+  /** Point the camera at a crane's base; pass null to release follow. */
+  followCrane(craneId: string | null): void {
+    if (!craneId) {
+      this.render();
+      return;
+    }
+    const parts = this.cranes.get(craneId);
+    if (!parts) return;
+    const target = parts.group.position;
+    this.camera.position.set(target.x + 60, target.y + 50, target.z + 60);
+    this.camera.lookAt(target);
+    if (this.controls) {
+      this.controls.target.copy(target);
+      this.controls.update();
+    }
     this.render();
   }
 

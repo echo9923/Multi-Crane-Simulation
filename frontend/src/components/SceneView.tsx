@@ -14,7 +14,7 @@ export function SceneView() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctrl = new ThreeSceneController({ canvas });
+    const ctrl = new ThreeSceneController({ canvas, controls: true });
     controllerRef.current = ctrl;
 
     // Build the static scene from config/manifest if available; in live mode
@@ -43,6 +43,18 @@ export function SceneView() {
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
 
+    // Click-to-select a crane via raycast.
+    const onClick = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const ndc = {
+        x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        y: -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      };
+      const id = ctrl.pickCrane(ndc);
+      if (id) useStore.getState().setUI({ selectedCraneId: id });
+    };
+    canvas.addEventListener("click", onClick);
+
     // Imperative frame / config updates (no React re-render per frame).
     const unsub = useStore.subscribe((s, prev) => {
       if (s.latestFrame !== prev.latestFrame && s.latestFrame) {
@@ -60,11 +72,15 @@ export function SceneView() {
       if (s.ui.showZones !== prev.ui.showZones) {
         ctrl.setShowZones(s.ui.showZones);
       }
+      if (s.ui.followCraneId !== prev.ui.followCraneId) {
+        ctrl.followCrane(s.ui.followCraneId);
+      }
     });
 
     return () => {
       unsub();
       ro.disconnect();
+      canvas.removeEventListener("click", onClick);
       ctrl.dispose();
       controllerRef.current = null;
     };
