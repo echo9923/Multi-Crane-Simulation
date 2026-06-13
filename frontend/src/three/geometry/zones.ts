@@ -6,12 +6,13 @@ import * as THREE from "three";
 import type { ZoneConfig } from "@/types/config";
 import { worldToThree } from "@/coord";
 
-export type ZoneKind = "material" | "work" | "forbidden";
+export type ZoneKind = "material" | "work" | "forbidden" | "overlap";
 
 export const ZONE_COLOR: Record<ZoneKind, number> = {
   material: 0x3a7bd5,
   work: 0x2fbf71,
   forbidden: 0xe5524a,
+  overlap: 0x8b5cf6,
 };
 
 function verticalExtent(

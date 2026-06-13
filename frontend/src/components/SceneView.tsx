@@ -37,6 +37,9 @@ export function SceneView() {
         ctrl.buildStatic(s.config, s.manifest);
         if (s.latestFrame) ctrl.applyFrame(s.latestFrame);
       }
+      if (s.ui.showRisk !== prev.ui.showRisk) {
+        ctrl.setShowRisk(s.ui.showRisk);
+      }
     });
 
     return () => {

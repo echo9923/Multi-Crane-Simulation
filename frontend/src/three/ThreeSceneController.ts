@@ -14,6 +14,8 @@ import { buildZone, type ZoneKind } from "./geometry/zones";
 import { buildBoundary } from "./geometry/site";
 import { buildLoad, loadHangOffsetY } from "./geometry/load";
 import { deriveDynamic } from "./model/dynamicState";
+import { buildRiskOverlay, riskLevelStyle, pairKey } from "./geometry/risk";
+import type { RiskOverlay } from "./model/SceneModel";
 
 export interface RendererLike {
   domElement: HTMLCanvasElement | HTMLElement;
@@ -63,8 +65,15 @@ export class ThreeSceneController {
   private config: ResolvedConfig | null = null;
   private readonly trailMaxLen = 48;
 
-  constructor(opts: { canvas: HTMLCanvasElement; createRenderer?: RendererFactory }) {
+  // Risk-overlay state.
+  private readonly riskLines = new Map<string, THREE.Line>();
+  private showRisk = true;
+  private readonly animate: boolean;
+  private pulseRaf = 0;
+
+  constructor(opts: { canvas: HTMLCanvasElement; createRenderer?: RendererFactory; animate?: boolean }) {
     this.canvas = opts.canvas;
+    this.animate = opts.animate ?? true;
     const factory = opts.createRenderer ?? defaultRenderer;
     this.renderer = factory(this.canvas);
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.5, 5000);
@@ -79,11 +88,14 @@ export class ThreeSceneController {
   /** (Re)build the static scene from a resolved config and/or manifest. */
   buildStatic(config: ResolvedConfig | null, manifest: EpisodeManifest | null = null): ControllerStats {
     this.disposeDynamic();
+    this.stopPulseLoop();
     this.cranes.clear();
     this.config = config;
     this.trailHistory.clear();
     this.trailLines.clear();
     this.loadKeys.clear();
+    this.riskLines.clear();
+    this.showRisk = true;
     this.windArrow = null;
     let unknownZoneTypes = 0;
 
@@ -113,6 +125,14 @@ export class ThreeSceneController {
         zoneCount += 1;
       }
     });
+
+    // Overlap zones (computed in the manifest; SiteConfig does not carry them).
+    for (const z of (manifest?.overlap_zones ?? []) as unknown as ZoneManifest[]) {
+      if (!z || !z.type) continue;
+      if (z.type !== "box" && z.type !== "polygon") unknownZoneTypes += 1;
+      this.root.add(buildZone(z as unknown as Parameters<typeof buildZone>[0], "overlap"));
+      zoneCount += 1;
+    }
 
     // Cranes: prefer resolved_cranes; fall back to manifest cranes. An empty
     // resolved_cranes array (truthy but length 0) also falls back.
@@ -189,7 +209,111 @@ export class ThreeSceneController {
       this.pushTrail(id, dyn.tip);
     }
     this.updateWind(frame.weather);
+
+    // Risk overlay anchored on each crane's hook world position.
+    const anchors = new Map<string, Vec3>();
+    states.forEach((d) => anchors.set(d.craneId, d.hook));
+    this.applyRisk(buildRiskOverlay(frame, anchors));
+
     this.render();
+  }
+
+  /** Apply (or clear) the risk overlay. Lines are keyed by sorted pair id. */
+  applyRisk(overlay: RiskOverlay | null): void {
+    if (this.disposed) return;
+    const present = new Set<string>();
+    if (overlay) {
+      for (const link of overlay.links) {
+        const key = pairKey(link.craneI, link.craneJ);
+        present.add(key);
+        const style = riskLevelStyle(link.level);
+        let line = this.riskLines.get(key);
+        if (!line) {
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+          const mat = new THREE.LineBasicMaterial({
+            color: style.color,
+            transparent: true,
+            opacity: style.opacity,
+          });
+          line = new THREE.Line(geo, mat);
+          line.name = `risk:${key}`;
+          line.frustumCulled = false;
+          this.root.add(line);
+          this.riskLines.set(key, line);
+        }
+        const a = worldToThree(link.a);
+        const b = worldToThree(link.b);
+        const arr = line.geometry.attributes.position.array as Float32Array;
+        arr[0] = a[0]; arr[1] = a[1]; arr[2] = a[2];
+        arr[3] = b[0]; arr[4] = b[1]; arr[5] = b[2];
+        line.geometry.attributes.position.needsUpdate = true;
+        line.geometry.computeBoundingSphere();
+        const mat = line.material as THREE.LineBasicMaterial;
+        mat.color.setHex(style.color);
+        mat.opacity = style.opacity;
+        line.visible = this.showRisk;
+        line.userData.pulse = style.pulse;
+        line.userData.baseOpacity = style.opacity;
+        line.userData.level = link.level;
+      }
+    }
+    // Drop lines whose pair is no longer present this frame.
+    for (const [key, line] of this.riskLines) {
+      if (!present.has(key)) {
+        this.root.remove(line);
+        line.geometry.dispose();
+        (line.material as THREE.Material).dispose();
+        this.riskLines.delete(key);
+      }
+    }
+    this.maybePulse();
+  }
+
+  setShowRisk(visible: boolean): void {
+    this.showRisk = visible;
+    for (const line of this.riskLines.values()) line.visible = visible;
+    this.maybePulse();
+    this.render();
+  }
+
+  private maybePulse(): void {
+    if (this.disposed) return;
+    const hasPulse =
+      this.showRisk &&
+      this.animate &&
+      Array.from(this.riskLines.values()).some((l) => l.userData.pulse && l.visible);
+    if (hasPulse) this.ensurePulseLoop();
+    else this.stopPulseLoop();
+  }
+
+  private ensurePulseLoop(): void {
+    if (this.pulseRaf || typeof requestAnimationFrame !== "function") return;
+    const tick = () => {
+      if (this.disposed) {
+        this.pulseRaf = 0;
+        return;
+      }
+      const t = performance.now() / 1000;
+      let any = false;
+      for (const line of this.riskLines.values()) {
+        if (line.userData.pulse && line.visible) {
+          any = true;
+          const base = (line.userData.baseOpacity as number) ?? 0.9;
+          (line.material as THREE.LineBasicMaterial).opacity = base * (0.4 + 0.6 * (0.5 + 0.5 * Math.sin(t * 4)));
+        }
+      }
+      this.render();
+      this.pulseRaf = any ? requestAnimationFrame(tick) : 0;
+    };
+    this.pulseRaf = requestAnimationFrame(tick);
+  }
+
+  private stopPulseLoop(): void {
+    if (this.pulseRaf && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(this.pulseRaf);
+    }
+    this.pulseRaf = 0;
   }
 
   private updateLoad(
@@ -327,6 +451,7 @@ export class ThreeSceneController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.stopPulseLoop();
     this.disposeDynamic();
     this.renderer.dispose();
   }
