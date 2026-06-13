@@ -167,6 +167,11 @@ export class ThreeSceneController {
     return Array.from(this.cranes.keys());
   }
 
+  /** True once buildStatic has placed at least one crane in the scene. */
+  hasStatic(): boolean {
+    return this.cranes.size > 0;
+  }
+
   getCraneParts(id: string): CraneParts | undefined {
     return this.cranes.get(id);
   }
