@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { Layout } from "@/components/Layout";
 import { SceneView } from "@/components/SceneView";
+import { LeftControls } from "@/components/LeftControls";
+import { Panels } from "@/components/panels/Panels";
 import { ensureDemoLoaded } from "@/bootstrap";
 import { useStore } from "@/state/store";
 
@@ -28,7 +30,14 @@ function HomePage() {
   useEffect(() => {
     ensureDemoLoaded();
   }, []);
-  return <Layout top={<TopNav />} center={<SceneView />} />;
+  return (
+    <Layout
+      top={<TopNav />}
+      left={<LeftControls />}
+      center={<SceneView />}
+      right={<Panels />}
+    />
+  );
 }
 
 function ConfigPage() {

@@ -3,14 +3,16 @@
 // (download zip / local file) lives in Task 06.
 
 import { useStore } from "@/state/store";
-import { parseFramesJsonl, parseManifest } from "@/api/loader";
+import { parseFramesJsonl, parseManifest, parseCommandLog } from "@/api/loader";
 import demoFrames from "../tests/fixtures/frames.jsonl?raw";
 import demoManifest from "../tests/fixtures/episode_manifest.json?raw";
+import demoCommands from "../tests/fixtures/logs/commands.jsonl?raw";
 
 export function loadDemoEpisode(): void {
   const { frames, skipped } = parseFramesJsonl(demoFrames);
   const manifest = parseManifest(demoManifest);
-  useStore.getState().loadEpisode(frames, manifest);
+  const commands = parseCommandLog(demoCommands).rows;
+  useStore.getState().loadEpisode(frames, manifest, null, null, commands);
   useStore.getState().setMode("replay");
   useStore.getState().setEpisodeId(manifest?.episode_id ?? "E-DEMO0001");
   if (skipped > 0) {

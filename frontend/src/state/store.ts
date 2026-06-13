@@ -5,6 +5,7 @@
 import { create } from "zustand";
 import type { SimFrame, EpisodeManifest, EpisodeSummary } from "@/types/sim";
 import type { ResolvedConfig } from "@/types/config";
+import type { CommandLogRow } from "@/types/logs";
 
 export type AppMode = "replay" | "live" | "idle";
 
@@ -45,6 +46,7 @@ export interface AppState {
   frames: SimFrame[];
   currentIndex: number;
   latestFrame: SimFrame | null;
+  commandLog: CommandLogRow[];
 
   playback: PlaybackState;
   connection: ConnectionState;
@@ -59,6 +61,7 @@ export interface AppState {
     manifest: EpisodeManifest | null,
     config?: ResolvedConfig | null,
     summary?: EpisodeSummary | null,
+    commandLog?: CommandLogRow[],
   ) => void;
   setEpisodeId: (id: string | null) => void;
   setMode: (mode: AppMode) => void;
@@ -113,18 +116,20 @@ export const useStore = create<AppState>((set, get) => ({
   frames: [],
   currentIndex: 0,
   latestFrame: null,
+  commandLog: [],
   playback: { ...initialPlayback },
   connection: { ...initialConnection },
   ui: { ...initialUI },
   notices: [],
 
-  loadEpisode: (frames, manifest, config = null, summary = null) =>
+  loadEpisode: (frames, manifest, config = null, summary = null, commandLog = []) =>
     set({
       frames,
       manifest,
       config,
       summary,
-      currentIndex: frames.length > 0 ? 0 : 0,
+      commandLog,
+      currentIndex: 0,
       latestFrame: frames.length > 0 ? frames[0] : null,
       playback: { ...initialPlayback },
       notices:
@@ -178,6 +183,7 @@ export const useStore = create<AppState>((set, get) => ({
       frames: [],
       currentIndex: 0,
       latestFrame: null,
+      commandLog: [],
       playback: { ...initialPlayback },
       connection: { ...initialConnection },
       ui: { ...initialUI },

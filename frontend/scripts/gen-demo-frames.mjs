@@ -230,19 +230,23 @@ function buildFrame(f) {
       details: { note: "demo event" },
     });
   }
-  const highPair = pairs.find((p) => p.risk_level_now === "high" || p.risk_level_now === "near_miss");
-  if (highPair && f % 5 === 0 && f > 0) {
+  // Deterministic risk-snapshot event every 5 frames (after frame 0) so the
+  // event log + seek-on-click have stable, non-zero timestamps to jump to.
+  if (f % 5 === 0 && f > 0 && pairs.length > 0) {
+    const pair =
+      pairs.find((p) => p.risk_level_now === "high" || p.risk_level_now === "near_miss") ??
+      pairs[0];
     events.push({
       event_id: `EVT-RISK-${f}`,
-      event_type: "risk_high",
+      event_type: "risk_snapshot",
       episode_id: EPISODE_ID,
       scenario_id: SCENARIO_ID,
       frame: f,
       time_s,
-      crane_ids: [highPair.crane_i, highPair.crane_j],
-      risk_level: highPair.risk_level_now,
-      distance_min_raw_now_m: highPair.distance_min_raw_now_m,
-      clearance_min_now_m: highPair.clearance_min_now_m,
+      crane_ids: [pair.crane_i, pair.crane_j],
+      risk_level: pair.risk_level_now,
+      distance_min_raw_now_m: pair.distance_min_raw_now_m,
+      clearance_min_now_m: pair.clearance_min_now_m,
       details: {},
     });
   }
@@ -379,6 +383,75 @@ function buildManifest() {
 const frames = [];
 for (let f = 0; f < NUM_FRAMES; f++) frames.push(buildFrame(f));
 
+function buildCommands() {
+  const rows = [];
+  let idx = 0;
+  for (let f = 0; f < NUM_FRAMES; f += 5) {
+    const time_s = +(f * DT).toFixed(3);
+    for (const cid of ["C1", "C3"]) {
+      const c = cranes.find((x) => x.crane_id === cid);
+      rows.push({
+        schema_version: SCHEMA,
+        decision_index: idx,
+        episode_id: EPISODE_ID,
+        crane_id: cid,
+        time_s,
+        operator_id: `OP-${cid}`,
+        operator_profile: c.operator_profile,
+        operator_mode: "R1",
+        observation_id: `OBS-${idx}`,
+        provider: "mock",
+        model: "mock-gpt",
+        observation: {
+          crane_id: cid,
+          time_s,
+          task_stage: c.task_stage,
+          slew_angle_deg: +(idx * 5).toFixed(1),
+          load_attached: c.load_type != null,
+        },
+        messages: [
+          { role: "system", content: `You are operator of crane ${cid}.` },
+          { role: "user", content: `Observation at t=${time_s}s.` },
+          { role: "assistant", content: `Rotate to align with dropoff.` },
+        ],
+        raw_llm_response: {
+          content: `{"left_joystick":{"slew":{"direction":"right","gear":2}}}`,
+          latency_ms: 110 + idx,
+          token_usage: { prompt_tokens: 120 + idx, completion_tokens: 30, total_tokens: 150 + idx },
+        },
+        parsed_command: {
+          left_joystick: { slew: { direction: "right", gear: 2 }, trolley: { direction: "out", gear: 1 } },
+          right_joystick: { hoist: { direction: "neutral", gear: 0 } },
+          deadman_pressed: true,
+          emergency_stop: false,
+          task_action: "none",
+          reason: "align dropoff",
+        },
+        executed_command: {
+          left_joystick: { slew: { direction: "right", gear: 2, speed_scale: 1, source: "raw" } },
+          modified: false,
+          modification_reasons: [],
+        },
+        validation_errors:
+          idx === 1
+            ? [{ schema_version: SCHEMA, error_code: "CMD_E_GEAR_RANGE", message: "gear out of range", field_path: "left_joystick.slew.gear", retryable: true }]
+            : [],
+        modified_by_intervention: false,
+        modified_by_mechanical_safety: false,
+        latency_ms: 110 + idx,
+        retry_count: 0,
+        confidence: 0.8,
+        attention_target: "dropoff",
+        reason: "align dropoff",
+        cache_hit: false,
+        token_usage: { prompt_tokens: 120 + idx, completion_tokens: 30, total_tokens: 150 + idx },
+      });
+      idx += 1;
+    }
+  }
+  return rows;
+}
+
 const framesText = frames.map((fr) => JSON.stringify(fr)).join("\n") + "\n";
 writeFileSync(join(fixturesDir, "frames.jsonl"), framesText, "utf8");
 writeFileSync(
@@ -387,4 +460,15 @@ writeFileSync(
   "utf8",
 );
 
-console.log(`wrote ${frames.length} frames + manifest to ${fixturesDir}`);
+const logsDir = join(fixturesDir, "logs");
+mkdirSync(logsDir, { recursive: true });
+const commands = buildCommands();
+writeFileSync(
+  join(logsDir, "commands.jsonl"),
+  commands.map((r) => JSON.stringify(r)).join("\n") + "\n",
+  "utf8",
+);
+
+console.log(
+  `wrote ${frames.length} frames + manifest + ${commands.length} command rows to ${fixturesDir}`,
+);

@@ -40,6 +40,9 @@ export function SceneView() {
       if (s.ui.showRisk !== prev.ui.showRisk) {
         ctrl.setShowRisk(s.ui.showRisk);
       }
+      if (s.ui.showZones !== prev.ui.showZones) {
+        ctrl.setShowZones(s.ui.showZones);
+      }
     });
 
     return () => {

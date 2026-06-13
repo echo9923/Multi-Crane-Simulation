@@ -68,6 +68,7 @@ export class ThreeSceneController {
   // Risk-overlay state.
   private readonly riskLines = new Map<string, THREE.Line>();
   private showRisk = true;
+  private showZones = true;
   private readonly animate: boolean;
   private pulseRaf = 0;
 
@@ -96,6 +97,7 @@ export class ThreeSceneController {
     this.loadKeys.clear();
     this.riskLines.clear();
     this.showRisk = true;
+    this.showZones = true;
     this.windArrow = null;
     let unknownZoneTypes = 0;
 
@@ -114,6 +116,10 @@ export class ThreeSceneController {
       return ((manifest?.[key as "material_zones"] as unknown) as ZoneManifest[]) ?? [];
     };
 
+    const zonesGroup = new THREE.Group();
+    zonesGroup.name = "zones";
+    this.root.add(zonesGroup);
+
     let zoneCount = 0;
     (["material", "work", "forbidden"] as ZoneKind[]).forEach((kind) => {
       for (const z of zonesOf(kind)) {
@@ -121,7 +127,7 @@ export class ThreeSceneController {
           unknownZoneTypes += 1;
         }
         const obj = buildZone(z as unknown as Parameters<typeof buildZone>[0], kind);
-        this.root.add(obj);
+        zonesGroup.add(obj);
         zoneCount += 1;
       }
     });
@@ -130,9 +136,10 @@ export class ThreeSceneController {
     for (const z of (manifest?.overlap_zones ?? []) as unknown as ZoneManifest[]) {
       if (!z || !z.type) continue;
       if (z.type !== "box" && z.type !== "polygon") unknownZoneTypes += 1;
-      this.root.add(buildZone(z as unknown as Parameters<typeof buildZone>[0], "overlap"));
+      zonesGroup.add(buildZone(z as unknown as Parameters<typeof buildZone>[0], "overlap"));
       zoneCount += 1;
     }
+    zonesGroup.visible = this.showZones;
 
     // Cranes: prefer resolved_cranes; fall back to manifest cranes. An empty
     // resolved_cranes array (truthy but length 0) also falls back.
@@ -274,6 +281,13 @@ export class ThreeSceneController {
     this.showRisk = visible;
     for (const line of this.riskLines.values()) line.visible = visible;
     this.maybePulse();
+    this.render();
+  }
+
+  setShowZones(visible: boolean): void {
+    this.showZones = visible;
+    const g = this.getObjectByName("zones");
+    if (g) g.visible = visible;
     this.render();
   }
 

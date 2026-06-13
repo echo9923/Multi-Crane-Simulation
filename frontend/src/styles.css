@@ -119,3 +119,137 @@ a {
   margin-left: 6px;
   vertical-align: middle;
 }
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.panel h3 {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.panel-body {
+  padding: 8px 10px;
+  font-size: 12px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+table.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+table.grid td,
+table.grid th {
+  padding: 3px 6px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  white-space: nowrap;
+}
+
+.row-selected {
+  background: rgba(76, 194, 255, 0.12);
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+.clickable:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.lvl {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #0b0d12;
+  font-weight: 600;
+}
+
+.chip {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  margin-right: 4px;
+}
+
+details.cmd {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 6px 0;
+}
+
+details.cmd summary {
+  cursor: pointer;
+  color: var(--text);
+}
+
+details.cmd summary:hover {
+  color: var(--accent);
+}
+
+pre.blob {
+  background: #0a0c10;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 4px 0 8px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.crane-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.crane-list-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
