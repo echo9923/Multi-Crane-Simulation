@@ -1,0 +1,190 @@
+from __future__ import annotations
+
+import argparse
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from backend.app.core.config_loader import load_dataset_config, load_demo_config
+from backend.app.core.config_resolver import resolve_config
+
+from .episode_service import default_runner_factory
+
+EXIT_OK = 0
+EXIT_INPUT_ERROR = 1
+EXIT_EPISODE_FAILED = 2
+EXIT_REPLAY_MISMATCH = 3
+EXIT_DATASET_FAILED = 4
+
+
+@dataclass
+class CliResult:
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+
+
+def run_episode_from_config(
+    config_path: Path,
+    *,
+    output_json: bool = False,
+    runner_factory: Callable[..., Any] = default_runner_factory,
+) -> CliResult:
+    try:
+        scenario, experiment, dataset = load_demo_config(config_path)
+        if experiment is None:
+            raise ValueError("demo config must include experiment section")
+        resolved = resolve_config(scenario, experiment, dataset)
+    except Exception as exc:
+        return CliResult(
+            exit_code=EXIT_INPUT_ERROR,
+            stderr=f"{exc}\n",
+        )
+
+    try:
+        runner = runner_factory(episode_id="cli-episode", resolved_config=resolved)
+        episode_result = runner.run_episode()
+    except Exception as exc:
+        return CliResult(
+            exit_code=EXIT_EPISODE_FAILED,
+            stderr=f"{exc}\n",
+        )
+
+    payload = _episode_result_payload(episode_result, run_dir=_resolved_run_dir(resolved))
+    if output_json:
+        return CliResult(
+            exit_code=EXIT_OK,
+            stdout=json.dumps(payload, sort_keys=True) + "\n",
+        )
+    return CliResult(
+        exit_code=EXIT_OK,
+        stdout=(
+            f"episode_id={payload['episode_id']} "
+            f"status={payload['status']} "
+            f"run_dir={payload['run_dir']}\n"
+        ),
+    )
+
+
+def replay_episode_from_run(
+    run_dir: Path,
+    *,
+    output_json: bool = False,
+) -> CliResult:
+    replay_file = run_dir / "replay" / "command_replay.jsonl"
+    if not replay_file.is_file():
+        return CliResult(
+            exit_code=EXIT_REPLAY_MISMATCH,
+            stderr=f"command_replay.jsonl not found under {run_dir}\n",
+        )
+    return CliResult(
+        exit_code=EXIT_REPLAY_MISMATCH,
+        stderr="offline replay runner is not implemented\n",
+    )
+
+
+def batch_generate_from_config(
+    config_path: Path,
+    *,
+    max_episodes: Optional[int] = None,
+) -> CliResult:
+    if max_episodes is not None and max_episodes <= 0:
+        return CliResult(
+            exit_code=EXIT_INPUT_ERROR,
+            stderr="--max-episodes must be positive\n",
+        )
+    try:
+        load_dataset_config(config_path)
+    except Exception as exc:
+        return CliResult(
+            exit_code=EXIT_INPUT_ERROR,
+            stderr=f"{exc}\n",
+        )
+    return CliResult(
+        exit_code=EXIT_DATASET_FAILED,
+        stderr="dataset batch generation is not implemented\n",
+    )
+
+
+def main_run_episode(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Run one simulation episode.")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--output-json", action="store_true")
+    args = parser.parse_args(argv)
+    result = run_episode_from_config(
+        Path(args.config),
+        output_json=args.output_json,
+    )
+    _emit(result)
+    return result.exit_code
+
+
+def main_replay_episode(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Replay one recorded simulation episode.")
+    parser.add_argument("--run", required=True)
+    parser.add_argument("--output-json", action="store_true")
+    args = parser.parse_args(argv)
+    result = replay_episode_from_run(
+        Path(args.run),
+        output_json=args.output_json,
+    )
+    _emit(result)
+    return result.exit_code
+
+
+def main_batch_generate(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Generate a batch dataset.")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--max-episodes", type=int, default=None)
+    args = parser.parse_args(argv)
+    result = batch_generate_from_config(
+        Path(args.config),
+        max_episodes=args.max_episodes,
+    )
+    _emit(result)
+    return result.exit_code
+
+
+def _emit(result: CliResult) -> None:
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        import sys
+
+        print(result.stderr, end="", file=sys.stderr)
+
+
+def _episode_result_payload(episode_result: Any, *, run_dir: Optional[str]) -> dict[str, Any]:
+    status = getattr(episode_result, "status", None)
+    if hasattr(status, "value"):
+        status = status.value
+    return {
+        "episode_id": getattr(episode_result, "episode_id", None),
+        "status": status,
+        "run_dir": run_dir,
+        "final_time_s": getattr(episode_result, "final_time_s", None),
+        "final_frame_index": getattr(episode_result, "final_frame_index", None),
+        "summary_path": str(Path(run_dir) / "metadata" / "episode_summary.json")
+        if run_dir
+        else None,
+    }
+
+
+def _resolved_run_dir(resolved_config: Any) -> Optional[str]:
+    output = getattr(resolved_config, "output", None)
+    if output is None:
+        return None
+    run_root = getattr(output, "run_root", None)
+    return str(run_root) if run_root else None
+
+
+__all__ = [
+    "CliResult",
+    "batch_generate_from_config",
+    "main_batch_generate",
+    "main_replay_episode",
+    "main_run_episode",
+    "replay_episode_from_run",
+    "run_episode_from_config",
+]
