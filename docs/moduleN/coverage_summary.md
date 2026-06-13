@@ -2,8 +2,8 @@
 
 ## 测试分层
 
-- **单元测试（Vitest + jsdom）**：`npm test`。覆盖纯逻辑与 Three.js 场景图（注入桩渲染器，无需 WebGL），共 119 条用例全绿。
-- **端到端（Playwright + headless Chromium，软件 WebGL）**：`npm run e2e`（首次需 `npx playwright install chromium`）。覆盖浏览器真实渲染与交互冒烟。
+- **单元测试（Vitest + jsdom）**：`npm test`。覆盖纯逻辑与 Three.js 场景图（注入桩渲染器，无需 WebGL），共 125 条用例全绿。
+- **端到端（Playwright + headless Chromium，软件 WebGL）**：`npm run e2e`（首次需 `npx playwright install chromium`）。3 条用例覆盖浏览器真实渲染与交互冒烟。
 
 ## 覆盖范围（单元）
 
@@ -16,6 +16,7 @@
 - **WebSocket 实时**：`sim_frame`/`error`/`heartbeat` 分类；指数退避重连序列（可控时钟）；达 `maxAttempts` 停止；心跳超时触发重连；`stop()` 不再重连；`offline_labels` 非空拒绝。
 - **交互与导出**：REST 成功解包 / `M_E_*` → `ApiClientError` / 网络错误 `N_E_TRANSPORT`；`downloadEpisode` ok 返回 Blob、!ok → `M_E_DOWNLOAD_FAILED`；`pickCrane` 命中塔吊、`followCrane` 移动相机；配置上传解析 JSON/YAML、`scrubSecrets` 遮蔽、combined/bare 拆分；ConfigPage 展示 valid/errors/M_E 错误。
 - **跨任务验收**：离线完整链路（parse→load→applyFrame→seek）；实时链路（WS→store→controller→重连）；坐标一致（hook world↔three 精确互逆，且控制器摆放的 hook 世界坐标等于帧 ENU hook，5mm 容差，源于字段取整）；多塔 N=1/3/6。
+- **阶段四集成（错误与边界路径）**：损坏 `frames.jsonl`（跳过坏行+计数后仍可回放）；加载不存在的 episode（`downloadEpisode` 404 → `M_E_EPISODE_NOT_FOUND`；无 `visual/` 的 zip → 0 帧 + “无可用帧”告警，不崩）；WS `error` 消息 → store `connection.error` 带 code；空 episode（`buildStatic(null,null)` 不崩、`hasStatic=false`）；N=6 塔 + 15 对风险渲染不硬编码。
 
 ## 覆盖范围（端到端）
 
@@ -39,9 +40,9 @@
 ```bash
 cd frontend
 npm install            # 依赖
-npm test               # Vitest 单元（119 条）
+npm test               # Vitest 单元（125 条）
 npm run typecheck      # tsc --noEmit
 npm run build          # 生产构建
 npx playwright install chromium   # 一次性
-npm run e2e            # Playwright 端到端冒烟
+npm run e2e            # Playwright 端到端冒烟（3 条）
 ```
