@@ -6,7 +6,7 @@ requires-python = ">=3.9"
 dependencies = [
   "fastapi>=0.115,<1",
   "pydantic>=2.13,<3",
-  "pyarrow>=16,<18",
+  "pyarrow>=18.1,<19",
   "PyYAML>=6.0,<7",
 ]
 
