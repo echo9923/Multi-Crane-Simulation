@@ -83,6 +83,9 @@ class LocalEpisodeRunner:
     def run_one_frame(self) -> Any:
         result = self.runner.run_one_frame()
         if _enum_or_value(result.status) != "running":
+            if not self.recorder.frames:
+                # Cold stops can become terminal before J emits its first frame.
+                self.runner._record_initial_frame()
             self.recorder.finalize(episode_status=result.status)
         return result
 

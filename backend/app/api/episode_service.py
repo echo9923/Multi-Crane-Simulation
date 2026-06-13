@@ -126,6 +126,7 @@ class EpisodeService:
             raise _invalid_state(episode_id, "episode cannot be stopped", previous)
         handle.runner.stop("api stop")
         self._advance_handle_once(handle)
+        handle.run_dir = _runner_run_dir(handle.runner) or handle.run_dir
         return EpisodeControlResponse(
             episode_id=episode_id,
             previous_status=previous,

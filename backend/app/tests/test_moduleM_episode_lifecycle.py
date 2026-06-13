@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -146,6 +147,37 @@ def test_start_episode_default_runner_autostart_exposes_run_dir_and_frame(
     state = client.get("/episodes/E-default/state")
     assert state.status_code == 200
     assert state.json()["data"]["last_frame"]["type"] == "sim_frame"
+
+
+def test_default_runner_stop_before_autostart_writes_terminal_summary(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app())
+    response = client.post(
+        "/episodes/start",
+        json={
+            **_start_payload("E-stop-cold", autostart=False),
+            "overrides": {
+                "experiment": {
+                    "output": {
+                        "run_root": str(tmp_path),
+                    },
+                },
+            },
+        },
+    )
+    assert response.status_code == 200
+
+    stop = client.post("/episodes/E-stop-cold/stop")
+
+    assert stop.status_code == 200
+    assert stop.json()["data"]["status"] == "stopped_by_user"
+    run_dir = Path(client.app.state.episode_service.get_handle("E-stop-cold").run_dir)
+    summary_path = run_dir / "metadata" / "episode_summary.json"
+    assert summary_path.is_file()
+    assert json.loads(summary_path.read_text(encoding="utf-8"))["episode_status"] == (
+        "stopped_by_user"
+    )
 
 
 def test_autostart_false_does_not_advance_runner() -> None:
