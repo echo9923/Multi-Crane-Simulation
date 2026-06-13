@@ -2,6 +2,7 @@
 // Task 08). Selected crane drives panel highlighting and the 3D pick state.
 
 import { useStore } from "@/state/store";
+import { LoadEpisode } from "@/components/LoadEpisode";
 
 export function LeftControls() {
   const ui = useStore((s) => s.ui);
@@ -10,6 +11,7 @@ export function LeftControls() {
 
   return (
     <div>
+      <LoadEpisode />
       <section className="panel" data-testid="display-toggles">
         <h3>显示</h3>
         <div className="panel-body">

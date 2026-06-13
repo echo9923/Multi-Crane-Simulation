@@ -4,6 +4,7 @@ import { Layout } from "@/components/Layout";
 import { SceneView } from "@/components/SceneView";
 import { LeftControls } from "@/components/LeftControls";
 import { Panels } from "@/components/panels/Panels";
+import { Timeline } from "@/components/Timeline";
 import { ensureDemoLoaded } from "@/bootstrap";
 import { useStore } from "@/state/store";
 
@@ -36,6 +37,7 @@ function HomePage() {
       left={<LeftControls />}
       center={<SceneView />}
       right={<Panels />}
+      bottom={<Timeline />}
     />
   );
 }
