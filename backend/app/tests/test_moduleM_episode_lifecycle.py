@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -37,6 +39,12 @@ class FakeRunner:
 
     def stop(self, reason: str = "stopped_by_user") -> None:
         self.stop_reason = reason
+
+
+class FakeRunnerWithRunDir(FakeRunner):
+    def __init__(self, run_dir: Path) -> None:
+        super().__init__()
+        self.recorder = SimpleNamespace(run_dir=run_dir)
 
 
 class FakeRunnerFactory:
@@ -89,6 +97,55 @@ def test_start_episode_creates_registry_handle_with_explicit_id() -> None:
     handle = service.get_handle("E-life")
     assert handle.episode_id == "E-life"
     assert handle.runner is factory.created[0]["runner"]
+
+
+def test_start_episode_prefers_runner_reported_run_dir(tmp_path: Path) -> None:
+    actual_run_dir = tmp_path / "runs" / "E-life"
+
+    def factory(**kwargs: Any) -> FakeRunnerWithRunDir:
+        return FakeRunnerWithRunDir(actual_run_dir)
+
+    app = create_app()
+    app.state.runner_factory = factory
+    client = TestClient(app)
+
+    response = client.post("/episodes/start", json=_start_payload())
+
+    assert response.status_code == 200
+    assert response.json()["data"]["run_dir"] == str(actual_run_dir)
+    handle = client.app.state.episode_service.get_handle("E-life")
+    assert handle.run_dir == actual_run_dir
+
+
+def test_start_episode_default_runner_autostart_exposes_run_dir_and_frame(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/episodes/start",
+        json={
+            **_start_payload("E-default", autostart=True),
+            "overrides": {
+                "experiment": {
+                    "output": {
+                        "run_root": str(tmp_path),
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    run_dir = Path(data["run_dir"])
+    assert run_dir.name == "E-default"
+    frame_path = run_dir / "visual" / "frames.jsonl"
+    assert frame_path.is_file()
+
+    state = client.get("/episodes/E-default/state")
+    assert state.status_code == 200
+    assert state.json()["data"]["last_frame"]["type"] == "sim_frame"
 
 
 def test_autostart_false_does_not_advance_runner() -> None:

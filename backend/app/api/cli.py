@@ -29,10 +29,11 @@ def run_episode_from_config(
     config_path: Path,
     *,
     output_json: bool = False,
+    overrides: Optional[dict[str, Any]] = None,
     runner_factory: Callable[..., Any] = default_runner_factory,
 ) -> CliResult:
     try:
-        scenario, experiment, dataset = load_demo_config(config_path)
+        scenario, experiment, dataset = load_demo_config(config_path, overrides=overrides)
         if experiment is None:
             raise ValueError("demo config must include experiment section")
         resolved = resolve_config(scenario, experiment, dataset)
@@ -51,7 +52,10 @@ def run_episode_from_config(
             stderr=f"{exc}\n",
         )
 
-    payload = _episode_result_payload(episode_result, run_dir=_resolved_run_dir(resolved))
+    payload = _episode_result_payload(
+        episode_result,
+        run_dir=_runner_run_dir(runner) or _resolved_run_dir(resolved),
+    )
     if output_json:
         return CliResult(
             exit_code=EXIT_OK,
@@ -111,10 +115,17 @@ def main_run_episode(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run one simulation episode.")
     parser.add_argument("--config", required=True)
     parser.add_argument("--output-json", action="store_true")
+    parser.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        help="Override a demo config field, for example experiment.output.run_root=runs/tmp.",
+    )
     args = parser.parse_args(argv)
     result = run_episode_from_config(
         Path(args.config),
         output_json=args.output_json,
+        overrides=_parse_demo_overrides(args.override),
     )
     _emit(result)
     return result.exit_code
@@ -177,6 +188,32 @@ def _resolved_run_dir(resolved_config: Any) -> Optional[str]:
         return None
     run_root = getattr(output, "run_root", None)
     return str(run_root) if run_root else None
+
+
+def _runner_run_dir(runner: Any) -> Optional[str]:
+    recorder = getattr(runner, "recorder", None)
+    run_dir = getattr(recorder, "run_dir", None)
+    return str(run_dir) if run_dir is not None else None
+
+
+def _parse_demo_overrides(values: list[str]) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    for value in values:
+        if "=" not in value:
+            raise SystemExit(f"invalid --override value: {value}")
+        key, raw = value.split("=", 1)
+        section, _, field_path = key.partition(".")
+        if section not in {"scenario", "experiment", "dataset"} or not field_path:
+            raise SystemExit(f"invalid --override path: {key}")
+        overrides.setdefault(section, {})[field_path] = _parse_override_value(raw)
+    return overrides
+
+
+def _parse_override_value(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
 
 
 __all__ = [

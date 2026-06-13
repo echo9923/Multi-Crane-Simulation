@@ -71,12 +71,13 @@ class EpisodeService:
         handle = EpisodeHandle(
             episode_id=episode_id,
             runner=runner,
-            run_dir=_resolved_run_dir(resolved_config),
+            run_dir=_runner_run_dir(runner) or _resolved_run_dir(resolved_config),
             status=_runner_status(runner),
         )
 
         if request.autostart:
             self._advance_handle_once(handle)
+            handle.run_dir = _runner_run_dir(runner) or handle.run_dir
 
         self.handles[episode_id] = handle
         return EpisodeStartResponse(
@@ -212,9 +213,18 @@ def _resolved_run_dir(resolved_config: Any) -> Optional[Path]:
     return Path(run_root) if run_root else None
 
 
+def _runner_run_dir(runner: Any) -> Optional[Path]:
+    recorder = getattr(runner, "recorder", None)
+    run_dir = getattr(recorder, "run_dir", None)
+    return Path(run_dir) if run_dir is not None else None
+
+
 def default_runner_factory(*, episode_id: str, resolved_config: Any) -> Any:
-    raise NotImplementedError(
-        "real EpisodeRunner dependency assembly is implemented in later Module M tasks"
+    from .local_runner import build_local_episode_runner
+
+    return build_local_episode_runner(
+        episode_id=episode_id,
+        resolved_config=resolved_config,
     )
 
 

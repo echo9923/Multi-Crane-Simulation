@@ -61,6 +61,31 @@ def test_run_episode_function_outputs_json_with_fake_runner_factory() -> None:
     assert "run_dir" in payload
 
 
+def test_run_episode_script_runs_with_default_runner_factory(tmp_path: Path) -> None:
+    result = _run_script(
+        "scripts/run_episode.py",
+        "--config",
+        str(FIXTURE_DIR / "demo_valid.yaml"),
+        "--output-json",
+        "--override",
+        f"experiment.output.run_root={tmp_path}",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["episode_id"] == "cli-episode"
+    assert payload["status"] in {"completed", "timeout"}
+    assert payload["run_dir"]
+    assert payload["final_frame_index"] > 0
+    summary_path = Path(payload["summary_path"])
+    assert summary_path.is_file()
+    assert summary_path.name == "episode_summary.json"
+    frames_path = Path(payload["run_dir"]) / "visual" / "frames.jsonl"
+    assert frames_path.is_file()
+    first_frame = json.loads(frames_path.read_text(encoding="utf-8").splitlines()[0])
+    assert first_frame["type"] == "sim_frame"
+
+
 def test_run_episode_missing_config_returns_exit_code_1() -> None:
     result = _run_script("scripts/run_episode.py", "--config", "missing.yaml")
 
