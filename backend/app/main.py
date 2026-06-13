@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from backend.app.api.errors import register_exception_handlers
+from backend.app.api.routes_episodes import router as episodes_router
 from backend.app.api.routes_health import router as health_router
 
 
@@ -13,6 +14,7 @@ def create_app() -> FastAPI:
     )
     register_exception_handlers(app)
     app.include_router(health_router)
+    app.include_router(episodes_router)
     return app
 
 
