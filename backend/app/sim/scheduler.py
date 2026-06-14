@@ -338,6 +338,8 @@ class EpisodeRunner:
                 frame_index=frame_index + 1,
                 time_s=next_time_s,
                 states=copy.deepcopy(next_states),
+                weather_state=copy.deepcopy(weather_state),
+                commands=copy.deepcopy(current_commands),
                 events=copy.deepcopy(frame_events),
                 status=self.episode_status,
             )

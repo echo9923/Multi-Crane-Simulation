@@ -104,6 +104,20 @@ def test_episode_source_rejects_missing_horizon_label(tmp_path: Path) -> None:
     assert "collision_label_10s" in exc_info.value.details["missing_fields"]
 
 
+def test_episode_source_can_load_index_only_pair_risks_without_future_labels(
+    tmp_path: Path,
+) -> None:
+    dataset_root = _write_episode_fixture(tmp_path, drop_pair_field="collision_label_10s")
+
+    tables = EpisodeParquetSource(
+        dataset_root=dataset_root,
+        require_offline_risk_labels=False,
+    ).load_for_window(_window())
+
+    assert tables.pair_risks.num_rows == 4
+    assert "collision_label_10s" not in tables.pair_risks.column_names
+
+
 def test_episode_source_rejects_episode_id_mismatch(tmp_path: Path) -> None:
     dataset_root = _write_episode_fixture(tmp_path, trajectory_episode_id="OTHER")
 

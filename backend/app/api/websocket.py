@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from backend.app.schemas.recorder import SimFrame
+from backend.app.sim.recorder import build_sim_frame
 
 from .episode_service import EpisodeService, default_runner_factory
 from .schemas import (
@@ -112,10 +114,33 @@ class ApiWebSocketAdapter:
     def __init__(self, manager: WebSocketConnectionManager) -> None:
         self.manager = manager
 
-    def broadcast_sim_frame_if_enabled(self, *, episode_id: str, frame: SimFrame, **_: Any) -> None:
-        raise NotImplementedError(
-            "Async WebSocket adapter integration is completed in Module M acceptance work"
+    def broadcast_sim_frame_if_enabled(
+        self,
+        *,
+        episode_id: str,
+        frame: SimFrame | None = None,
+        **kwargs: Any,
+    ) -> None:
+        sim_frame = frame or build_sim_frame(
+            episode_id=episode_id,
+            scenario_id=None,
+            frame_index=kwargs["frame_index"],
+            time_s=kwargs["time_s"],
+            episode_status=kwargs.get("status", "running"),
+            states=kwargs.get("states", []),
+            weather_state=kwargs["weather_state"],
+            commands=kwargs.get("commands"),
+            pairs=[],
+            tasks=[],
+            events=kwargs.get("events", []),
+            for_realtime=True,
         )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.manager.broadcast_sim_frame(episode_id, sim_frame))
+            return
+        loop.create_task(self.manager.broadcast_sim_frame(episode_id, sim_frame))
 
 
 __all__ = [

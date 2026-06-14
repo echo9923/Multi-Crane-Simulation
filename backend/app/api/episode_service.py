@@ -53,7 +53,8 @@ class EpisodeService:
 
         resolved_config = self._resolve_start_config(request)
         try:
-            runner = self.runner_factory(
+            factory = _runner_factory_for_request(request, self.runner_factory)
+            runner = factory(
                 episode_id=episode_id,
                 resolved_config=resolved_config,
             )
@@ -221,6 +222,15 @@ def _runner_run_dir(runner: Any) -> Optional[Path]:
 
 
 def default_runner_factory(*, episode_id: str, resolved_config: Any) -> Any:
+    from .production_runner import build_production_episode_runner
+
+    return build_production_episode_runner(
+        episode_id=episode_id,
+        resolved_config=resolved_config,
+    )
+
+
+def local_runner_factory(*, episode_id: str, resolved_config: Any) -> Any:
     from .local_runner import build_local_episode_runner
 
     return build_local_episode_runner(
@@ -229,8 +239,20 @@ def default_runner_factory(*, episode_id: str, resolved_config: Any) -> Any:
     )
 
 
+def _runner_factory_for_request(
+    request: EpisodeStartRequest,
+    fallback: RunnerFactory,
+) -> RunnerFactory:
+    if request.runner is None or request.runner == "production":
+        return fallback
+    if request.runner == "local":
+        return local_runner_factory
+    return fallback
+
+
 __all__ = [
     "EpisodeHandle",
     "EpisodeService",
     "default_runner_factory",
+    "local_runner_factory",
 ]

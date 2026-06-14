@@ -52,15 +52,15 @@ def test_dataset_artifacts_round_trip_through_public_schemas(tmp_path: Path) -> 
         DatasetQualityReport.model_validate(report)
 
     episodes = [
-        DatasetEpisodeRecord.model_validate(row)
+        DatasetEpisodeRecord.model_validate(_decode_parquet_row(row))
         for row in pq.read_table(result.dataset_dir / "index" / "episodes.parquet").to_pylist()
     ]
     windows = [
-        DatasetWindowIndexRow.model_validate(row)
+        DatasetWindowIndexRow.model_validate(_decode_parquet_row(row))
         for row in pq.read_table(result.dataset_dir / "index" / "windows.parquet").to_pylist()
     ]
     files = [
-        DatasetFileRecord.model_validate(row)
+        DatasetFileRecord.model_validate(_decode_parquet_row(row))
         for row in pq.read_table(result.dataset_dir / "index" / "files.parquet").to_pylist()
     ]
     split_contract = DatasetSplitManifest.model_validate(split_manifest)
@@ -72,6 +72,20 @@ def test_dataset_artifacts_round_trip_through_public_schemas(tmp_path: Path) -> 
         "E001",
         "E002",
     }
+
+
+def _decode_parquet_row(row: dict) -> dict:
+    decoded = dict(row)
+    for key, value in list(decoded.items()):
+        if not isinstance(value, str):
+            continue
+        if not value.startswith(("{", "[")):
+            continue
+        try:
+            decoded[key] = json.loads(value)
+        except json.JSONDecodeError:
+            pass
+    return decoded
 
 
 def test_split_jsonl_files_match_split_manifest_assignments(tmp_path: Path) -> None:

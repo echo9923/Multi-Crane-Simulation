@@ -74,9 +74,11 @@ class EpisodeParquetSource:
         *,
         dataset_root: Path,
         allow_graph_edge_fallback: bool = False,
+        require_offline_risk_labels: bool = True,
     ) -> None:
         self.dataset_root = Path(dataset_root)
         self.allow_graph_edge_fallback = allow_graph_edge_fallback
+        self.require_offline_risk_labels = require_offline_risk_labels
 
     def load_for_window(self, window: DatasetWindowIndexRow) -> EpisodeTables:
         source_paths = self._resolve_source_paths(window.source_paths)
@@ -114,9 +116,12 @@ class EpisodeParquetSource:
             code=TRAINING_E_SOURCE_SCHEMA_INVALID,
         )
         if not (window.num_cranes <= 1 and tables.pair_risks.num_rows == 0):
+            required_pair_fields = set(REQUIRED_PAIR_RISK_FIELDS)
+            if self.require_offline_risk_labels:
+                required_pair_fields |= _required_horizon_fields(window.label_horizons_s)
             _require_columns(
                 tables.pair_risks,
-                REQUIRED_PAIR_RISK_FIELDS | _required_horizon_fields(window.label_horizons_s),
+                required_pair_fields,
                 role="pair_risks",
                 code=TRAINING_E_LABEL_MISSING,
             )

@@ -35,6 +35,7 @@ API_ERROR_CODES = (
 )
 
 RunModeValue = Literal["offline_batch", "offline_replay", "interactive_server"]
+RunnerValue = Literal["production", "local"]
 SortOrder = Literal["asc", "desc"]
 
 
@@ -109,6 +110,7 @@ class EpisodeStartRequest(ApiBaseModel):
     dataset: Optional[dict[str, Any]] = None
     overrides: dict[str, Any] = Field(default_factory=dict)
     run_mode: Optional[RunModeValue] = None
+    runner: Optional[RunnerValue] = None
     episode_id: Optional[str] = None
     autostart: bool = True
 

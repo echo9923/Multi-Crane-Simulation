@@ -127,6 +127,7 @@ def test_start_episode_default_runner_autostart_exposes_run_dir_and_frame(
         "/episodes/start",
         json={
             **_start_payload("E-default", autostart=True),
+            "runner": "local",
             "overrides": {
                 "experiment": {
                     "output": {
@@ -157,6 +158,7 @@ def test_default_runner_stop_before_autostart_writes_terminal_summary(
         "/episodes/start",
         json={
             **_start_payload("E-stop-cold", autostart=False),
+            "runner": "local",
             "overrides": {
                 "experiment": {
                     "output": {

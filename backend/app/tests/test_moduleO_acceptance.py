@@ -59,7 +59,7 @@ def test_module_o_end_to_end_builds_queryable_dataset(tmp_path: Path) -> None:
     dataset_dir = Path(payload["dataset_dir"])
     windows = pq.read_table(dataset_dir / "index" / "windows.parquet").to_pylist()
     assert windows
-    DatasetWindowIndexRow.model_validate(windows[0])
+    DatasetWindowIndexRow.model_validate(_decode_parquet_row(windows[0]))
     assert any(row["is_positive"] for row in windows)
 
     summary = json.loads((dataset_dir / "metadata" / "dataset_summary.json").read_text())
@@ -77,6 +77,20 @@ def test_module_o_end_to_end_builds_queryable_dataset(tmp_path: Path) -> None:
     assert list_response.json()["data"]["items"][0]["summary_available"] is True
     assert summary_response.status_code == 200
     assert summary_response.json()["data"]["summary"]["num_quarantined"] == 1
+
+
+def _decode_parquet_row(row: dict) -> dict:
+    decoded = dict(row)
+    for key, value in list(decoded.items()):
+        if not isinstance(value, str):
+            continue
+        if not value.startswith(("{", "[")):
+            continue
+        try:
+            decoded[key] = json.loads(value)
+        except json.JSONDecodeError:
+            pass
+    return decoded
 
 
 def test_module_o_acceptance_reports_source_missing_error(tmp_path: Path) -> None:

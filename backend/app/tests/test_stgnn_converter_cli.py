@@ -91,6 +91,25 @@ def test_converter_lenient_mode_skips_bad_sample(tmp_path: Path) -> None:
     assert "sk-" not in json.dumps(result.summary.model_dump(mode="json"))
 
 
+def test_converter_lenient_index_only_keeps_samples_when_future_risk_labels_are_missing(
+    tmp_path: Path,
+) -> None:
+    dataset_root = _write_tiny_dataset(tmp_path, omit_future_risk_labels=True)
+
+    result = StgnnDatasetConverter(strict=False).convert(
+        dataset_root=dataset_root,
+        output_root=tmp_path / "stgnn-output",
+    )
+
+    assert [sample.episode_id for sample in result.samples] == ["E001", "E002"]
+    assert result.summary.sample_counts == {"train": 1, "val": 1}
+    assert result.summary.skipped_counts == {}
+    assert {
+        warning["warning_code"]
+        for warning in result.summary.warnings
+    } == {"TRAINING_W_INDEX_ONLY_RISK_LABEL_MISSING"}
+
+
 def test_converter_write_failure_does_not_leave_final_sample_index(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -149,6 +168,7 @@ def _write_tiny_dataset(
     *,
     drop_trajectory_field: str | None = None,
     drop_trajectory_field_for_episode: str | None = None,
+    omit_future_risk_labels: bool = False,
 ) -> Path:
     dataset_root = tmp_path / "dataset-a"
     metadata_dir = dataset_root / "metadata"
@@ -168,7 +188,12 @@ def _write_tiny_dataset(
         drop = drop_trajectory_field
         if drop_trajectory_field_for_episode == episode_id:
             drop = "theta_sin"
-        _write_episode(dataset_root, episode_id=episode_id, drop_trajectory_field=drop)
+        _write_episode(
+            dataset_root,
+            episode_id=episode_id,
+            drop_trajectory_field=drop,
+            omit_future_risk_labels=omit_future_risk_labels,
+        )
     return dataset_root
 
 
@@ -177,6 +202,7 @@ def _write_episode(
     *,
     episode_id: str,
     drop_trajectory_field: str | None = None,
+    omit_future_risk_labels: bool = False,
 ) -> None:
     data_dir = dataset_root / "episodes" / episode_id / "data"
     metadata_dir = dataset_root / "episodes" / episode_id / "metadata"
@@ -194,7 +220,16 @@ def _write_episode(
             row.pop(drop_trajectory_field, None)
     pq.write_table(pa.Table.from_pylist(trajectory_rows), data_dir / "trajectories.parquet")
     pq.write_table(
-        pa.Table.from_pylist([_pair_row(episode_id, frame) for frame in range(4)]),
+        pa.Table.from_pylist(
+            [
+                _pair_row(
+                    episode_id,
+                    frame,
+                    omit_future_risk_labels=omit_future_risk_labels,
+                )
+                for frame in range(4)
+            ]
+        ),
         data_dir / "pair_risks.parquet",
     )
     pq.write_table(
@@ -331,8 +366,13 @@ def _trajectory_row(episode_id: str, frame: int, crane_id: str) -> dict:
     }
 
 
-def _pair_row(episode_id: str, frame: int) -> dict:
-    return {
+def _pair_row(
+    episode_id: str,
+    frame: int,
+    *,
+    omit_future_risk_labels: bool = False,
+) -> dict:
+    row = {
         "schema_version": "1.0",
         "episode_id": episode_id,
         "scenario_id": "scenario-a",
@@ -343,11 +383,17 @@ def _pair_row(episode_id: str, frame: int) -> dict:
         "distance_min_raw_now_m": 6.0,
         "clearance_min_now_m": 4.0,
         "risk_level_now": "safe",
-        "risk_level_5s": "safe",
-        "collision_label_5s": 0,
-        "min_clearance_future_5s_m": 2.0,
-        "ttc_5s_s": None,
     }
+    if not omit_future_risk_labels:
+        row.update(
+            {
+                "risk_level_5s": "safe",
+                "collision_label_5s": 0,
+                "min_clearance_future_5s_m": 2.0,
+                "ttc_5s_s": None,
+            }
+        )
+    return row
 
 
 def _graph_row(episode_id: str, frame: int) -> dict:

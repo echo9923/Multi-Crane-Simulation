@@ -68,6 +68,8 @@ def test_run_episode_script_runs_with_default_runner_factory(tmp_path: Path) -> 
         "--config",
         str(FIXTURE_DIR / "demo_valid.yaml"),
         "--output-json",
+        "--runner",
+        "local",
         "--override",
         f"experiment.output.run_root={tmp_path}",
     )

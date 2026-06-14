@@ -4,7 +4,7 @@ import argparse
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
 
 from backend.app.core.config_loader import load_dataset_config, load_demo_config
 from backend.app.core.config_resolver import resolve_config
@@ -16,13 +16,16 @@ from backend.app.data.splits import DatasetSplitPlanner
 from backend.app.data.window_index import DatasetWindowIndexer
 from backend.app.schemas.dataset import DatasetBuildOptions
 
-from .episode_service import default_runner_factory
+from .episode_service import default_runner_factory, local_runner_factory
 
 EXIT_OK = 0
 EXIT_INPUT_ERROR = 1
 EXIT_EPISODE_FAILED = 2
 EXIT_REPLAY_MISMATCH = 3
 EXIT_DATASET_FAILED = 4
+
+
+RunnerName = Literal["production", "local"]
 
 
 @dataclass
@@ -37,6 +40,7 @@ def run_episode_from_config(
     *,
     output_json: bool = False,
     overrides: Optional[dict[str, Any]] = None,
+    runner: RunnerName = "production",
     runner_factory: Callable[..., Any] = default_runner_factory,
 ) -> CliResult:
     try:
@@ -51,8 +55,12 @@ def run_episode_from_config(
         )
 
     try:
-        runner = runner_factory(episode_id="cli-episode", resolved_config=resolved)
-        episode_result = runner.run_episode()
+        selected_factory = _select_runner_factory(runner, runner_factory)
+        runner_instance = selected_factory(
+            episode_id="cli-episode",
+            resolved_config=resolved,
+        )
+        episode_result = runner_instance.run_episode()
     except Exception as exc:
         return CliResult(
             exit_code=EXIT_EPISODE_FAILED,
@@ -61,7 +69,7 @@ def run_episode_from_config(
 
     payload = _episode_result_payload(
         episode_result,
-        run_dir=_runner_run_dir(runner) or _resolved_run_dir(resolved),
+        run_dir=_runner_run_dir(runner_instance) or _resolved_run_dir(resolved),
     )
     if output_json:
         return CliResult(
@@ -101,6 +109,7 @@ def batch_generate_from_config(
     max_episodes: Optional[int] = None,
     output_json: bool = False,
     output_root: Optional[Path] = None,
+    runner: RunnerName = "production",
     runner_factory: Callable[..., Any] = default_runner_factory,
 ) -> CliResult:
     if max_episodes is not None and max_episodes <= 0:
@@ -116,7 +125,8 @@ def batch_generate_from_config(
             stderr=f"{exc}\n",
         )
     try:
-        result = BatchEpisodeRunner(runner_factory=runner_factory).run(
+        selected_factory = _select_runner_factory(runner, runner_factory)
+        result = BatchEpisodeRunner(runner_factory=selected_factory).run(
             BatchEpisodeRequest(
                 dataset_config=dataset,
                 output_root=output_root or Path(dataset.run_root) / "datasets",
@@ -202,6 +212,12 @@ def main_run_episode(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--config", required=True)
     parser.add_argument("--output-json", action="store_true")
     parser.add_argument(
+        "--runner",
+        choices=["production", "local"],
+        default="production",
+        help="Episode runner to use. production is the full A-P assembly; local is a fast smoke runner.",
+    )
+    parser.add_argument(
         "--override",
         action="append",
         default=[],
@@ -212,6 +228,7 @@ def main_run_episode(argv: Optional[list[str]] = None) -> int:
         Path(args.config),
         output_json=args.output_json,
         overrides=_parse_demo_overrides(args.override),
+        runner=args.runner,
     )
     _emit(result)
     return result.exit_code
@@ -221,6 +238,12 @@ def main_replay_episode(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Replay one recorded simulation episode.")
     parser.add_argument("--run", required=True)
     parser.add_argument("--output-json", action="store_true")
+    parser.add_argument(
+        "--runner",
+        choices=["production", "local"],
+        default="production",
+        help="Episode runner to use. production is the full A-P assembly; local is a fast smoke runner.",
+    )
     args = parser.parse_args(argv)
     result = replay_episode_from_run(
         Path(args.run),
@@ -236,12 +259,19 @@ def main_batch_generate(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--max-episodes", type=int, default=None)
     parser.add_argument("--output-root", default=None)
     parser.add_argument("--output-json", action="store_true")
+    parser.add_argument(
+        "--runner",
+        choices=["production", "local"],
+        default="production",
+        help="Episode runner to use. production is the full A-P assembly; local is a fast smoke runner.",
+    )
     args = parser.parse_args(argv)
     result = batch_generate_from_config(
         Path(args.config),
         max_episodes=args.max_episodes,
         output_json=args.output_json,
         output_root=Path(args.output_root) if args.output_root else None,
+        runner=args.runner,
     )
     _emit(result)
     return result.exit_code
@@ -316,6 +346,15 @@ def _runner_run_dir(runner: Any) -> Optional[str]:
     return str(run_dir) if run_dir is not None else None
 
 
+def _select_runner_factory(
+    runner: RunnerName,
+    fallback: Callable[..., Any],
+) -> Callable[..., Any]:
+    if runner == "local":
+        return local_runner_factory
+    return fallback
+
+
 def _parse_demo_overrides(values: list[str]) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     for value in values:
@@ -338,6 +377,7 @@ def _parse_override_value(raw: str) -> Any:
 
 __all__ = [
     "CliResult",
+    "RunnerName",
     "batch_generate_from_config",
     "build_dataset_from_config",
     "main_batch_generate",

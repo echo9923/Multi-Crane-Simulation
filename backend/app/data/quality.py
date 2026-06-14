@@ -51,9 +51,11 @@ class DatasetQualityGate:
         *,
         min_duration_s: float | None = 300.0,
         required_offline_labels: bool = True,
+        require_replay: bool = True,
     ) -> None:
         self.min_duration_s = min_duration_s
         self.required_offline_labels = required_offline_labels
+        self.require_replay = require_replay
 
     def evaluate_episode(self, episode: DatasetEpisodeRecord) -> DatasetQualityReport:
         failed: set[str] = set()
@@ -118,7 +120,7 @@ class DatasetQualityGate:
 
         if not _jsonl_ok(episode.run_dir / "logs" / "events.jsonl"):
             failed.add("event_consistency")
-        if not _jsonl_ok(episode.run_dir / "replay" / "command_replay.jsonl"):
+        if self.require_replay and not _jsonl_ok(episode.run_dir / "replay" / "command_replay.jsonl"):
             failed.add("replay_ready")
         if _offline_truth_leaked(episode.run_dir / "logs" / "llm_observations.jsonl"):
             failed.add("online_offline_separation")

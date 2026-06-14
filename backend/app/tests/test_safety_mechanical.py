@@ -223,7 +223,7 @@ def test_moment_limit_prevents_overload_motion() -> None:
     assert "trolley" in result.blocked_axes
 
 
-def test_slew_acceleration_limit_blocks_too_large_step_change() -> None:
+def test_continuous_slew_keeps_command_when_physics_will_smooth_acceleration() -> None:
     config = _crane_config()
     state = _state(trolley_r_m=20.0, hook_h_m=20.0, theta_dot_rad_s=0.0)
 
@@ -234,9 +234,10 @@ def test_slew_acceleration_limit_blocks_too_large_step_change() -> None:
         dt_s=0.1,
     )
 
-    assert executed.left_joystick.slew.direction == "neutral"
-    assert "slew_limit" in result.applied_limits
-    assert "slew" in result.clamped_axes
+    assert executed.left_joystick.slew.direction == "right"
+    assert executed.left_joystick.slew.gear == 5
+    assert "slew_limit" not in result.applied_limits
+    assert "slew" not in result.clamped_axes
 
 
 def test_estimate_axis_velocity_uses_model_limits_and_direction_sign() -> None:

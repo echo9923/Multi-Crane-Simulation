@@ -174,6 +174,7 @@ def _read_windows(path: Path) -> list[DatasetWindowIndexRow]:
         ) from exc
     windows: list[DatasetWindowIndexRow] = []
     for index, row in enumerate(rows):
+        row = _decode_window_row(row)
         try:
             assert_no_training_secret(row, context=f"windows[{index}]")
             windows.append(DatasetWindowIndexRow.model_validate(row))
@@ -190,6 +191,18 @@ def _read_windows(path: Path) -> list[DatasetWindowIndexRow]:
                 },
             ) from exc
     return windows
+
+
+def _decode_window_row(row: dict[str, Any]) -> dict[str, Any]:
+    decoded = dict(row)
+    for key in ("label_horizons_s", "source_paths"):
+        value = decoded.get(key)
+        if isinstance(value, str):
+            try:
+                decoded[key] = json.loads(value)
+            except json.JSONDecodeError:
+                pass
+    return decoded
 
 
 def _validate_manifest_consistency(

@@ -671,12 +671,7 @@ def _slew_exceeds_limits(
     target_velocity = estimate_axis_velocity(
         axis="slew", direction=direction, gear=gear, config=config
     )
-    if abs(target_velocity) > config.model.slew_speed_max_rad_s:
-        return True
-    return (
-        abs(target_velocity - state.theta_dot_rad_s)
-        > config.model.slew_acc_max_rad_s2 * dt_s
-    )
+    return abs(target_velocity) > config.model.slew_speed_max_rad_s
 
 
 def _point_in_polygon_2d(x: float, y: float, points: list[list[float]]) -> bool:

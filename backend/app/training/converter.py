@@ -9,7 +9,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from backend.app.schemas.training import (
+    TRAINING_E_LABEL_MISSING,
+    TRAINING_E_SOURCE_SCHEMA_INVALID,
     TRAINING_E_WRITE_FAILED,
+    TRAINING_W_INDEX_ONLY_RISK_LABEL_MISSING,
     StgnnConversionOptions,
     StgnnConversionResult,
     StgnnFeatureSpec,
@@ -86,6 +89,7 @@ class StgnnDatasetConverter:
         source = EpisodeParquetSource(
             dataset_root=dataset_root,
             allow_graph_edge_fallback=True,
+            require_offline_risk_labels=strict,
         )
         variable_nodes = VariableNodeStrategy()
         node_builder = NodeFeatureBuilder(feature_spec=feature_spec)
@@ -126,12 +130,25 @@ class StgnnDatasetConverter:
                     crane_order=crane_order,
                     max_nodes=feature_spec.max_nodes,
                 )
-                label_builder.build_risk(
-                    window=window,
-                    tables=tables,
-                    crane_order=crane_order,
-                    max_nodes=feature_spec.max_nodes,
-                )
+                try:
+                    label_builder.build_risk(
+                        window=window,
+                        tables=tables,
+                        crane_order=crane_order,
+                        max_nodes=feature_spec.max_nodes,
+                    )
+                except TrainingConversionError as exc:
+                    if strict or not _is_index_only_risk_label_gap(exc):
+                        raise
+                    warnings.append(
+                        {
+                            "warning_code": TRAINING_W_INDEX_ONLY_RISK_LABEL_MISSING,
+                            "message": "risk labels are unavailable; sample index was kept without tensor labels",
+                            "episode_id": window.episode_id,
+                            "split": window.split,
+                            "details": exc.details,
+                        }
+                    )
                 metadata = metadata_builder.build(
                     window=window,
                     feature_spec=feature_spec,
@@ -191,6 +208,30 @@ def _window_horizons(windows: Sequence) -> list[float]:
         if window.label_horizons_s:
             return list(window.label_horizons_s)
     return [5.0]
+
+
+def _is_index_only_risk_label_gap(exc: TrainingConversionError) -> bool:
+    if exc.code not in {TRAINING_E_LABEL_MISSING, TRAINING_E_SOURCE_SCHEMA_INVALID}:
+        return False
+    field = exc.details.get("field")
+    if isinstance(field, str) and (
+        field.startswith("risk_level_")
+        or field.startswith("collision_label_")
+    ):
+        return True
+    missing_fields = exc.details.get("missing_fields")
+    if isinstance(missing_fields, list):
+        return all(
+            isinstance(field_name, str)
+            and (
+                field_name.startswith("risk_level_")
+                or field_name.startswith("collision_label_")
+                or field_name.startswith("min_clearance_future_")
+                or field_name.startswith("ttc_")
+            )
+            for field_name in missing_fields
+        )
+    return False
 
 
 def _write_result(

@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Type
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Type, Union, get_args, get_origin
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -164,10 +164,10 @@ class Recorder:
             task_queues=task_queues,
             events=events,
             status=status,
-            online_risk=None,
+            online_risk=extra.get("online_risk"),
             observations=(),
             llm_calls=(),
-            interventions=(),
+            interventions=extra.get("interventions", ()),
         )
 
     def record_step(
@@ -250,7 +250,7 @@ class Recorder:
             episode_status=episode_status,
             frame_count=self._last_frame_index + 1,
             dt_s=max(_infer_dt_s(self._trajectory_rows), 1.0e-9),
-            crane_configs=[],
+            crane_configs=_resolved_crane_configs(self.resolved_config),
             resolved_config=self.resolved_config,
             offline_labels_available=bool(self._pair_risk_rows),
         )
@@ -323,6 +323,11 @@ class Recorder:
             frame_index=frame_index,
             time_s=time_s,
         )
+        task_rows = _task_rows_from_task_queues(
+            task_queues,
+            episode_id=episode_id,
+            scenario_id=self.scenario_id,
+        )
         observation_rows = [
             _observation_log_entry_from_any(
                 observation,
@@ -372,6 +377,7 @@ class Recorder:
         self.parquet_writers.write_trajectories(trajectory_rows)
         self.parquet_writers.write_pair_risks(pair_risk_rows)
         self.parquet_writers.write_graph_edges(graph_edge_rows)
+        self.parquet_writers.write_tasks(task_rows)
         self.parquet_writers.write_weather([weather_row])
         self.jsonl_writers.write_observations(observation_rows)
         self.jsonl_writers.write_decisions(decision_rows)
@@ -381,6 +387,7 @@ class Recorder:
         self.visual_writer.append_frame(frame)
         self._trajectory_rows.extend(trajectory_rows)
         self._pair_risk_rows.extend(pair_risk_rows)
+        self._task_rows = task_rows
         self._command_logs.extend(command_rows)
         self._event_logs.extend(event_rows)
         self._last_time_s = time_s
@@ -488,11 +495,13 @@ class ParquetTableWriter:
             self._rows.append(validated.model_dump(mode="json"))
 
     def flush(self) -> None:
-        if not self._rows:
-            return
         tmp_path = self.output_path.with_name(f".{self.output_path.name}.tmp")
         try:
-            table = pa.Table.from_pylist(self._rows)
+            table = (
+                pa.Table.from_pylist(self._rows)
+                if self._rows
+                else pa.Table.from_pylist([], schema=_arrow_schema_for_model(self.row_model))
+            )
             pq.write_table(table, tmp_path)
             tmp_path.replace(self.output_path)
         except Exception as exc:
@@ -629,8 +638,6 @@ class JsonlWriter:
             self._rows.append(validated.model_dump(mode="json"))
 
     def flush(self) -> None:
-        if not self._rows:
-            return
         try:
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             with self.output_path.open("w", encoding="utf-8") as handle:
@@ -1405,6 +1412,80 @@ def _weather_row_from_state(
     )
 
 
+def _task_rows_from_task_queues(
+    task_queues: Sequence[Any],
+    *,
+    episode_id: str,
+    scenario_id: Optional[str],
+) -> List[TaskParquetRow]:
+    rows: List[TaskParquetRow] = []
+    seen: set[str] = set()
+    for queue in task_queues:
+        queue_payload = _payload_dict(queue)
+        for task in queue_payload.get("tasks", []) or []:
+            if not isinstance(task, Mapping):
+                continue
+            task_payload = dict(task)
+            task_id = str(task_payload.get("task_id") or "")
+            if not task_id or task_id in seen:
+                continue
+            seen.add(task_id)
+            pickup = _nested_payload(task_payload, "pickup")
+            dropoff = _nested_payload(task_payload, "dropoff")
+            load_size = list(task_payload.get("load_size_m") or [0.0, 0.0, 0.0])
+            if len(load_size) < 3:
+                load_size = [*load_size, *([0.0] * (3 - len(load_size)))]
+            completed_time_s = task_payload.get("completed_at_s")
+            actual_start_s = task_payload.get("started_at_s")
+            deadline_s = task_payload.get("deadline_s")
+            overtime_s = task_payload.get("overtime_s")
+            if overtime_s is None:
+                overtime_s = _compute_overtime_s(completed_time_s, deadline_s)
+            rows.append(
+                TaskParquetRow(
+                    episode_id=episode_id,
+                    scenario_id=scenario_id,
+                    task_id=task_id,
+                    crane_id=str(
+                        task_payload.get("crane_id")
+                        or queue_payload.get("crane_id")
+                        or "unknown"
+                    ),
+                    task_type=str(task_payload.get("task_type") or "easy_task"),
+                    status=str(task_payload.get("status") or "pending"),
+                    failure_reason=task_payload.get("failure_reason"),
+                    pickup_x=float(pickup.get("x", 0.0)),
+                    pickup_y=float(pickup.get("y", 0.0)),
+                    pickup_z=float(pickup.get("z", 0.0)),
+                    dropoff_x=float(dropoff.get("x", 0.0)),
+                    dropoff_y=float(dropoff.get("y", 0.0)),
+                    dropoff_z=float(dropoff.get("z", 0.0)),
+                    pickup_zone_id=str(
+                        task_payload.get("pickup_zone_id")
+                        or pickup.get("zone_id")
+                        or "unknown"
+                    ),
+                    dropoff_zone_id=str(
+                        task_payload.get("dropoff_zone_id")
+                        or dropoff.get("zone_id")
+                        or "unknown"
+                    ),
+                    load_type=str(task_payload.get("load_type") or "unknown"),
+                    load_weight_t=float(task_payload.get("load_weight_t") or 0.0),
+                    load_size_x_m=float(load_size[0] or 0.0),
+                    load_size_y_m=float(load_size[1] or 0.0),
+                    load_size_z_m=float(load_size[2] or 0.0),
+                    planned_start_s=task_payload.get("planned_start_s"),
+                    actual_start_s=actual_start_s,
+                    completed_time_s=completed_time_s,
+                    deadline_s=deadline_s,
+                    deadline_missed=bool(task_payload.get("deadline_missed", False)),
+                    overtime_s=float(overtime_s or 0.0),
+                )
+            )
+    return rows
+
+
 def _event_log_entry_from_any(
     event: Any,
     *,
@@ -1422,13 +1503,19 @@ def _event_log_entry_from_any(
     event_id = payload.get("event_id") or (
         f"EVT_{frame_index:06d}_{abs(hash(str(payload))) % 100000:05d}"
     )
+    event_frame = payload.get("frame", payload.get("frame_index", frame_index))
+    if event_frame is None:
+        event_frame = frame_index
+    event_time_s = payload.get("time_s", time_s)
+    if event_time_s is None:
+        event_time_s = time_s
     return EventLogEntry(
         event_id=event_id,
         event_type=str(payload.get("event_type", "unknown")),
         episode_id=str(payload.get("episode_id", episode_id)),
         scenario_id=payload.get("scenario_id", scenario_id),
-        frame=int(payload.get("frame", payload.get("frame_index", frame_index))),
-        time_s=float(payload.get("time_s", time_s)),
+        frame=int(event_frame),
+        time_s=float(event_time_s),
         crane_ids=list(payload.get("crane_ids", [])),
         risk_level=payload.get("risk_level"),
         distance_min_raw_now_m=payload.get("distance_min_raw_now_m"),
@@ -1754,6 +1841,20 @@ def _pair_risk_row_from_offline_label(label: OfflineRiskLabel) -> PairRiskRow:
     )
 
 
+def _compute_overtime_s(
+    completed_time_s: Optional[float],
+    deadline_s: Optional[float],
+) -> float:
+    if completed_time_s is None or deadline_s is None:
+        return 0.0
+    return max(0.0, float(completed_time_s) - float(deadline_s))
+
+
+def _resolved_crane_configs(resolved_config: ResolvedConfig) -> List[Any]:
+    cranes = resolved_config.layout.resolved_cranes or []
+    return list(cranes)
+
+
 def _infer_dt_s(rows: Sequence[TrajectoryRow]) -> float:
     times = sorted({row.time_s for row in rows})
     if len(times) < 2:
@@ -1823,6 +1924,35 @@ def _validate_summary_row(
             error_code="RECORDER_E_SUMMARY_SCHEMA",
             details={"errors": exc.errors(), "row_model": row_model.__name__},
         ) from exc
+
+
+def _arrow_schema_for_model(row_model: Type[RecorderBaseModel]) -> pa.Schema:
+    fields = [
+        pa.field(name, _arrow_type_for_annotation(field.annotation))
+        for name, field in row_model.model_fields.items()
+    ]
+    return pa.schema(fields)
+
+
+def _arrow_type_for_annotation(annotation: Any) -> pa.DataType:
+    origin = get_origin(annotation)
+    if origin is Union:
+        non_none_args = [arg for arg in get_args(annotation) if arg is not type(None)]
+        if len(non_none_args) == 1:
+            return _arrow_type_for_annotation(non_none_args[0])
+    if origin in {dict, Dict, Mapping}:
+        return pa.string()
+    if origin in {list, List, tuple}:
+        return pa.string()
+    if annotation is str or origin is Literal:
+        return pa.string()
+    if annotation is int:
+        return pa.int64()
+    if annotation is float:
+        return pa.float64()
+    if annotation is bool:
+        return pa.bool_()
+    return pa.string()
 
 
 def _sanitize_for_export(

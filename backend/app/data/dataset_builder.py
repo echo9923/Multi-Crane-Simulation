@@ -161,7 +161,7 @@ class DatasetBuilder:
         if not rows:
             rows = [{"schema_version": "1.0"}]
         try:
-            pq.write_table(pa.Table.from_pylist(rows), path)
+            pq.write_table(pa.Table.from_pylist(_parquet_safe_rows(rows)), path)
         except Exception as exc:
             raise DatasetBuildError(
                 DATASET_E_WRITE_FAILED,
@@ -222,6 +222,31 @@ def _file_records(
                 )
             )
     return records
+
+
+def _parquet_safe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {key: _parquet_safe_value(value) for key, value in row.items()}
+        for row in rows
+    ]
+
+
+def _parquet_safe_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(_json_safe_value(value), ensure_ascii=False, sort_keys=True)
+    return value
+
+
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(child) for child in value]
+    return value
 
 
 def _quality_summary(reports: Sequence[DatasetQualityReport]) -> dict[str, Any]:

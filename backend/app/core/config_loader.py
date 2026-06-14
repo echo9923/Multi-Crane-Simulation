@@ -81,6 +81,9 @@ def apply_overrides(
     for key, value in overrides.items():
         if value is None:
             continue
+        if "." in key:
+            _set_dotted_path(merged, key, value)
+            continue
         if isinstance(value, Mapping) and not isinstance(value, (str, bytes)):
             existing = merged.get(key)
             if isinstance(existing, Mapping):
