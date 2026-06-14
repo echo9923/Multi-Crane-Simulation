@@ -6,8 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
-from backend.app.tests.test_config_schema import FIXTURE_DIR
+from backend.app.tests.test_config_schema import FIXTURE_DIR, load_fixture
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -103,15 +104,34 @@ def test_replay_episode_missing_replay_file_returns_exit_code_3(tmp_path: Path) 
     assert "command_replay.jsonl" in result.stderr
 
 
-def test_batch_generate_not_implemented_returns_exit_code_4() -> None:
-    result = _run_script(
-        "scripts/batch_generate.py",
-        "--config",
-        str(FIXTURE_DIR / "dataset_valid.yaml"),
+def test_batch_generate_function_outputs_json_with_fake_runner_factory(tmp_path: Path) -> None:
+    from backend.app.api.cli import batch_generate_from_config
+
+    raw_dataset = load_fixture("dataset_valid.yaml")
+    raw_dataset["sources"] = [
+        {
+            "scenario_ref": str(FIXTURE_DIR / "scenario_valid.yaml"),
+            "experiment_template_ref": str(FIXTURE_DIR / "experiment_valid.yaml"),
+            "num_episodes": 1,
+        }
+    ]
+    config_path = tmp_path / "dataset.yaml"
+    config_path.write_text(yaml.safe_dump(raw_dataset), encoding="utf-8")
+
+    result = batch_generate_from_config(
+        config_path,
+        max_episodes=1,
+        output_json=True,
+        output_root=tmp_path / "datasets",
+        runner_factory=lambda **kwargs: FakeRunner(),
     )
 
-    assert result.returncode == 4
-    assert "not implemented" in result.stderr.lower()
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["dataset_id"] == "tower_crane_llm_dataset_v1"
+    assert payload["requested_episodes"] == 1
+    assert payload["completed_episodes"] == 1
+    assert payload["generation_report_path"].endswith("generation_report.json")
 
 
 def test_batch_generate_rejects_zero_max_episodes() -> None:

@@ -8,6 +8,7 @@ from typing import Any, Callable, Optional
 
 from backend.app.core.config_loader import load_dataset_config, load_demo_config
 from backend.app.core.config_resolver import resolve_config
+from backend.app.data.batch_runner import BatchEpisodeRequest, BatchEpisodeRunner
 
 from .episode_service import default_runner_factory
 
@@ -92,6 +93,9 @@ def batch_generate_from_config(
     config_path: Path,
     *,
     max_episodes: Optional[int] = None,
+    output_json: bool = False,
+    output_root: Optional[Path] = None,
+    runner_factory: Callable[..., Any] = default_runner_factory,
 ) -> CliResult:
     if max_episodes is not None and max_episodes <= 0:
         return CliResult(
@@ -99,15 +103,39 @@ def batch_generate_from_config(
             stderr="--max-episodes must be positive\n",
         )
     try:
-        load_dataset_config(config_path)
+        dataset = load_dataset_config(config_path)
     except Exception as exc:
         return CliResult(
             exit_code=EXIT_INPUT_ERROR,
             stderr=f"{exc}\n",
         )
+    try:
+        result = BatchEpisodeRunner(runner_factory=runner_factory).run(
+            BatchEpisodeRequest(
+                dataset_config=dataset,
+                output_root=output_root or Path(dataset.run_root) / "datasets",
+                max_episodes=max_episodes,
+            )
+        )
+    except Exception as exc:
+        return CliResult(
+            exit_code=EXIT_DATASET_FAILED,
+            stderr=f"{exc}\n",
+        )
+    payload = result.model_dump(mode="json")
+    if output_json:
+        return CliResult(
+            exit_code=EXIT_OK,
+            stdout=json.dumps(payload, sort_keys=True) + "\n",
+        )
     return CliResult(
-        exit_code=EXIT_DATASET_FAILED,
-        stderr="dataset batch generation is not implemented\n",
+        exit_code=EXIT_OK,
+        stdout=(
+            f"dataset_id={payload['dataset_id']} "
+            f"completed={payload['completed_episodes']} "
+            f"failed={payload['failed_episodes']} "
+            f"generation_report={payload['generation_report_path']}\n"
+        ),
     )
 
 
@@ -148,10 +176,14 @@ def main_batch_generate(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Generate a batch dataset.")
     parser.add_argument("--config", required=True)
     parser.add_argument("--max-episodes", type=int, default=None)
+    parser.add_argument("--output-root", default=None)
+    parser.add_argument("--output-json", action="store_true")
     args = parser.parse_args(argv)
     result = batch_generate_from_config(
         Path(args.config),
         max_episodes=args.max_episodes,
+        output_json=args.output_json,
+        output_root=Path(args.output_root) if args.output_root else None,
     )
     _emit(result)
     return result.exit_code

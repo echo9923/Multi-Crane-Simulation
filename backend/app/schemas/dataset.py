@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.app.schemas.config import DatasetConfig
+
 DATASET_SCHEMA_VERSION = "1.0"
 
 DATASET_E_CONFIG_INVALID = "DATASET_E_CONFIG_INVALID"
@@ -236,6 +238,25 @@ class DatasetBuildResult(DatasetBaseModel):
     warnings: List[DatasetBuildWarning] = Field(default_factory=list)
 
 
+class BatchEpisodeRequest(DatasetBaseModel):
+    dataset_config: DatasetConfig
+    output_root: Path
+    max_episodes: Optional[int] = Field(default=None, gt=0)
+    continue_on_episode_failure: bool = True
+
+
+class BatchEpisodeResult(DatasetBaseModel):
+    schema_version: str = DATASET_SCHEMA_VERSION
+    dataset_id: str
+    requested_episodes: int = Field(ge=0)
+    completed_episodes: int = Field(ge=0)
+    failed_episodes: int = Field(ge=0)
+    run_dirs: List[Path]
+    generation_report_path: Path
+    failures: List[Dict[str, Any]] = Field(default_factory=list)
+    warnings: List[DatasetBuildWarning] = Field(default_factory=list)
+
+
 def assert_no_secret_payload(payload: Any, *, context: str = "dataset") -> None:
     _scan_for_secret_payload(payload, path=context)
 
@@ -281,6 +302,8 @@ __all__ = [
     "DATASET_W_SHORT_EPISODE_INCLUDED",
     "DATASET_W_UNKNOWN_SCENARIO_CLASS",
     "DatasetBaseModel",
+    "BatchEpisodeRequest",
+    "BatchEpisodeResult",
     "DatasetBuildError",
     "DatasetBuildOptions",
     "DatasetBuildResult",
