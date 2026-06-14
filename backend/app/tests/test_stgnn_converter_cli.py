@@ -9,10 +9,12 @@ import pyarrow.parquet as pq
 import pytest
 
 from backend.app.schemas.training import (
+    TRAINING_E_WRITE_FAILED,
     TRAINING_E_SOURCE_SCHEMA_INVALID,
     StgnnConversionResult,
     TrainingConversionError,
 )
+import backend.app.training.converter as converter_module
 from backend.app.training.converter import StgnnDatasetConverter
 from scripts.build_stgnn_dataset import main as main_build_stgnn_dataset
 
@@ -87,6 +89,28 @@ def test_converter_lenient_mode_skips_bad_sample(tmp_path: Path) -> None:
     assert result.summary.skipped_counts == {"val": 1}
     assert result.summary.warnings
     assert "sk-" not in json.dumps(result.summary.model_dump(mode="json"))
+
+
+def test_converter_write_failure_does_not_leave_final_sample_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_root = _write_tiny_dataset(tmp_path)
+    output_root = tmp_path / "stgnn-output"
+
+    def fail_write_table(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(converter_module.pq, "write_table", fail_write_table)
+
+    with pytest.raises(TrainingConversionError) as exc_info:
+        StgnnDatasetConverter().convert(
+            dataset_root=dataset_root,
+            output_root=output_root,
+        )
+
+    assert exc_info.value.code == TRAINING_E_WRITE_FAILED
+    assert not (output_root / "index" / "samples.parquet").exists()
 
 
 def test_build_stgnn_dataset_cli_help_lists_expected_options(capsys) -> None:
