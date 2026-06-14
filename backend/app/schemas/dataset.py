@@ -166,6 +166,7 @@ class DatasetWindowIndexRow(DatasetBaseModel):
     num_cranes: int = Field(gt=0)
     label_horizons_s: List[float]
     source_paths: Dict[str, str]
+    is_positive: bool = False
 
     @field_validator("label_horizons_s")
     @classmethod

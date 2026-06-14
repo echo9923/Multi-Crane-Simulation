@@ -96,6 +96,7 @@ def test_window_index_requires_positive_steps_and_horizons() -> None:
             num_cranes=2,
             label_horizons_s=[5.0],
             source_paths={"trajectories": "data/trajectories.parquet"},
+            is_positive=False,
         )
 
     with pytest.raises(ValidationError):
@@ -112,6 +113,7 @@ def test_window_index_requires_positive_steps_and_horizons() -> None:
             num_cranes=2,
             label_horizons_s=[],
             source_paths={"trajectories": "data/trajectories.parquet"},
+            is_positive=False,
         )
 
 
