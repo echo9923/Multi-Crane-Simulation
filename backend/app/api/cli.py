@@ -9,6 +9,12 @@ from typing import Any, Callable, Optional
 from backend.app.core.config_loader import load_dataset_config, load_demo_config
 from backend.app.core.config_resolver import resolve_config
 from backend.app.data.batch_runner import BatchEpisodeRequest, BatchEpisodeRunner
+from backend.app.data.catalog import DatasetCatalog
+from backend.app.data.dataset_builder import DatasetBuilder
+from backend.app.data.quality import DatasetQualityGate
+from backend.app.data.splits import DatasetSplitPlanner
+from backend.app.data.window_index import DatasetWindowIndexer
+from backend.app.schemas.dataset import DatasetBuildOptions
 
 from .episode_service import default_runner_factory
 
@@ -139,6 +145,53 @@ def batch_generate_from_config(
     )
 
 
+def build_dataset_from_config(
+    config_path: Path,
+    *,
+    source_roots: list[Path],
+    output_root: Path,
+    copy_mode: str = "index_only",
+    max_episodes: Optional[int] = None,
+    output_json: bool = False,
+) -> CliResult:
+    try:
+        dataset = load_dataset_config(config_path)
+        result = DatasetBuilder(
+            catalog=DatasetCatalog(),
+            quality_gate=DatasetQualityGate(),
+            split_planner=DatasetSplitPlanner(config=dataset),
+            window_indexer=DatasetWindowIndexer(config=dataset),
+        ).build(
+            config=dataset,
+            options=DatasetBuildOptions(
+                source_roots=source_roots,
+                output_root=output_root,
+                copy_mode=copy_mode,  # type: ignore[arg-type]
+                max_episodes=max_episodes,
+            ),
+        )
+    except FileNotFoundError as exc:
+        return CliResult(exit_code=EXIT_INPUT_ERROR, stderr=f"{exc}\n")
+    except Exception as exc:
+        return CliResult(exit_code=EXIT_DATASET_FAILED, stderr=f"{exc}\n")
+
+    payload = result.model_dump(mode="json")
+    if output_json:
+        return CliResult(
+            exit_code=EXIT_OK,
+            stdout=json.dumps(payload, sort_keys=True) + "\n",
+        )
+    return CliResult(
+        exit_code=EXIT_OK,
+        stdout=(
+            f"dataset_id={payload['dataset_id']} "
+            f"num_episodes={payload['num_episodes']} "
+            f"num_quarantined={payload['num_quarantined']} "
+            f"summary={payload['summary_path']}\n"
+        ),
+    )
+
+
 def main_run_episode(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run one simulation episode.")
     parser.add_argument("--config", required=True)
@@ -184,6 +237,36 @@ def main_batch_generate(argv: Optional[list[str]] = None) -> int:
         max_episodes=args.max_episodes,
         output_json=args.output_json,
         output_root=Path(args.output_root) if args.output_root else None,
+    )
+    _emit(result)
+    return result.exit_code
+
+
+def main_build_dataset(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Build a dataset from episode runs.")
+    parser.add_argument("--config", required=True)
+    parser.add_argument(
+        "--source-root",
+        action="append",
+        required=True,
+        help="Episode source root. Can be passed multiple times.",
+    )
+    parser.add_argument("--output-root", required=True)
+    parser.add_argument(
+        "--copy-mode",
+        default="index_only",
+        choices=["copy", "symlink", "hardlink", "index_only"],
+    )
+    parser.add_argument("--max-episodes", type=int, default=None)
+    parser.add_argument("--output-json", action="store_true")
+    args = parser.parse_args(argv)
+    result = build_dataset_from_config(
+        Path(args.config),
+        source_roots=[Path(value) for value in args.source_root],
+        output_root=Path(args.output_root),
+        copy_mode=args.copy_mode,
+        max_episodes=args.max_episodes,
+        output_json=args.output_json,
     )
     _emit(result)
     return result.exit_code
@@ -251,7 +334,9 @@ def _parse_override_value(raw: str) -> Any:
 __all__ = [
     "CliResult",
     "batch_generate_from_config",
+    "build_dataset_from_config",
     "main_batch_generate",
+    "main_build_dataset",
     "main_replay_episode",
     "main_run_episode",
     "replay_episode_from_run",
