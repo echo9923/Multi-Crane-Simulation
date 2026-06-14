@@ -184,6 +184,7 @@ class DatasetFileRecord(DatasetBaseModel):
     episode_id: Optional[str] = None
     file_role: str
     path: str
+    source_path: str
     checksum_sha256: Optional[str] = None
     size_bytes: Optional[int] = Field(default=None, ge=0)
     copy_mode: CopyMode = "index_only"
