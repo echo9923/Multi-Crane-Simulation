@@ -11,6 +11,8 @@ from backend.app.schemas.dataset import (
     DatasetEpisodeRecord,
     DatasetQualityReport,
     DatasetSplitAssignment,
+    DatasetSplitManifest,
+    DatasetSplitManifestAssignment,
     assert_no_secret_payload,
 )
 
@@ -142,23 +144,23 @@ class DatasetSplitPlanner:
     ) -> dict[str, Any]:
         episode_by_id = {episode.episode_id: episode for episode in episodes}
         split_counts = Counter(assignment.split for assignment in assignments)
-        manifest = {
-            "schema_version": "1.0",
-            "dataset_id": self.config.dataset_id,
-            "split_strategy": self.config.split.strategy,
-            "split_counts": dict(sorted(split_counts.items())),
-            "assignments": [
-                {
+        manifest = DatasetSplitManifest(
+            dataset_id=self.config.dataset_id,
+            split_strategy=self.config.split.strategy,
+            split_counts=dict(sorted(split_counts.items())),
+            assignments=[
+                DatasetSplitManifestAssignment(
                     **assignment.model_dump(mode="json"),
-                    "scenario_id": episode_by_id[assignment.episode_id].scenario_id,
-                    "layout_hash": episode_by_id[assignment.episode_id].layout_hash,
-                    "num_cranes": episode_by_id[assignment.episode_id].num_cranes,
-                }
+                    scenario_id=episode_by_id[assignment.episode_id].scenario_id,
+                    layout_hash=episode_by_id[assignment.episode_id].layout_hash,
+                    num_cranes=episode_by_id[assignment.episode_id].num_cranes,
+                )
                 for assignment in assignments
             ],
-        }
-        assert_no_secret_payload(manifest, context="split_manifest")
-        return manifest
+        )
+        payload = manifest.model_dump(mode="json")
+        assert_no_secret_payload(payload, context="split_manifest")
+        return payload
 
     def _assign_base_splits(
         self,

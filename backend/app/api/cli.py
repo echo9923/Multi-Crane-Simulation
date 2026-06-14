@@ -154,6 +154,11 @@ def build_dataset_from_config(
     max_episodes: Optional[int] = None,
     output_json: bool = False,
 ) -> CliResult:
+    if max_episodes is not None and max_episodes <= 0:
+        return CliResult(
+            exit_code=EXIT_INPUT_ERROR,
+            stderr="--max-episodes must be positive\n",
+        )
     try:
         dataset = load_dataset_config(config_path)
         result = DatasetBuilder(

@@ -151,6 +151,20 @@ class DatasetSplitAssignment(DatasetBaseModel):
     holdout_flags: Dict[str, bool] = Field(default_factory=dict)
 
 
+class DatasetSplitManifestAssignment(DatasetSplitAssignment):
+    scenario_id: Optional[str] = None
+    layout_hash: Optional[str] = None
+    num_cranes: int = Field(ge=0)
+
+
+class DatasetSplitManifest(DatasetBaseModel):
+    schema_version: str = DATASET_SCHEMA_VERSION
+    dataset_id: str
+    split_strategy: str
+    split_counts: Dict[str, int]
+    assignments: List[DatasetSplitManifestAssignment]
+
+
 class DatasetWindowIndexRow(DatasetBaseModel):
     schema_version: str = DATASET_SCHEMA_VERSION
     dataset_id: str
@@ -315,6 +329,8 @@ __all__ = [
     "DatasetManifest",
     "DatasetQualityReport",
     "DatasetSplitAssignment",
+    "DatasetSplitManifest",
+    "DatasetSplitManifestAssignment",
     "DatasetSplitName",
     "DatasetSummary",
     "DatasetWindowIndexRow",

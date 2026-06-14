@@ -17,6 +17,7 @@ from backend.app.data.window_index import DatasetWindowIndexer
 from backend.app.schemas.config import DatasetConfig
 from backend.app.schemas.dataset import (
     DATASET_E_INSUFFICIENT_EPISODES,
+    DATASET_E_QUALITY_FAILED,
     DATASET_E_WRITE_FAILED,
     DatasetBuildError,
     DatasetBuildOptions,
@@ -72,6 +73,16 @@ class DatasetBuilder:
             for episode in episodes
             if quality_by_id[episode.episode_id].quality_status == "failed"
         ]
+        if options.fail_on_quality_error and quarantined:
+            raise DatasetBuildError(
+                DATASET_E_QUALITY_FAILED,
+                "one or more episodes failed dataset quality gate",
+                details={
+                    "failed_episode_ids": sorted(
+                        episode.episode_id for episode in quarantined
+                    )
+                },
+            )
         if not passed:
             raise DatasetBuildError(
                 DATASET_E_INSUFFICIENT_EPISODES,

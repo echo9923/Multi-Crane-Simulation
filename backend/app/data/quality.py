@@ -37,6 +37,7 @@ _REQUIRED_FILES = (
 
 _OFFLINE_TRUTH_KEYS = (
     "offline_labels",
+    "future_min_distance",
     "min_clearance_future",
     "collision_label",
     "offline_ttc",
@@ -83,7 +84,11 @@ class DatasetQualityGate:
             metrics["num_frames"] = len({row.get("frame") for row in trajectories})
             if not _times_monotonic_by_frame(trajectories):
                 failed.add("time_monotonic")
-            if not _trajectory_frame_complete(trajectories, episode.num_cranes):
+            if not _trajectory_frame_complete(
+                trajectories,
+                episode.num_cranes,
+                frame_count=episode.frame_count,
+            ):
                 failed.add("frame_completeness")
             if not _finite_rows(trajectories):
                 failed.add("no_nan_inf")
@@ -93,13 +98,17 @@ class DatasetQualityGate:
                 failed.add("mechanical_limits_respected")
 
         if pair_risks:
-            if not _pair_frame_complete(pair_risks, episode.num_cranes):
+            if not _pair_frame_complete(
+                pair_risks,
+                episode.num_cranes,
+                frame_count=episode.frame_count,
+            ):
                 failed.add("frame_completeness")
             if not _finite_rows(pair_risks):
                 failed.add("no_nan_inf")
 
         if weather:
-            if not _weather_frame_complete(weather):
+            if not _weather_frame_complete(weather, frame_count=episode.frame_count):
                 failed.add("frame_completeness")
             if not _finite_rows(weather):
                 failed.add("no_nan_inf")
@@ -164,23 +173,39 @@ def _times_monotonic_by_frame(rows: list[dict[str, Any]]) -> bool:
     return all(later >= earlier for earlier, later in zip(ordered, ordered[1:]))
 
 
-def _trajectory_frame_complete(rows: list[dict[str, Any]], num_cranes: int) -> bool:
+def _trajectory_frame_complete(
+    rows: list[dict[str, Any]],
+    num_cranes: int,
+    *,
+    frame_count: int,
+) -> bool:
     by_frame: dict[int, set[str]] = {}
     for row in rows:
         by_frame.setdefault(int(row.get("frame", -1)), set()).add(str(row.get("crane_id")))
-    return bool(by_frame) and all(len(crane_ids) == num_cranes for crane_ids in by_frame.values())
+    expected_frames = set(range(frame_count))
+    return (
+        bool(by_frame)
+        and set(by_frame) == expected_frames
+        and all(len(crane_ids) == num_cranes for crane_ids in by_frame.values())
+    )
 
 
-def _pair_frame_complete(rows: list[dict[str, Any]], num_cranes: int) -> bool:
+def _pair_frame_complete(
+    rows: list[dict[str, Any]],
+    num_cranes: int,
+    *,
+    frame_count: int,
+) -> bool:
     expected = num_cranes * (num_cranes - 1) // 2
     by_frame: dict[int, int] = {}
     for row in rows:
         by_frame[int(row.get("frame", -1))] = by_frame.get(int(row.get("frame", -1)), 0) + 1
-    return all(count == expected for count in by_frame.values())
+    expected_frames = set(range(frame_count))
+    return set(by_frame) == expected_frames and all(count == expected for count in by_frame.values())
 
 
-def _weather_frame_complete(rows: list[dict[str, Any]]) -> bool:
-    return bool({row.get("frame") for row in rows})
+def _weather_frame_complete(rows: list[dict[str, Any]], *, frame_count: int) -> bool:
+    return {int(row.get("frame", -1)) for row in rows} == set(range(frame_count))
 
 
 def _finite_rows(rows: list[dict[str, Any]]) -> bool:
@@ -264,7 +289,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 def _contains_offline_truth(payload: Any) -> bool:
     if isinstance(payload, dict):
         for key, value in payload.items():
-            key_text = str(key)
+            key_text = str(key).lower()
             if any(part in key_text for part in _OFFLINE_TRUTH_KEYS):
                 return True
             if _contains_offline_truth(value):
