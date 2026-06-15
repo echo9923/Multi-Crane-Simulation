@@ -83,7 +83,7 @@ def test_visible_neighbors_are_filtered_by_weather_radius_and_summarized() -> No
     assert visible.distance_level == "medium"
     assert visible.hook_visible is True
     assert visible.hook_height_m == 32.0
-    assert visible.jib_motion == "slow_left"
+    assert visible.jib_motion == "slow_right"
     assert visible.trolley_motion == "out"
     assert visible.hoist_motion == "down"
     assert visible.load_attached is True
@@ -166,4 +166,3 @@ def test_missing_neighbor_state_raises_observation_build_error() -> None:
 
     assert exc_info.value.error_code == "OBSERVATION_E_INVALID_STATE"
     assert exc_info.value.field_path == "states_by_id.C2"
-

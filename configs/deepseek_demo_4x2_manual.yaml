@@ -1,0 +1,330 @@
+scenario:
+  schema_version: "1.0"
+  scenario_id: "deepseek_demo_4x2_manual"
+  seed: 20260614
+
+  site:
+    coordinate_system: "ENU"
+    boundary:
+      x_min: -80
+      x_max: 80
+      y_min: -80
+      y_max: 80
+      z_min: 0
+      z_max: 60
+    forbidden_zones: []
+    material_zones:
+      - zone_id: "mat_c1"
+        type: "box"
+        center: [-21.96, -21.96, 10]
+        size: [0.4, 0.4, 0.4]
+        z_range_m: [9.8, 10.2]
+        load_types: ["rebar_bundle"]
+      - zone_id: "mat_c2"
+        type: "box"
+        center: [21.96, -21.96, 14]
+        size: [0.4, 0.4, 0.4]
+        z_range_m: [13.8, 14.2]
+        load_types: ["rebar_bundle"]
+      - zone_id: "mat_c3"
+        type: "box"
+        center: [-21.96, 21.96, 12]
+        size: [0.4, 0.4, 0.4]
+        z_range_m: [11.8, 12.2]
+        load_types: ["rebar_bundle"]
+      - zone_id: "mat_c4"
+        type: "box"
+        center: [21.96, 21.96, 16]
+        size: [0.4, 0.4, 0.4]
+        z_range_m: [15.8, 16.2]
+        load_types: ["rebar_bundle"]
+    work_zones:
+      - zone_id: "work_c1"
+        type: "box"
+        center: [-26.485, -26.485, 11]
+        size: [0.6, 0.6, 0.5]
+        z_range_m: [10.8, 11.2]
+        accepted_load_types: ["rebar_bundle"]
+      - zone_id: "work_c2"
+        type: "box"
+        center: [26.485, -26.485, 15]
+        size: [0.6, 0.6, 0.5]
+        z_range_m: [14.8, 15.2]
+        accepted_load_types: ["rebar_bundle"]
+      - zone_id: "work_c3"
+        type: "box"
+        center: [-26.485, 26.485, 13]
+        size: [0.6, 0.6, 0.5]
+        z_range_m: [12.8, 13.2]
+        accepted_load_types: ["rebar_bundle"]
+      - zone_id: "work_c4"
+        type: "box"
+        center: [26.485, 26.485, 17]
+        size: [0.6, 0.6, 0.5]
+        z_range_m: [16.8, 17.2]
+        accepted_load_types: ["rebar_bundle"]
+    forbidden_zone_policy:
+      mode: "task_only"
+      record_violation: true
+
+  load_types:
+    rebar_bundle:
+      display_name: "Rebar bundle"
+      weight_range_t: [1.0, 1.4]
+      size_m: [4.0, 0.8, 0.8]
+      shape: "box_long"
+
+  crane_models:
+    - model_id: "demo_flat_top_45m"
+      jib_length_m: 45
+      counter_jib_length_m: 12
+      mast_height_range_m: [30, 40]
+      max_load_t: 6
+      max_load_radius_m: 15
+      tip_load_t: 1.8
+      rated_moment_t_m: 95
+      slew_speed_max_deg_s: 2.0
+      slew_acc_max_deg_s2: 0.8
+      trolley_r_min_m: 5
+      trolley_r_max_m: 42
+      trolley_speed_max_m_s: 0.9
+      trolley_acc_max_m_s2: 0.7
+      cable_length_min_m: 18
+      cable_length_max_m: 40
+      hoist_speed_max_m_s: 1.2
+      hoist_acc_max_m_s2: 0.8
+      min_clearance_below_jib_m: 2
+
+  layout:
+    mode: "manual"
+    num_cranes: 4
+    overlap_level: "medium"
+    height_strategy: "mixed"
+    coverage_target: "balanced"
+    slew_mode_default: "continuous"
+    max_sampling_attempts: 500
+
+  cranes:
+    - crane_id: "C1"
+      model_id: "demo_flat_top_45m"
+      base: [-18, -18, 0]
+      mast_height_m: 30
+      theta_init_deg: -135
+      slew:
+        mode: "continuous"
+    - crane_id: "C2"
+      model_id: "demo_flat_top_45m"
+      base: [18, -18, 0]
+      mast_height_m: 34
+      theta_init_deg: -45
+      slew:
+        mode: "continuous"
+    - crane_id: "C3"
+      model_id: "demo_flat_top_45m"
+      base: [-18, 18, 0]
+      mast_height_m: 32
+      theta_init_deg: 135
+      slew:
+        mode: "continuous"
+    - crane_id: "C4"
+      model_id: "demo_flat_top_45m"
+      base: [18, 18, 0]
+      mast_height_m: 36
+      theta_init_deg: 45
+      slew:
+        mode: "continuous"
+
+  tasks:
+    assignment_mode: "per_crane_queue"
+    generation_mode: "manual"
+    num_tasks_per_crane: 2
+    manual_tasks:
+      - task_id: "T_C1_001"
+        task_type: "easy_task"
+        pickup_zone_id: "mat_c1"
+        dropoff_zone_id: "work_c1"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T_C1_002"
+        task_type: "easy_task"
+        pickup_zone_id: "mat_c1"
+        dropoff_zone_id: "work_c1"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T_C2_001"
+        task_type: "easy_task"
+        pickup_zone_id: "mat_c2"
+        dropoff_zone_id: "work_c2"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T_C2_002"
+        task_type: "easy_task"
+        pickup_zone_id: "mat_c2"
+        dropoff_zone_id: "work_c2"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T_C3_001"
+        task_type: "easy_task"
+        pickup_zone_id: "mat_c3"
+        dropoff_zone_id: "work_c3"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T_C3_002"
+        task_type: "easy_task"
+        pickup_zone_id: "mat_c3"
+        dropoff_zone_id: "work_c3"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T_C4_001"
+        task_type: "easy_task"
+        pickup_zone_id: "mat_c4"
+        dropoff_zone_id: "work_c4"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T_C4_002"
+        task_type: "easy_task"
+        pickup_zone_id: "mat_c4"
+        dropoff_zone_id: "work_c4"
+        load_type: "rebar_bundle"
+        priority: "medium"
+    queue_policy:
+      start_mode: "simultaneous"
+      initial_start_jitter_s: [0, 0]
+      inter_task_delay_s: [0, 1]
+    task_type_distribution:
+      easy_task: 1.0
+      overlap_task: 0.0
+      stress_task: 0.0
+    fallback_pickup_z_m: 10.0
+    fallback_dropoff_z_range_m: [10.8, 11.2]
+    attach_delay_s: [0, 0]
+    release_delay_s: [0, 0]
+    priority_distribution:
+      low: 0.0
+      medium: 1.0
+      high: 0.0
+    deadline_policy:
+      enabled: true
+      deadline_miss_is_task_failure: false
+    state_machine:
+      align_xy_threshold_m: 2.5
+      attach_xy_threshold_m: 1.5
+      attach_height_threshold_m: 1.0
+      release_xy_threshold_m: 1.8
+      release_height_threshold_m: 1.0
+      attach_speed_threshold:
+        slew_deg_s: 1.0
+        trolley_m_s: 0.25
+        hoist_m_s: 0.25
+      release_speed_threshold:
+        slew_deg_s: 1.0
+        trolley_m_s: 0.25
+        hoist_m_s: 0.25
+      safe_transport_height_m: 12.0
+      lift_clearance_m: 2.0
+      attach_stage_timeout_s: 1200
+      release_stage_timeout_s: 1200
+      task_no_progress_timeout_s: 1200
+      recovery_release_timeout_s: 1200
+      stage_timeout_policy:
+        fail_current_task: true
+        terminate_episode: false
+    recovery:
+      enabled: true
+      policy: "attempt_safe_release"
+      emergency_drop_zones: []
+
+  weather:
+    mode: "constant"
+    wind:
+      base_speed_m_s: 3
+      gust_speed_m_s: 5
+      direction_deg: 90
+    visibility:
+      base_level: "good"
+
+  risk:
+    geometry_envelope:
+      jib_radius_m: 0.75
+      hook_radius_m: 0.5
+      load_radius_m: 1.0
+    thresholds_m:
+      low: 6.0
+      medium: 4.0
+      high: 2.5
+      near_miss: 1.5
+    ttc_threshold_level: "high"
+    wind_safe_distance_factor:
+      enabled: true
+      extra_clearance_per_10m_s_wind_m: 0.5
+
+experiment:
+  schema_version: "1.0"
+  experiment_id: "deepseek_demo_4x2_manual"
+  scenario_ref: "configs/deepseek_demo_4x2_manual.yaml"
+  seed: 20260614
+  sim:
+    dt: 0.2
+    duration_s: 7200
+    min_duration_s: 0
+    stop_when_all_tasks_done: true
+    completion_cooldown_s: 2
+    physics_hz: 5
+    controller_hz: 5
+    llm_decision_interval_s: 1.0
+  risk_prompt_mode: "R1"
+  safety_mode: "S1"
+  runtime:
+    mode: "offline_batch"
+    replay_mode: false
+    replay_file: null
+    llm_cache_enabled: true
+  operators:
+    assignment_mode: "random"
+    profile_distribution:
+      normal: 1.0
+      conservative: 0.0
+      aggressive: 0.0
+      novice: 0.0
+      fatigued: 0.0
+  llm:
+    enabled: true
+    provider: "deepseek"
+    model: "deepseek-v4-flash"
+    base_url: "https://api.deepseek.com"
+    api_key_env: "DEEPSEEK_API_KEY"
+    api_key: null
+    temperature: 0.2
+    timeout_s: 30
+    max_retries: 1
+    max_consecutive_failures: 10
+    fallback_policy: "neutral_stop"
+    command_duration:
+      default_s: 1.0
+      min_s: 0.5
+      max_s: 3.0
+    scheduling:
+      mode: "offline_wait"
+      stale_command_max_hold_s: 0.5
+      max_concurrent_requests: 4
+    structured_output:
+      mode: "json_object"
+    context:
+      history_mode: "short"
+      recent_decisions_full: 8
+      include_task_history_summary: true
+      include_completed_task_summary: true
+      include_failed_request_history: true
+      include_risk_event_history: true
+      summarizer:
+        mode: "none"
+        provider: "same_as_operator"
+        fallback: "rule"
+        trigger:
+          every_n_decisions: 20
+          context_over_tokens: 12000
+  output:
+    run_root: "runs/deepseek-demo-4x2-manual"
+    save_visual_frames: true
+    save_parquet: true
+    save_replay: true

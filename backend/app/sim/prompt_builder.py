@@ -97,6 +97,16 @@ PROFILE_BEHAVIOR_PARAMS: Dict[OperatorProfile, Dict[str, float]] = {
 }
 
 
+STAGE_POLICY_PROMPT = """stage policy:
+- If task.stage is move_to_pickup or move_to_dropoff, reduce control_hint.angular_error_deg, control_hint.radial_error_m, and control_hint.height_error_m. Use slew_hint_direction, trolley_hint_direction, and hoist_hint_direction when they are not neutral. Keep task_action=none.
+- If task.stage is align_pickup or align_dropoff, use low gear fine alignment. Prefer neutral on an axis whose corresponding hint direction is neutral. Keep task_action=none.
+- If task.stage is lower_for_attach, only move axes needed by control_hint.attach_blocking_reason. If the reason is height_error_too_large, keep slew and trolley neutral and use hoist_hint_direction. If the reason is speed_above_threshold, set all axes neutral. When control_hint.can_request_attach=true, output neutral axes and task_action=request_attach; do not continue hoist.
+- If task.stage is attach_pending or release_pending, keep axes neutral and task_action=none unless safety requires emergency_stop.
+- If task.stage is lift_load, prioritize hoist_hint_direction until the hook reaches safe transport height. Avoid unrelated slew/trolley motion unless a risk hint requires it.
+- If task.stage is lower_for_release or recovery_release, only move axes needed by control_hint.release_blocking_reason. If the reason is height_error_too_large, keep slew and trolley neutral and use hoist_hint_direction. If the reason is speed_above_threshold, set all axes neutral. When control_hint.can_request_release=true, output neutral axes and task_action=request_release; do not continue hoist.
+- Do not oscillate: if a hint direction is unchanged from recent decisions and the error is still large, continue that direction instead of reversing. Use lower gear when the error is small or the blocking reason is speed_above_threshold."""
+
+
 def get_profile_prompt(profile: OperatorProfile) -> str:
     return PROFILE_PROMPTS[profile]
 
@@ -161,6 +171,9 @@ def build_user_prompt(
 请从 observation.available_actions 中选择下一步双手柄操作，并返回一个严格 JSON 对象。所有字段名和枚举值必须使用英文，例如 left、neutral、right、in、out、up、down、none、request_attach、request_release。不要输出 Markdown，不要输出 JSON 以外的解释。
 
 command_duration_s 默认约 {command_duration_default_s} 秒，允许范围 [{command_duration_min_s}, {command_duration_max_s}] 秒。
+
+下面是任务阶段策略，请优先结合 observation.task.control_hint 执行：
+{STAGE_POLICY_PROMPT}
 
 输出 JSON 必须符合以下 schema：
 <command_schema_json>

@@ -14,7 +14,7 @@ from backend.app.schemas.observation import (
     Observation,
 )
 from backend.app.schemas.weather import WeatherVisibilityContext
-from backend.app.schemas.task import TaskPoint
+from backend.app.schemas.task import Task, TaskPoint
 from backend.app.sim.crane_model import build_crane_model_library
 from backend.app.sim.layout import build_crane_configs
 from backend.app.sim.observation import (
@@ -24,7 +24,10 @@ from backend.app.sim.observation import (
     build_self_state_summary,
 )
 from backend.app.sim.physics import initialize_crane_state
-from backend.app.sim.task_observation import TaskObservationContext
+from backend.app.sim.task_observation import (
+    TaskObservationContext,
+    build_task_observation_context,
+)
 from backend.app.sim.task_queue import IdleObservationContext
 from backend.app.tests.test_config_schema import load_fixture
 
@@ -62,6 +65,40 @@ def _visibility_context(**overrides) -> WeatherVisibilityContext:
     }
     payload.update(overrides)
     return WeatherVisibilityContext.model_validate(payload)
+
+
+def _task_for_lift_target() -> Task:
+    return Task(
+        task_id="T_C1_001",
+        crane_id="C1",
+        task_type="easy_task",
+        pickup=TaskPoint(
+            x=20.0,
+            y=0.0,
+            z=10.0,
+            zone_id="mat",
+            zone_type="material",
+        ),
+        dropoff=TaskPoint(
+            x=25.0,
+            y=0.0,
+            z=11.0,
+            zone_id="work",
+            zone_type="work",
+        ),
+        pickup_zone_id="mat",
+        dropoff_zone_id="work",
+        planned_start_s=0.0,
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+        load_size_m=[2.0, 1.0, 1.0],
+        priority="medium",
+        deadline_s=180.0,
+        status="active",
+        started_at_s=0.0,
+        generation_seed=1,
+        generation_attempt=0,
+    )
 
 
 def _valid_observation_payload() -> dict:
@@ -290,13 +327,13 @@ def test_build_self_state_summary_rounds_values_and_maps_current_command() -> No
     )
 
     assert summary.slew_angle_deg == 45.0
-    assert summary.slew_motion == "slow_right"
+    assert summary.slew_motion == "slow_left"
     assert summary.trolley_r_m == 24.5
     assert summary.hook_h_m == 30.5
     assert summary.load_attached is True
     assert summary.load_type == "rebar_bundle"
     assert summary.load_weight_t == 2.5
-    assert summary.current_command.left_joystick.slew.direction == "right"
+    assert summary.current_command.left_joystick.slew.direction == "left"
     assert summary.current_command.left_joystick.slew.gear == 1
     assert summary.current_command.left_joystick.trolley.direction == "out"
     assert summary.current_command.right_joystick.hoist.direction == "down"
@@ -403,6 +440,319 @@ def test_build_task_summary_uses_active_context_relative_to_own_hook() -> None:
     assert summary.load_type == "rebar_bundle"
     assert summary.load_weight_t == 2.25
     assert summary.signal_hint == "吊钩在目标点西侧，请进行局部微调。"
+
+
+def test_build_task_summary_adds_control_native_hint_for_current_target() -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane).model_copy(
+        update={
+            "theta_rad": math.radians(0.0),
+            "theta_dot_rad_s": 0.0,
+            "trolley_r_m": 10.0,
+            "trolley_v_m_s": 0.0,
+            "hook_h_m": 20.0,
+            "hoist_v_m_s": 0.0,
+            "hook_position": [10.0, 0.0, 20.0],
+        }
+    )
+    context = TaskObservationContext(
+        crane_id="C1",
+        time_s=42.0,
+        has_active_task=True,
+        task_id="T_C1_001",
+        task_type="easy_task",
+        task_stage="move_to_pickup",
+        priority="medium",
+        pickup=TaskPoint(
+            x=0.0,
+            y=-20.0,
+            z=8.0,
+            zone_id="mat",
+            zone_type="material",
+        ),
+        dropoff=TaskPoint(
+            x=25.0,
+            y=0.0,
+            z=12.0,
+            zone_id="work",
+            zone_type="work",
+        ),
+        current_target=TaskPoint(
+            x=0.0,
+            y=-20.0,
+            z=8.0,
+            zone_id="mat",
+            zone_type="material",
+        ),
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+        load_size_m=[2.0, 1.0, 1.0],
+        load_attached=False,
+        ground_signal_hint="请按控制提示接近取货点。",
+        crane_config=crane,
+        state_machine_config=ScenarioConfig.model_validate(
+            load_fixture("scenario_valid.yaml")
+        ).tasks.state_machine,
+    )
+
+    summary = build_task_summary(
+        task_context=context,
+        observer_state=state,
+        distance_precision_m=0.5,
+    )
+
+    assert summary.control_hint is not None
+    assert summary.control_hint.target_kind == "pickup"
+    assert summary.control_hint.slew_hint_direction == "left"
+    assert summary.control_hint.trolley_hint_direction == "out"
+    assert summary.control_hint.hoist_hint_direction == "down"
+    assert summary.control_hint.angular_error_deg == -90.0
+    assert summary.control_hint.radial_error_m == 10.0
+    assert summary.control_hint.height_error_m == -12.0
+    assert summary.control_hint.xy_error_m == 22.5
+    assert summary.control_hint.can_request_attach is False
+    assert summary.control_hint.attach_blocking_reason == "wrong_stage"
+    assert summary.control_hint.can_request_release is False
+    assert summary.control_hint.release_blocking_reason == "wrong_stage"
+
+
+def test_build_task_summary_marks_attach_ready_when_thresholds_match_state_machine() -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane).model_copy(
+        update={
+            "theta_rad": math.radians(0.0),
+            "theta_dot_rad_s": 0.0,
+            "trolley_r_m": 20.0,
+            "trolley_v_m_s": 0.0,
+            "hook_h_m": 1.1,
+            "hoist_v_m_s": 0.0,
+            "hook_position": [20.0, 0.0, 1.1],
+            "task_stage": "lower_for_attach",
+        }
+    )
+    scenario = ScenarioConfig.model_validate(load_fixture("scenario_valid.yaml"))
+    context = TaskObservationContext(
+        crane_id="C1",
+        time_s=42.0,
+        has_active_task=True,
+        task_id="T_C1_001",
+        task_type="easy_task",
+        task_stage="lower_for_attach",
+        priority="medium",
+        pickup=TaskPoint(
+            x=20.5,
+            y=0.0,
+            z=1.0,
+            zone_id="mat",
+            zone_type="material",
+        ),
+        dropoff=TaskPoint(
+            x=25.0,
+            y=0.0,
+            z=12.0,
+            zone_id="work",
+            zone_type="work",
+        ),
+        current_target=TaskPoint(
+            x=20.5,
+            y=0.0,
+            z=1.0,
+            zone_id="mat",
+            zone_type="material",
+        ),
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+        load_size_m=[2.0, 1.0, 1.0],
+        load_attached=False,
+        ground_signal_hint="满足条件时请求挂载。",
+        crane_config=crane,
+        state_machine_config=scenario.tasks.state_machine,
+    )
+
+    summary = build_task_summary(
+        task_context=context,
+        observer_state=state,
+        distance_precision_m=0.1,
+    )
+
+    assert summary.control_hint is not None
+    assert summary.control_hint.target_kind == "pickup"
+    assert summary.control_hint.can_request_attach is True
+    assert summary.control_hint.attach_blocking_reason is None
+    assert summary.control_hint.slew_hint_direction == "neutral"
+    assert summary.control_hint.trolley_hint_direction == "neutral"
+    assert summary.control_hint.hoist_hint_direction == "neutral"
+
+
+def test_build_task_summary_holds_horizontal_axes_when_only_attach_height_blocks() -> None:
+    crane = _crane_config()
+    state = initialize_crane_state(crane).model_copy(
+        update={
+            "theta_rad": math.radians(0.0),
+            "theta_dot_rad_s": 0.0,
+            "trolley_r_m": 20.0,
+            "trolley_v_m_s": 0.0,
+            "hook_h_m": 4.0,
+            "hoist_v_m_s": 0.0,
+            "hook_position": [20.0, 0.0, 4.0],
+            "task_stage": "lower_for_attach",
+        }
+    )
+    scenario = ScenarioConfig.model_validate(load_fixture("scenario_valid.yaml"))
+    context = TaskObservationContext(
+        crane_id="C1",
+        time_s=42.0,
+        has_active_task=True,
+        task_id="T_C1_001",
+        task_type="easy_task",
+        task_stage="lower_for_attach",
+        priority="medium",
+        pickup=TaskPoint(
+            x=20.5,
+            y=0.0,
+            z=1.0,
+            zone_id="mat",
+            zone_type="material",
+        ),
+        dropoff=TaskPoint(
+            x=25.0,
+            y=0.0,
+            z=12.0,
+            zone_id="work",
+            zone_type="work",
+        ),
+        current_target=TaskPoint(
+            x=20.5,
+            y=0.0,
+            z=1.0,
+            zone_id="mat",
+            zone_type="material",
+        ),
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+        load_size_m=[2.0, 1.0, 1.0],
+        load_attached=False,
+        ground_signal_hint="只需继续下降。",
+        crane_config=crane,
+        state_machine_config=scenario.tasks.state_machine,
+    )
+
+    summary = build_task_summary(
+        task_context=context,
+        observer_state=state,
+        distance_precision_m=0.1,
+    )
+
+    assert summary.control_hint is not None
+    assert summary.control_hint.attach_blocking_reason == "height_error_too_large"
+    assert summary.control_hint.slew_hint_direction == "neutral"
+    assert summary.control_hint.trolley_hint_direction == "neutral"
+    assert summary.control_hint.hoist_hint_direction == "down"
+
+
+def test_build_task_summary_lift_load_uses_state_machine_lift_target() -> None:
+    crane = _crane_config()
+    scenario = ScenarioConfig.model_validate(load_fixture("scenario_valid.yaml"))
+    state_machine_config = scenario.tasks.state_machine.model_copy(
+        update={
+            "lift_clearance_m": 2.0,
+            "safe_transport_height_m": 12.0,
+        }
+    )
+    below_target = initialize_crane_state(crane).model_copy(
+        update={
+            "theta_rad": math.radians(0.0),
+            "theta_dot_rad_s": 0.0,
+            "trolley_r_m": 20.0,
+            "trolley_v_m_s": 0.0,
+            "hook_h_m": 11.5,
+            "hoist_v_m_s": 0.0,
+            "hook_position": [20.0, 0.0, 11.5],
+            "load_attached": True,
+            "task_stage": "lift_load",
+        }
+    )
+    context = build_task_observation_context(
+        "C1",
+        below_target,
+        active_task=_task_for_lift_target(),
+        time_s=42.0,
+        recent_events=[],
+        crane_config=crane,
+        state_machine_config=state_machine_config,
+    )
+
+    below_summary = build_task_summary(
+        task_context=context,
+        observer_state=below_target,
+        distance_precision_m=0.1,
+    )
+
+    assert below_summary.control_hint is not None
+    assert below_summary.control_hint.target_kind == "lift"
+    assert below_summary.control_hint.height_error_m == 0.5
+    assert below_summary.control_hint.hoist_hint_direction == "up"
+    assert below_summary.control_hint.slew_hint_direction == "neutral"
+    assert below_summary.control_hint.trolley_hint_direction == "neutral"
+
+    at_target = below_target.model_copy(
+        update={
+            "hook_h_m": 12.0,
+            "hook_position": [20.0, 0.0, 12.0],
+        }
+    )
+
+    at_summary = build_task_summary(
+        task_context=context,
+        observer_state=at_target,
+        distance_precision_m=0.1,
+    )
+
+    assert at_summary.control_hint is not None
+    assert at_summary.control_hint.height_error_m == 0.0
+    assert at_summary.control_hint.hoist_hint_direction == "neutral"
+
+
+def test_build_task_summary_align_dropoff_targets_dropoff_height() -> None:
+    crane = _crane_config()
+    scenario = ScenarioConfig.model_validate(load_fixture("scenario_valid.yaml"))
+    state = initialize_crane_state(crane).model_copy(
+        update={
+            "theta_rad": math.radians(0.0),
+            "theta_dot_rad_s": 0.0,
+            "trolley_r_m": 25.0,
+            "trolley_v_m_s": 0.0,
+            "hook_h_m": 11.0,
+            "hoist_v_m_s": 0.0,
+            "hook_position": [25.0, 0.0, 11.0],
+            "load_attached": True,
+            "task_stage": "align_dropoff",
+        }
+    )
+    context = build_task_observation_context(
+        "C1",
+        state,
+        active_task=_task_for_lift_target(),
+        time_s=42.0,
+        recent_events=[],
+        crane_config=crane,
+        state_machine_config=scenario.tasks.state_machine,
+    )
+
+    summary = build_task_summary(
+        task_context=context,
+        observer_state=state,
+        distance_precision_m=0.1,
+    )
+
+    assert context.current_target is not None
+    assert context.current_target.x == 25.0
+    assert context.current_target.y == 0.0
+    assert context.current_target.z == 11.0
+    assert summary.control_hint is not None
+    assert summary.control_hint.target_kind == "dropoff"
+    assert summary.control_hint.height_error_m == 0.0
+    assert summary.control_hint.hoist_hint_direction == "neutral"
 
 
 def test_build_task_summary_idle_context_does_not_leak_next_task() -> None:

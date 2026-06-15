@@ -294,6 +294,163 @@ def test_lift_and_dropoff_release_complete_task() -> None:
     assert completed.state.load_type is None
 
 
+def test_lift_load_advances_only_at_configured_lift_threshold() -> None:
+    scenario, crane = _scenario_and_crane()
+    task = _task().model_copy(
+        update={
+            "pickup": TaskPoint(
+                x=20.0,
+                y=0.0,
+                z=10.0,
+                zone_id="mat_a",
+                zone_type="material",
+            ),
+            "dropoff": TaskPoint(
+                x=25.0,
+                y=0.0,
+                z=11.0,
+                zone_id="work_a",
+                zone_type="work",
+            ),
+        }
+    )
+    config = scenario.tasks.state_machine.model_copy(
+        update={
+            "lift_clearance_m": 2.0,
+            "safe_transport_height_m": 12.0,
+        }
+    )
+
+    below_threshold = step_task_state_machine(
+        task,
+        crane,
+        _state_at(
+            crane,
+            x=20.0,
+            y=0.0,
+            z=11.5,
+            stage="lift_load",
+            load_attached=True,
+            load_type="rebar_bundle",
+            load_weight_t=2.0,
+        ),
+        _signal(),
+        time_s=20.0,
+        config=config,
+    )
+    at_threshold = step_task_state_machine(
+        task,
+        crane,
+        _state_at(
+            crane,
+            x=20.0,
+            y=0.0,
+            z=12.0,
+            stage="lift_load",
+            load_attached=True,
+            load_type="rebar_bundle",
+            load_weight_t=2.0,
+        ),
+        _signal(),
+        time_s=21.0,
+        config=config,
+    )
+
+    assert below_threshold.state.task_stage == "lift_load"
+    assert at_threshold.state.task_stage == "move_to_dropoff"
+
+
+def test_align_dropoff_advances_to_lower_for_release_without_height_gate() -> None:
+    scenario, crane = _scenario_and_crane()
+    task = _task()
+    at_dropoff_height = _state_at(
+        crane,
+        x=25.0,
+        y=0.0,
+        z=30.0,
+        stage="align_dropoff",
+        load_attached=True,
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+    )
+    without_load = at_dropoff_height.model_copy(update={"load_attached": False})
+
+    ready = step_task_state_machine(
+        task,
+        crane,
+        at_dropoff_height,
+        _signal(),
+        time_s=22.0,
+        config=scenario.tasks.state_machine,
+    )
+    blocked = step_task_state_machine(
+        task,
+        crane,
+        without_load,
+        _signal(),
+        time_s=22.0,
+        config=scenario.tasks.state_machine,
+    )
+
+    assert ready.state.task_stage == "lower_for_release"
+    assert blocked.state.task_stage == "align_dropoff"
+
+
+def test_attach_pending_repeated_request_does_not_block_completion() -> None:
+    scenario, crane = _scenario_and_crane()
+    task = _task()
+    state = _state_at(crane, x=20.0, y=0.0, z=1.2, stage="attach_pending")
+
+    result = step_task_state_machine(
+        task,
+        crane,
+        state,
+        _signal("request_attach"),
+        time_s=12.0,
+        config=scenario.tasks.state_machine,
+        runtime=TaskRuntimeState(attach_pending_started_at_s=10.0),
+        attach_delay_s=2.0,
+    )
+
+    assert result.state.task_stage == "lift_load"
+    assert result.state.load_attached is True
+    assert [event.event_type for event in result.events] == ["load_attached"]
+
+
+def test_release_pending_repeated_request_does_not_block_completion() -> None:
+    scenario, crane = _scenario_and_crane()
+    task = _task()
+    state = _state_at(
+        crane,
+        x=25.0,
+        y=0.0,
+        z=30.2,
+        stage="release_pending",
+        load_attached=True,
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+    )
+
+    result = step_task_state_machine(
+        task,
+        crane,
+        state,
+        _signal("request_release"),
+        time_s=12.0,
+        config=scenario.tasks.state_machine,
+        runtime=TaskRuntimeState(release_pending_started_at_s=10.0),
+        release_delay_s=2.0,
+    )
+
+    assert result.task.status == "completed"
+    assert result.state.task_stage == "idle"
+    assert result.state.load_attached is False
+    assert [event.event_type for event in result.events] == [
+        "load_released",
+        "task_completed",
+    ]
+
+
 def test_release_pending_drift_cancels_and_keeps_load() -> None:
     scenario, crane = _scenario_and_crane()
     drifted = _state_at(

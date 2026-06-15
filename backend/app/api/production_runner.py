@@ -158,6 +158,8 @@ def build_production_episode_runner(
             queues=task_generation.queues,
             time_s=0.0,
             recent_events={},
+            crane_configs_by_id={config.crane_id: config for config in crane_configs},
+            state_machine_config=scenario.tasks.state_machine,
         ),
     )
     return ProductionEpisodeRunner(runner=runner, recorder=recorder)
@@ -241,6 +243,8 @@ class ProductionTaskSystem:
                 queues=result.queues,
                 time_s=time_s,
                 recent_events=self._recent_events,
+                crane_configs_by_id=self.crane_configs,
+                state_machine_config=self.scenario.tasks.state_machine,
             ),
         )
 
@@ -335,6 +339,8 @@ class ProductionTaskSystem:
                 queues=ordered_queues,
                 time_s=time_s,
                 recent_events=self._recent_events,
+                crane_configs_by_id=self.crane_configs,
+                state_machine_config=self.scenario.tasks.state_machine,
             ),
         )
 
@@ -656,6 +662,8 @@ def _task_contexts(
     queues: Sequence[TaskQueue],
     time_s: float,
     recent_events: Mapping[str, Sequence[Any]],
+    crane_configs_by_id: Mapping[str, CraneConfig] | None = None,
+    state_machine_config: Any = None,
 ) -> dict[str, Any]:
     states_by_id = {state.crane_id: state for state in states}
     contexts: dict[str, Any] = {}
@@ -676,6 +684,12 @@ def _task_contexts(
                 active_task=active_task,
                 time_s=time_s,
                 recent_events=events,
+                crane_config=(
+                    crane_configs_by_id.get(queue.crane_id)
+                    if crane_configs_by_id is not None
+                    else None
+                ),
+                state_machine_config=state_machine_config,
             )
     return contexts
 

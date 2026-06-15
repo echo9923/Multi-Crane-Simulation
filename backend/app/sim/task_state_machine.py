@@ -45,7 +45,10 @@ def step_task_state_machine(
     current_stage = state.task_stage
     task_action = signal.task_action if signal.crane_id == state.crane_id else "none"
 
-    if task_action == "request_attach" and current_stage != "lower_for_attach":
+    if task_action == "request_attach" and current_stage not in {
+        "lower_for_attach",
+        "attach_pending",
+    }:
         events.append(
             _event(
                 "attach_request_rejected",
@@ -60,6 +63,7 @@ def step_task_state_machine(
     if task_action == "request_release" and current_stage not in {
         "lower_for_release",
         "recovery_release",
+        "release_pending",
     }:
         events.append(
             _event(
@@ -172,7 +176,6 @@ def step_task_state_machine(
     if (
         current_stage == "align_dropoff"
         and _xy_error(state, task.dropoff.as_xyz()) <= config.align_xy_threshold_m
-        and state.hook_h_m > task.dropoff.z + config.release_height_threshold_m
         and state.load_attached
     ):
         return _stage_changed(task, state, runtime_state, events, "lower_for_release", time_s)

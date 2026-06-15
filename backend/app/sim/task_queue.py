@@ -177,7 +177,12 @@ def all_ordinary_tasks_terminal(queues: Sequence[TaskQueue]) -> bool:
     return True
 
 
-def current_target_for_stage(task: Task, stage: str) -> TaskPoint | None:
+def current_target_for_stage(
+    task: Task,
+    stage: str,
+    *,
+    state_machine_config: Any = None,
+) -> TaskPoint | None:
     if stage in {
         "move_to_pickup",
         "align_pickup",
@@ -186,6 +191,15 @@ def current_target_for_stage(task: Task, stage: str) -> TaskPoint | None:
     }:
         return task.pickup
     if stage == "lift_load":
+        if state_machine_config is not None:
+            return task.pickup.model_copy(
+                update={
+                    "z": max(
+                        task.pickup.z + state_machine_config.lift_clearance_m,
+                        state_machine_config.safe_transport_height_m,
+                    )
+                }
+            )
         return task.pickup.model_copy(
             update={"z": max(task.pickup.z, task.dropoff.z)}
         )

@@ -75,6 +75,23 @@ class TaskObservationSummary(ObservationBaseModel):
     load_type: Optional[str] = None
     load_weight_t: Optional[float] = Field(default=None, ge=0)
     signal_hint: Optional[str] = None
+    control_hint: Optional["ControlHint"] = None
+
+
+class ControlHint(ObservationBaseModel):
+    schema_version: str = OBSERVATION_SCHEMA_VERSION
+    target_kind: Optional[Literal["pickup", "dropoff", "lift", "none"]] = None
+    angular_error_deg: Optional[float] = None
+    slew_hint_direction: Literal["left", "neutral", "right"]
+    radial_error_m: Optional[float] = None
+    trolley_hint_direction: Literal["in", "neutral", "out"]
+    height_error_m: Optional[float] = None
+    hoist_hint_direction: Literal["up", "neutral", "down"]
+    xy_error_m: Optional[float] = Field(default=None, ge=0)
+    can_request_attach: bool = False
+    attach_blocking_reason: Optional[str] = None
+    can_request_release: bool = False
+    release_blocking_reason: Optional[str] = None
 
 
 class VisibleNeighbor(ObservationBaseModel):

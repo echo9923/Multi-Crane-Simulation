@@ -209,7 +209,7 @@ def test_build_observation_assembles_complete_llm_json_without_leaks() -> None:
     assert payload["operator_id"] == "OP_C1"
     assert payload["task"]["type"] == "overlap_task"
     assert payload["self_state"]["current_command"]["left_joystick"]["slew"] == {
-        "direction": "right",
+        "direction": "left",
         "gear": 1,
     }
     assert payload["visible_neighbors"][0]["crane_id"] == "C2"

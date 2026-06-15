@@ -137,6 +137,11 @@ def test_production_runner_uses_tasks_observations_llm_safety_and_recorder(
     ]
     assert observations
     assert any(row["observation"]["task"]["has_active_task"] for row in observations)
+    assert any(
+        row["observation"]["task"].get("control_hint")
+        for row in observations
+        if row["observation"]["task"]["has_active_task"]
+    )
 
     events = [
         json.loads(line)

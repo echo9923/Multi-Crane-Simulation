@@ -12,6 +12,7 @@ from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.observation import (
     AxisCommand,
     AvailableActions,
+    ControlHint,
     JoystickCommandSummary,
     LeftJoystickCommand,
     MemorySummary,
@@ -298,6 +299,11 @@ def build_task_summary(
         load_type=getattr(task_context, "load_type", None),
         load_weight_t=getattr(task_context, "load_weight_t", None),
         signal_hint=task_context.ground_signal_hint,
+        control_hint=_build_control_hint(
+            task_context=task_context,
+            observer_state=observer_state,
+            distance_precision_m=distance_precision_m,
+        ),
     )
 
 
@@ -411,6 +417,230 @@ def build_safety_hint(
     )
 
 
+def _build_control_hint(
+    *,
+    task_context: Union[TaskObservationContext, IdleObservationContext],
+    observer_state: CraneState,
+    distance_precision_m: float,
+) -> Optional[ControlHint]:
+    target = getattr(task_context, "current_target", None)
+    if target is None or not task_context.has_active_task:
+        return None
+
+    target_kind = _target_kind_for_stage(task_context.task_stage)
+    base = _crane_base_for_control_hint(task_context, observer_state)
+    angular_error = _angle_delta_deg(
+        math.degrees(observer_state.theta_rad),
+        math.degrees(
+            math.atan2(
+                target.y - base[1],
+                target.x - base[0],
+            )
+        ),
+    )
+    target_radius = horizontal_distance(base, target.as_xyz())
+    radial_error = target_radius - observer_state.trolley_r_m
+    height_error = target.z - observer_state.hook_h_m
+    xy_error = horizontal_distance(observer_state.hook_position, target.as_xyz())
+
+    attach_reason = _attach_blocking_reason(
+        task_context=task_context,
+        observer_state=observer_state,
+    )
+    release_reason = _release_blocking_reason(
+        task_context=task_context,
+        observer_state=observer_state,
+    )
+    slew_direction = _slew_hint_direction(angular_error)
+    trolley_direction = _linear_hint_direction(
+        radial_error,
+        positive="out",
+        negative="in",
+        deadband=max(0.25, distance_precision_m),
+    )
+    hoist_direction = _linear_hint_direction(
+        height_error,
+        positive="up",
+        negative="down",
+        deadband=max(0.25, distance_precision_m),
+    )
+    if (
+        task_context.task_stage == "lower_for_attach"
+        and attach_reason is None
+    ) or (
+        task_context.task_stage in {"lower_for_release", "recovery_release"}
+        and release_reason is None
+    ):
+        slew_direction = "neutral"
+        trolley_direction = "neutral"
+        hoist_direction = "neutral"
+    elif task_context.task_stage == "lower_for_attach":
+        if attach_reason != "xy_error_too_large":
+            slew_direction = "neutral"
+            trolley_direction = "neutral"
+    elif task_context.task_stage in {"lower_for_release", "recovery_release"}:
+        if release_reason != "xy_error_too_large":
+            slew_direction = "neutral"
+            trolley_direction = "neutral"
+    return ControlHint(
+        target_kind=target_kind,
+        angular_error_deg=_round_deadband(angular_error, 0.1),
+        slew_hint_direction=slew_direction,
+        radial_error_m=_round_deadband(
+            _round_to_precision(radial_error, distance_precision_m),
+            distance_precision_m,
+        ),
+        trolley_hint_direction=trolley_direction,
+        height_error_m=_round_deadband(
+            _round_to_precision(height_error, distance_precision_m),
+            distance_precision_m,
+        ),
+        hoist_hint_direction=hoist_direction,
+        xy_error_m=_round_to_precision(xy_error, distance_precision_m),
+        can_request_attach=attach_reason is None,
+        attach_blocking_reason=attach_reason,
+        can_request_release=release_reason is None,
+        release_blocking_reason=release_reason,
+    )
+
+
+def _crane_base_for_control_hint(
+    task_context: Union[TaskObservationContext, IdleObservationContext],
+    observer_state: CraneState,
+) -> list[float]:
+    crane_config = getattr(task_context, "crane_config", None)
+    if crane_config is not None:
+        return list(crane_config.base)
+    return [
+        observer_state.root_position[0],
+        observer_state.root_position[1],
+        0.0,
+    ]
+
+
+def _target_kind_for_stage(stage: str) -> str:
+    if stage in {
+        "move_to_pickup",
+        "align_pickup",
+        "lower_for_attach",
+        "attach_pending",
+    }:
+        return "pickup"
+    if stage == "lift_load":
+        return "lift"
+    if stage in {
+        "move_to_dropoff",
+        "align_dropoff",
+        "lower_for_release",
+        "release_pending",
+        "recovery_release",
+    }:
+        return "dropoff"
+    return "none"
+
+
+def _angle_delta_deg(current_deg: float, target_deg: float) -> float:
+    return (target_deg - current_deg + 180.0) % 360.0 - 180.0
+
+
+def _slew_hint_direction(error_deg: float) -> str:
+    if abs(error_deg) <= 2.0:
+        return "neutral"
+    return "right" if error_deg > 0 else "left"
+
+
+def _linear_hint_direction(
+    value: float,
+    *,
+    positive: str,
+    negative: str,
+    deadband: float,
+) -> str:
+    if abs(value) <= deadband:
+        return "neutral"
+    return positive if value > 0 else negative
+
+
+def _round_deadband(value: float, deadband: float) -> float:
+    return 0.0 if abs(value) <= deadband else value
+
+
+def _attach_blocking_reason(
+    *,
+    task_context: Union[TaskObservationContext, IdleObservationContext],
+    observer_state: CraneState,
+) -> Optional[str]:
+    if task_context.task_stage != "lower_for_attach":
+        return "wrong_stage"
+    pickup = getattr(task_context, "pickup", None)
+    state_machine_config = getattr(task_context, "state_machine_config", None)
+    if pickup is None or state_machine_config is None:
+        return "missing_readiness_config"
+    if observer_state.load_attached:
+        return "load_already_attached"
+    if (
+        horizontal_distance(observer_state.hook_position, pickup.as_xyz())
+        > state_machine_config.attach_xy_threshold_m
+    ):
+        return "xy_error_too_large"
+    if (
+        abs(observer_state.hook_h_m - pickup.z)
+        > state_machine_config.attach_height_threshold_m
+    ):
+        return "height_error_too_large"
+    if not _speeds_below_threshold(
+        observer_state,
+        speed_threshold=state_machine_config.attach_speed_threshold,
+    ):
+        return "speed_above_threshold"
+    crane_config = getattr(task_context, "crane_config", None)
+    load_weight_t = getattr(task_context, "load_weight_t", None)
+    if crane_config is not None and load_weight_t is not None:
+        radius = horizontal_distance(crane_config.base, observer_state.hook_position)
+        if crane_config.model.capacity_at_radius_t(radius) < load_weight_t:
+            return "runtime_over_capacity"
+    return None
+
+
+def _release_blocking_reason(
+    *,
+    task_context: Union[TaskObservationContext, IdleObservationContext],
+    observer_state: CraneState,
+) -> Optional[str]:
+    if task_context.task_stage not in {"lower_for_release", "recovery_release"}:
+        return "wrong_stage"
+    dropoff = getattr(task_context, "dropoff", None)
+    state_machine_config = getattr(task_context, "state_machine_config", None)
+    if dropoff is None or state_machine_config is None:
+        return "missing_readiness_config"
+    if not observer_state.load_attached:
+        return "load_not_attached"
+    if (
+        horizontal_distance(observer_state.hook_position, dropoff.as_xyz())
+        > state_machine_config.release_xy_threshold_m
+    ):
+        return "xy_error_too_large"
+    if (
+        abs(observer_state.hook_h_m - dropoff.z)
+        > state_machine_config.release_height_threshold_m
+    ):
+        return "height_error_too_large"
+    if not _speeds_below_threshold(
+        observer_state,
+        speed_threshold=state_machine_config.release_speed_threshold,
+    ):
+        return "speed_above_threshold"
+    return None
+
+
+def _speeds_below_threshold(state: CraneState, *, speed_threshold: Any) -> bool:
+    return (
+        abs(state.theta_dot_rad_s) <= math.radians(speed_threshold.slew_deg_s)
+        and abs(state.trolley_v_m_s) <= speed_threshold.trolley_m_s
+        and abs(state.hoist_v_m_s) <= speed_threshold.hoist_m_s
+    )
+
+
 def _command_summary(current_command: Optional[ControlTarget]) -> JoystickCommandSummary:
     if current_command is None:
         return JoystickCommandSummary(
@@ -431,8 +661,8 @@ def _command_summary(current_command: Optional[ControlTarget]) -> JoystickComman
             slew=AxisCommand(
                 direction=_axis_direction(
                     current_command.target_slew_velocity_rad_s,
-                    positive="left",
-                    negative="right",
+                    positive="right",
+                    negative="left",
                 ),
                 gear=_gear_for_velocity(current_command.target_slew_velocity_rad_s),
             ),
@@ -462,7 +692,7 @@ def _command_summary(current_command: Optional[ControlTarget]) -> JoystickComman
 
 
 def _slew_motion(velocity_rad_s: float) -> str:
-    direction = _axis_direction(velocity_rad_s, positive="slow_left", negative="slow_right")
+    direction = _axis_direction(velocity_rad_s, positive="slow_right", negative="slow_left")
     return "hold" if direction == "neutral" else direction
 
 

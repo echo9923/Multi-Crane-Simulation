@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -33,6 +33,8 @@ class TaskObservationContext(BaseModel):
     load_attached: bool = False
     ground_signal_hint: Optional[str] = None
     recent_task_events: List[Dict[str, object]] = Field(default_factory=list)
+    crane_config: Optional[Any] = Field(default=None, exclude=True)
+    state_machine_config: Optional[Any] = Field(default=None, exclude=True)
 
 
 def build_task_observation_context(
@@ -42,6 +44,8 @@ def build_task_observation_context(
     active_task: Optional[Task],
     time_s: float,
     recent_events: List[TaskEventPayload],
+    crane_config: Optional[Any] = None,
+    state_machine_config: Optional[Any] = None,
 ) -> TaskObservationContext:
     if active_task is None or state.task_stage == "idle":
         return TaskObservationContext(
@@ -54,9 +58,15 @@ def build_task_observation_context(
             recent_task_events=[
                 event.model_dump(mode="json") for event in recent_events
             ],
+            crane_config=crane_config,
+            state_machine_config=state_machine_config,
         )
 
-    target = current_target_for_stage(active_task, state.task_stage)
+    target = current_target_for_stage(
+        active_task,
+        state.task_stage,
+        state_machine_config=state_machine_config,
+    )
     hint = _ground_signal_hint(state, active_task, target)
     return TaskObservationContext(
         crane_id=crane_id,
@@ -78,6 +88,8 @@ def build_task_observation_context(
         load_attached=state.load_attached,
         ground_signal_hint=hint,
         recent_task_events=[event.model_dump(mode="json") for event in recent_events],
+        crane_config=crane_config,
+        state_machine_config=state_machine_config,
     )
 
 

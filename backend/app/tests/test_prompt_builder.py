@@ -10,6 +10,7 @@ from backend.app.schemas.command import (
 from backend.app.schemas.enums import OperatorProfile, RiskPromptMode
 from backend.app.schemas.observation import (
     AvailableActions,
+    ControlHint,
     JoystickCommandSummary,
     LeftJoystickCommand as ObservationLeftJoystickCommand,
     MemorySummary,
@@ -167,6 +168,45 @@ def test_user_prompt_embeds_parseable_observation_actions_duration_and_schema() 
     assert "1.0" in prompt
     assert "3.0" in prompt
     assert observation.model_dump(mode="json") == original_dump
+
+
+def test_user_prompt_includes_stage_policy_for_control_hints_and_task_actions() -> None:
+    observation = _observation()
+    observation.task.control_hint = ControlHint(
+        target_kind="pickup",
+        angular_error_deg=-8.0,
+        slew_hint_direction="right",
+        radial_error_m=3.0,
+        trolley_hint_direction="out",
+        height_error_m=-1.5,
+        hoist_hint_direction="down",
+        xy_error_m=4.0,
+        can_request_attach=False,
+        attach_blocking_reason="xy_error_too_large",
+        can_request_release=False,
+        release_blocking_reason="wrong_stage",
+    )
+
+    prompt = build_user_prompt(
+        observation,
+        command_schema=ParsedCommand.model_json_schema(),
+        command_duration_min_s=0.5,
+        command_duration_max_s=3.0,
+        command_duration_default_s=1.0,
+    )
+
+    assert "stage policy" in prompt
+    assert "move_to_pickup" in prompt
+    assert "lower_for_attach" in prompt
+    assert "lower_for_release" in prompt
+    assert "can_request_attach=true" in prompt
+    assert "task_action=request_attach" in prompt
+    assert "do not continue hoist" in prompt
+    assert "can_request_release=true" in prompt
+    assert "task_action=request_release" in prompt
+    assert "slew_hint_direction" in prompt
+    assert "trolley_hint_direction" in prompt
+    assert "hoist_hint_direction" in prompt
 
 
 def test_retry_prompt_lists_validation_error_paths_and_messages() -> None:

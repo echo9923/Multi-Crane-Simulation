@@ -5,10 +5,12 @@ import json
 import math
 from pathlib import Path
 
+from backend.app.schemas.config import ScenarioConfig
 from backend.app.schemas.state import CraneState
 from backend.app.schemas.task import Task, TaskPoint
 from backend.app.sim.task_events import build_task_event
 from backend.app.sim.task_observation import build_task_observation_context
+from backend.app.tests.test_config_schema import load_fixture
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -98,6 +100,46 @@ def test_active_task_observation_contains_current_task_target_and_deadline() -> 
     assert context.deadline_missed is True
     assert context.overtime_s == 5.0
     assert context.ground_signal_hint is not None
+
+
+def test_lift_load_current_target_matches_state_machine_lift_threshold() -> None:
+    scenario = ScenarioConfig.model_validate(load_fixture("scenario_valid.yaml"))
+    state_machine_config = scenario.tasks.state_machine.model_copy(
+        update={
+            "lift_clearance_m": 2.0,
+            "safe_transport_height_m": 12.0,
+        }
+    )
+    task = _task().model_copy(
+        update={
+            "pickup": TaskPoint(
+                x=20.0,
+                y=0.0,
+                z=10.0,
+                zone_id="mat_a",
+                zone_type="material",
+            ),
+            "dropoff": TaskPoint(
+                x=25.0,
+                y=5.0,
+                z=11.0,
+                zone_id="work_a",
+                zone_type="work",
+            ),
+        }
+    )
+
+    context = build_task_observation_context(
+        "C1",
+        _state(stage="lift_load", x=20.0, y=0.0, z=11.5),
+        active_task=task,
+        time_s=12.0,
+        recent_events=[],
+        state_machine_config=state_machine_config,
+    )
+
+    assert context.current_target is not None
+    assert context.current_target.z == 12.0
 
 
 def test_idle_observation_hides_next_task_information() -> None:
