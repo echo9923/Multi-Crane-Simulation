@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -57,12 +59,45 @@ class RecordingProvider:
         )
 
 
-def _config(*, history_mode: str = "none", max_retries: int = 0):
+class SleepingProvider:
+    provider_name = LLMProviderName.MOCK
+
+    def __init__(self, *, delay_s: float) -> None:
+        self.delay_s = delay_s
+        self.requests: list[ProviderRequest] = []
+        self._lock = threading.Lock()
+
+    def generate(self, request: ProviderRequest) -> ProviderResult:
+        time.sleep(self.delay_s)
+        with self._lock:
+            self.requests.append(request)
+        return ProviderResult(
+            raw_response=RawLLMResponse(
+                response_id=f"resp-{request.observation.crane_id}-{request.attempt_index}",
+                provider=LLMProviderName.MOCK,
+                model=request.config.model,
+                observation_id=request.observation.observation_id,
+                source_snapshot_id=request.observation.source_snapshot_id,
+                operator_id=request.observation.operator_id,
+                crane_id=request.observation.crane_id,
+                time_s=request.observation.time_s,
+                content=_valid_content(request.observation.crane_id),
+            )
+        )
+
+
+def _config(
+    *,
+    history_mode: str = "none",
+    max_retries: int = 0,
+    max_concurrent_requests: int = 4,
+):
     raw = load_fixture("experiment_valid.yaml")
     raw["llm"]["provider"] = "mock"
     raw["llm"]["model"] = "mock-command-v1"
     raw["llm"]["max_retries"] = max_retries
     raw["llm"]["max_consecutive_failures"] = 1
+    raw["llm"]["scheduling"]["max_concurrent_requests"] = max_concurrent_requests
     raw["llm"]["context"]["history_mode"] = history_mode
     raw["llm"]["context"]["recent_decisions_full"] = 2
     return ExperimentConfig.model_validate(raw).llm
@@ -164,6 +199,62 @@ def test_orchestrator_creates_independent_sessions_and_preserves_order() -> None
     assert orchestrator.get_session("C1", "op-C1").decision_index == 1
     assert orchestrator.get_session("C2", "op-C2").decision_index == 1
     assert orchestrator.get_session("C1", "op-C1") is not orchestrator.get_session("C2", "op-C2")
+
+
+def test_orchestrator_decides_due_cranes_concurrently_and_preserves_order() -> None:
+    provider = SleepingProvider(delay_s=0.2)
+    orchestrator = OperatorDecisionOrchestrator(
+        config=_config(max_concurrent_requests=4),
+        provider=provider,
+        operator_profiles={
+            "C1": OperatorProfile.NORMAL,
+            "C2": OperatorProfile.NORMAL,
+            "C3": OperatorProfile.NORMAL,
+            "C4": OperatorProfile.NORMAL,
+        },
+    )
+    observations = [_observation(f"C{index}") for index in range(1, 5)]
+
+    started = time.perf_counter()
+    results = orchestrator.decide(observations, llm_decision_interval_s=1.0)
+    elapsed_s = time.perf_counter() - started
+
+    assert [result.parsed_command.crane_id for result in results] == [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+    ]
+    assert elapsed_s < 0.5
+    assert {request.observation.crane_id for request in provider.requests} == {
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+    }
+
+
+def test_orchestrator_can_limit_llm_decisions_to_serial_execution() -> None:
+    provider = SleepingProvider(delay_s=0.08)
+    orchestrator = OperatorDecisionOrchestrator(
+        config=_config(max_concurrent_requests=1),
+        provider=provider,
+        operator_profiles={
+            "C1": OperatorProfile.NORMAL,
+            "C2": OperatorProfile.NORMAL,
+            "C3": OperatorProfile.NORMAL,
+        },
+    )
+
+    started = time.perf_counter()
+    results = orchestrator.decide(
+        [_observation("C1"), _observation("C2"), _observation("C3")],
+        llm_decision_interval_s=1.0,
+    )
+    elapsed_s = time.perf_counter() - started
+
+    assert [result.parsed_command.crane_id for result in results] == ["C1", "C2", "C3"]
+    assert elapsed_s >= 0.22
 
 
 def test_one_operator_failure_does_not_affect_another_operator() -> None:

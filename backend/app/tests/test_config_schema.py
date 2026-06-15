@@ -44,6 +44,24 @@ def test_valid_experiment_yaml_loads_successfully() -> None:
     assert config.risk_prompt_mode is RiskPromptMode.R1
     assert config.safety_mode is SafetyMode.S1
     assert config.llm.provider is LLMProviderName.DEEPSEEK
+    assert config.llm.scheduling.max_concurrent_requests == 4
+
+
+def test_llm_scheduling_concurrency_defaults_and_validates() -> None:
+    raw = load_fixture("experiment_valid.yaml")
+    raw["llm"]["scheduling"].pop("max_concurrent_requests", None)
+
+    config = ExperimentConfig.model_validate(raw)
+
+    assert config.llm.scheduling.max_concurrent_requests == 4
+
+    raw["llm"]["scheduling"]["max_concurrent_requests"] = 0
+    with pytest.raises(ValidationError) as exc_info:
+        ExperimentConfig.model_validate(raw)
+
+    assert ("llm", "scheduling", "max_concurrent_requests") in [
+        error["loc"] for error in exc_info.value.errors()
+    ]
 
 
 def test_valid_dataset_yaml_loads_successfully() -> None:

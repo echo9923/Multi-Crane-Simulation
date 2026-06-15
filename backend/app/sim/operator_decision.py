@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from typing import Dict, List, Optional, Sequence
 
@@ -212,26 +213,70 @@ class OperatorDecisionOrchestrator:
         llm_decision_interval_s: float,
     ) -> List[OperatorDecisionResult]:
         self._validate_observation_batch(observations, llm_decision_interval_s)
-        results: List[OperatorDecisionResult] = []
-        for observation in observations:
-            session = self.get_session(observation.crane_id, observation.operator_id)
-            result = decide_with_retry(
+        if not observations:
+            return []
+        decision_inputs = [
+            (
                 observation,
-                provider=self.provider,
-                config=self.config,
-                session=session,
-                context_messages=self._history_context_messages(observation, session),
+                self.get_session(observation.crane_id, observation.operator_id),
             )
-            session.history.extend(
-                _summary_messages_from_result(result, limit=self.config.context.recent_decisions_full)
+            for observation in observations
+        ]
+        if len(observations) == 1 or self.config.scheduling.max_concurrent_requests == 1:
+            return [
+                self._decide_one_observation(
+                    observation,
+                    session=session,
+                )
+                for observation, session in decision_inputs
+            ]
+
+        max_workers = min(
+            len(decision_inputs),
+            self.config.scheduling.max_concurrent_requests,
+        )
+        results: List[Optional[OperatorDecisionResult]] = [None] * len(decision_inputs)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(
+                    self._decide_one_observation,
+                    observation,
+                    session=session,
+                ): index
+                for index, (observation, session) in enumerate(decision_inputs)
+            }
+            for future, index in future_to_index.items():
+                results[index] = future.result()
+        ordered_results: List[OperatorDecisionResult] = []
+        for result in results:
+            if result is None:
+                raise OperatorDecisionOrchestratorError("missing LLM decision result")
+            ordered_results.append(result)
+        return ordered_results
+
+    def _decide_one_observation(
+        self,
+        observation: Observation,
+        *,
+        session: OperatorSession,
+    ) -> OperatorDecisionResult:
+        result = decide_with_retry(
+            observation,
+            provider=self.provider,
+            config=self.config,
+            session=session,
+            context_messages=self._history_context_messages(observation, session),
+        )
+        session.history.extend(
+            _summary_messages_from_result(
+                result,
+                limit=self.config.context.recent_decisions_full,
             )
-            if self.config.context.recent_decisions_full >= 0:
-                session.history = session.history[
-                    -self.config.context.recent_decisions_full :
-                ]
-            self._last_decision_time_by_crane[observation.crane_id] = observation.time_s
-            results.append(result)
-        return results
+        )
+        if self.config.context.recent_decisions_full >= 0:
+            session.history = session.history[-self.config.context.recent_decisions_full :]
+        self._last_decision_time_by_crane[observation.crane_id] = observation.time_s
+        return result
 
     def get_session(self, crane_id: str, operator_id: str) -> OperatorSession:
         profile = self.operator_profiles.get(crane_id)

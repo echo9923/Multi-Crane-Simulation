@@ -653,6 +653,7 @@ class LLMCommandDurationConfig(ConfigBaseModel):
 class LLMSchedulingConfig(ConfigBaseModel):
     mode: LLMSchedulingMode
     stale_command_max_hold_s: float = Field(ge=0)
+    max_concurrent_requests: int = Field(default=4, gt=0)
 
 
 class StructuredOutputConfig(ConfigBaseModel):
