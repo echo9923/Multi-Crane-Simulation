@@ -58,7 +58,6 @@ export function DownloadBar() {
           placeholder="E-xxxxxxxxxxxx"
           value={id}
           onChange={(e) => setId(e.target.value)}
-          style={{ fontSize: 12, padding: "3px 6px", background: "#1c212b", color: "var(--text)", border: "1px solid var(--line)", borderRadius: 6 }}
         />
         <div style={{ display: "flex", gap: 6 }}>
           <button data-testid="replay-by-id" disabled={busy} onClick={() => run("replay")}>

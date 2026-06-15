@@ -12,7 +12,7 @@ export function buildBoundary(boundary: BoundaryConfig): THREE.Object3D {
   const min = worldToThree([boundary.x_min, boundary.y_min, boundary.z_min]);
   const max = worldToThree([boundary.x_max, boundary.y_max, boundary.z_max]);
   const box = new THREE.Box3(new THREE.Vector3(...min), new THREE.Vector3(...max));
-  const helper = new THREE.Box3Helper(box, 0x5a6473);
+  const helper = new THREE.Box3Helper(box, 0xb6c0cf);
   helper.name = "site:boundary:box";
   group.add(helper);
 
@@ -21,7 +21,7 @@ export function buildBoundary(boundary: BoundaryConfig): THREE.Object3D {
   const h = boundary.y_max - boundary.y_min;
   const size = Math.max(w, h);
   if (size > 0) {
-    const grid = new THREE.GridHelper(size, 24, 0x3a4150, 0x232831);
+    const grid = new THREE.GridHelper(size, 24, 0x9aa7bd, 0xd2dae6);
     const mx = (boundary.x_min + boundary.x_max) / 2;
     const my = (boundary.y_min + boundary.y_max) / 2;
     grid.position.set(mx, boundary.z_min, -my);

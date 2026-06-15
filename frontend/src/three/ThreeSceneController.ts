@@ -38,7 +38,7 @@ export interface CranePose {
 
 function defaultRenderer(canvas: HTMLCanvasElement): RendererLike {
   const r = new THREE.WebGLRenderer({ canvas, antialias: true });
-  r.setClearColor(0x0a0c10, 1);
+  r.setClearColor(0xeaeef4, 1);
   return r as unknown as RendererLike;
 }
 
@@ -82,11 +82,11 @@ export class ThreeSceneController {
     this.renderer = factory(this.canvas);
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.5, 5000);
     this.scene.add(this.root);
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x202028, 1.0));
-    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0xc8ccd4, 1.0));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.7);
     dir.position.set(120, 200, 80);
     this.scene.add(dir);
-    this.scene.background = new THREE.Color(0x0a0c10);
+    this.scene.background = new THREE.Color(0xeaeef4);
 
     if (opts.controls) {
       this.controls = new OrbitControls(this.camera, this.canvas);
@@ -432,7 +432,7 @@ export class ThreeSceneController {
     if (this.windArrow) return this.windArrow;
     const g = new THREE.Group();
     g.name = "windArrow";
-    const mat = new THREE.MeshBasicMaterial({ color: 0x9fe0ff });
+    const mat = new THREE.MeshBasicMaterial({ color: 0x0284c7 });
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 6, 8), mat);
     shaft.rotation.z = -Math.PI / 2; // point along +X by default
     shaft.position.x = 1;

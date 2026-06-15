@@ -21,8 +21,36 @@ export const RISK_LABEL: Record<RiskLevel, string> = {
   collision: "碰撞",
 };
 
+// Soft pill backgrounds + same-family deep text, tuned for the light theme so
+// risk badges read clearly on white panels (vs. saturated fills on dark).
+export const RISK_SOFT: Record<RiskLevel, string> = {
+  safe: "#f1f5f9",
+  low: "#d1fae5",
+  medium: "#fef3c7",
+  high: "#ffedd5",
+  near_miss: "#fee2e2",
+  collision: "#fecaca",
+};
+
+export const RISK_TEXT: Record<RiskLevel, string> = {
+  safe: "#475569",
+  low: "#065f46",
+  medium: "#92400e",
+  high: "#9a3412",
+  near_miss: "#991b1b",
+  collision: "#7f1d1d",
+};
+
 export function riskColorCss(level: RiskLevel | null | undefined): string {
   return level ? RISK_CSS[level] : "#6b7280";
+}
+
+export function riskSoftCss(level: RiskLevel | null | undefined): string {
+  return level ? RISK_SOFT[level] : RISK_SOFT.safe;
+}
+
+export function riskTextCss(level: RiskLevel | null | undefined): string {
+  return level ? RISK_TEXT[level] : RISK_TEXT.safe;
 }
 
 export function riskLabel(level: RiskLevel | null | undefined): string {

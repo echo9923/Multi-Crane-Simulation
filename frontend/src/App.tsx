@@ -16,17 +16,35 @@ function TopNav() {
   const episodeId = useStore((s) => s.episodeId);
   return (
     <>
-      <strong>群塔仿真 3D 展示</strong>
-      <nav style={{ display: "flex", gap: 12 }}>
-        <NavLink to="/" end>
+      <span className="brand">
+        <span className="brand-badge" aria-hidden>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 21h16" />
+            <path d="M9 21V4" />
+            <path d="M5 7h14" />
+            <path d="M9 4l3 3M9 4l-3 3" />
+            <path d="M15 7v3" />
+          </svg>
+        </span>
+        群塔仿真
+      </span>
+      <nav style={{ display: "flex", gap: 4 }}>
+        <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
           主视图
         </NavLink>
-        <NavLink to="/config">配置</NavLink>
+        <NavLink to="/config" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+          配置
+        </NavLink>
       </nav>
       <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
         <GoLive />
         <ConnectionBadge />
-        <span className="muted">{mode !== "idle" ? `${mode} · ${episodeId ?? ""}` : ""}</span>
+        {mode !== "idle" && (
+          <span className="chip">
+            {mode}
+            {episodeId ? ` · ${episodeId}` : ""}
+          </span>
+        )}
       </span>
     </>
   );
@@ -41,14 +59,14 @@ function GoLive() {
         e.preventDefault();
         if (id.trim()) navigate(`/live/${encodeURIComponent(id.trim())}`);
       }}
-      style={{ display: "flex", gap: 4 }}
+      style={{ display: "flex", gap: 6 }}
     >
       <input
         data-testid="live-id-input"
         placeholder="episode id 实时"
         value={id}
         onChange={(e) => setId(e.target.value)}
-        style={{ fontSize: 12, padding: "2px 6px", background: "#1c212b", color: "var(--text)", border: "1px solid var(--line)", borderRadius: 6 }}
+        style={{ width: 150 }}
       />
       <button type="submit">实时</button>
     </form>

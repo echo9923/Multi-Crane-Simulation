@@ -2,7 +2,7 @@
 // (converted for display only — the scene is driven by world coords).
 
 import { useStore } from "@/state/store";
-import { hexCss } from "@/ui/risk";
+import { craneColorCss } from "@/ui/colors";
 
 export function CraneStatusPanel() {
   const frame = useStore((s) => s.latestFrame);
@@ -39,10 +39,7 @@ export function CraneStatusPanel() {
                     onClick={() => select({ selectedCraneId: c.crane_id })}
                   >
                     <td>
-                      <span
-                        className="swatch"
-                        style={{ background: hexCss(0x4cc2ff + ((i * 0x3333) % 0xbbbb)) }}
-                      />
+                      <span className="swatch" style={{ background: craneColorCss(i) }} />
                     </td>
                     <td>{c.crane_id}</td>
                     <td>{((c.theta_rad * 180) / Math.PI).toFixed(1)}</td>

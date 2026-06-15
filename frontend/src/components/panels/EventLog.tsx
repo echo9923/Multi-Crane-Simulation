@@ -3,7 +3,7 @@
 
 import { useStore } from "@/state/store";
 import { collectEventsFromFrames } from "@/api/loader";
-import { riskColorCss, riskLabel } from "@/ui/risk";
+import { riskSoftCss, riskTextCss, riskLabel } from "@/ui/risk";
 import type { RiskLevel } from "@/types/sim";
 
 export function EventLog() {
@@ -50,7 +50,10 @@ export function EventLog() {
                     <td>{(e.crane_ids ?? []).join(",")}</td>
                     <td>
                       {level ? (
-                        <span className="lvl" style={{ background: riskColorCss(level) }}>
+                        <span
+                          className="lvl"
+                          style={{ background: riskSoftCss(level), color: riskTextCss(level) }}
+                        >
                           {riskLabel(level)}
                         </span>
                       ) : (

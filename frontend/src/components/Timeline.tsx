@@ -42,6 +42,7 @@ export function Timeline() {
   return (
     <div className="timeline" data-testid="timeline" style={{ display: "flex", alignItems: "center", gap: 12 }}>
       <button
+        className="play-btn"
         data-testid="play-pause"
         onClick={() => pcRef.current!.toggle()}
         disabled={disabled}

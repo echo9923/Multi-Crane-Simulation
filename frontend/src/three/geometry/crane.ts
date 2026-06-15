@@ -28,8 +28,9 @@ export interface CraneParts {
   fromAsset: boolean;
 }
 
+// Saturated, mid-deep tones chosen to read clearly against the light viewport.
 export const DEFAULT_CRANE_PALETTE = [
-  0x4cc2ff, 0xffb454, 0x9b8cff, 0x7cffb2, 0xff7c9b, 0xd8b4fe,
+  0x2563eb, 0xd97706, 0x7c3aed, 0x0d9488, 0xdb2777, 0x4f46e5,
 ];
 
 // Registry of replacement assets keyed by crane_id or model_id.

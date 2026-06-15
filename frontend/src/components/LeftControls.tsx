@@ -4,6 +4,7 @@
 import { useStore } from "@/state/store";
 import { LoadEpisode } from "@/components/LoadEpisode";
 import { DownloadBar } from "@/components/DownloadBar";
+import { craneColorCss } from "@/ui/colors";
 
 export function LeftControls() {
   const ui = useStore((s) => s.ui);
@@ -42,7 +43,7 @@ export function LeftControls() {
           {cranes.length === 0 ? (
             <span className="muted">无</span>
           ) : (
-            cranes.map((c) => {
+            cranes.map((c, i) => {
               const id = (c as { crane_id?: string }).crane_id ?? "?";
               const selected = ui.selectedCraneId === id;
               const following = ui.followCraneId === id;
@@ -52,7 +53,7 @@ export function LeftControls() {
                   className={`crane-list-item ${selected ? "row-selected" : ""}`}
                   onClick={() => setUI({ selectedCraneId: id })}
                 >
-                  <span className="swatch" style={{ background: "#4cc2ff" }} />
+                  <span className="swatch" style={{ background: craneColorCss(i) }} />
                   {id}
                   {following && <span className="chip" style={{ marginLeft: "auto" }}>跟随</span>}
                 </div>

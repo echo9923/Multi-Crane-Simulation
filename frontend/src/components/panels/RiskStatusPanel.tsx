@@ -3,7 +3,7 @@
 // training ground truth.
 
 import { useStore } from "@/state/store";
-import { riskColorCss, riskLabel } from "@/ui/risk";
+import { riskSoftCss, riskTextCss, riskLabel } from "@/ui/risk";
 import type { RiskLevel } from "@/types/sim";
 
 export function RiskStatusPanel() {
@@ -42,7 +42,10 @@ export function RiskStatusPanel() {
                     <td>{p.distance_min_raw_now_m?.toFixed(1) ?? "—"}</td>
                     <td>{p.clearance_min_now_m?.toFixed(1) ?? "—"}</td>
                     <td>
-                      <span className="lvl" style={{ background: riskColorCss(level) }}>
+                      <span
+                        className="lvl"
+                        style={{ background: riskSoftCss(level), color: riskTextCss(level) }}
+                      >
                         {riskLabel(level)}
                       </span>
                     </td>

@@ -7,7 +7,7 @@ import type { SimFrame } from "@/types/sim";
 import type { EpisodeManifest } from "@/types/sim";
 import type { CraneConfig } from "@/types/config";
 
-const LIVE_PALETTE = [0x4cc2ff, 0xffb454, 0x9b8cff, 0x7cffb2, 0xff7c9b, 0xd8b4fe];
+const LIVE_PALETTE = [0x2563eb, 0xd97706, 0x7c3aed, 0x0d9488, 0xdb2777, 0x4f46e5];
 
 export function craneConfigFromFrame(
   craneId: string,
