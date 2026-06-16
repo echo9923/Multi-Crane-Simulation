@@ -169,6 +169,90 @@ class DatasetSummaryResponse(ApiBaseModel):
     summary: dict[str, Any]
 
 
+class DesktopTemplate(ApiBaseModel):
+    template_id: str
+    name: str
+    path: str
+    scenario_id: Optional[str] = None
+    experiment_id: Optional[str] = None
+    description: Optional[str] = None
+
+
+class DesktopTemplatesResponse(ApiBaseModel):
+    items: list[DesktopTemplate]
+
+
+class DesktopConfigRenderRequest(ApiBaseModel):
+    template_id: str
+    core_overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class DesktopConfigPatchRequest(ApiBaseModel):
+    yaml_text: str
+    patches: dict[str, Any] = Field(default_factory=dict)
+
+
+class DesktopConfigTextResponse(ApiBaseModel):
+    yaml_text: str
+
+
+class DesktopExperimentDraftRequest(ApiBaseModel):
+    experiment_id: str
+    yaml_text: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DesktopExperimentDraftResponse(ApiBaseModel):
+    experiment_id: str
+    yaml_path: str
+    metadata_path: str
+
+
+class DesktopRecentExperiment(ApiBaseModel):
+    experiment_id: str
+    yaml_path: str
+    metadata_path: str
+    template_id: Optional[str] = None
+    last_validation_hash: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class DesktopRecentExperimentsResponse(ApiBaseModel):
+    items: list[DesktopRecentExperiment]
+
+
+class DesktopRunItem(ApiBaseModel):
+    episode_id: str
+    path: str
+    status: Optional[str] = None
+    created_at: Optional[str] = None
+    summary_available: bool
+
+
+class DesktopRunsResponse(ApiBaseModel):
+    items: list[DesktopRunItem]
+
+
+class DesktopRunFile(ApiBaseModel):
+    relative_path: str
+    path: str
+    size_bytes: int = Field(ge=0)
+    kind: str
+
+
+class DesktopRunFilesResponse(ApiBaseModel):
+    episode_id: str
+    files: list[DesktopRunFile]
+
+
+class DesktopEnvironmentResponse(ApiBaseModel):
+    project_root: str
+    python_path: Optional[str] = None
+    python_version: Optional[str] = None
+    run_roots: list[str] = Field(default_factory=list)
+    backend_port: Optional[int] = Field(default=None, ge=1, le=65535)
+
+
 __all__ = [
     "API_ERROR_CODES",
     "API_SCHEMA_VERSION",
@@ -190,6 +274,20 @@ __all__ = [
     "DatasetListItem",
     "DatasetListResponse",
     "DatasetSummaryResponse",
+    "DesktopConfigPatchRequest",
+    "DesktopConfigRenderRequest",
+    "DesktopConfigTextResponse",
+    "DesktopEnvironmentResponse",
+    "DesktopExperimentDraftRequest",
+    "DesktopExperimentDraftResponse",
+    "DesktopRecentExperiment",
+    "DesktopRecentExperimentsResponse",
+    "DesktopRunFile",
+    "DesktopRunFilesResponse",
+    "DesktopRunItem",
+    "DesktopRunsResponse",
+    "DesktopTemplate",
+    "DesktopTemplatesResponse",
     "EpisodeControlResponse",
     "EpisodeDownloadRequest",
     "EpisodeFilterParams",
