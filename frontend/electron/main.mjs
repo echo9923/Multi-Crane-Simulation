@@ -73,7 +73,9 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
-  void stopRendererServer();
+  void stopRendererServer().catch((error) => {
+    appendBackendLog("stderr", `Renderer server shutdown failed: ${error?.message ?? String(error)}\n`);
+  });
   stopBackend();
 });
 

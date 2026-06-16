@@ -15,10 +15,21 @@ import {
 
 describe("electron backend helpers", () => {
   const rendererServers: Array<{ close: () => Promise<void> }> = [];
+  const desktopIndexHtml = "<!doctype html><h1>Desktop</h1>";
 
   afterEach(async () => {
     await Promise.all(rendererServers.splice(0).map((server) => server.close()));
   });
+
+  async function createRendererDist() {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "multi-crane-renderer-"));
+    const distRoot = path.join(tempRoot, "dist");
+    await fs.mkdir(distRoot);
+    await fs.mkdir(path.join(distRoot, "assets"));
+    await fs.writeFile(path.join(distRoot, "desktop-index.html"), desktopIndexHtml, "utf8");
+    await fs.writeFile(path.join(distRoot, "assets", "index.js"), "console.log('desktop');", "utf8");
+    return { tempRoot, distRoot };
+  }
 
   it("resolves platform-specific venv python path", () => {
     expect(resolvePythonPath("/repo", "darwin")).toBe("/repo/.venv/bin/python");
@@ -115,10 +126,7 @@ describe("electron backend helpers", () => {
   });
 
   it("serves built renderer files from a temp dist directory", async () => {
-    const distRoot = await fs.mkdtemp(path.join(os.tmpdir(), "multi-crane-renderer-"));
-    await fs.mkdir(path.join(distRoot, "assets"));
-    await fs.writeFile(path.join(distRoot, "desktop-index.html"), "<!doctype html><h1>Desktop</h1>", "utf8");
-    await fs.writeFile(path.join(distRoot, "assets", "index.js"), "console.log('desktop');", "utf8");
+    const { distRoot } = await createRendererDist();
 
     const server = await startRendererServer({ distRoot, port: 0 });
     rendererServers.push(server);
@@ -134,12 +142,28 @@ describe("electron backend helpers", () => {
     expect(await assetResponse.text()).toContain("console.log('desktop');");
   });
 
+  it("serves the desktop index for extensionless HTML navigation routes", async () => {
+    const { distRoot } = await createRendererDist();
+
+    const server = await startRendererServer({ distRoot, port: 0 });
+    rendererServers.push(server);
+
+    const configResponse = await fetch(`http://127.0.0.1:${server.port}/config`, {
+      headers: { Accept: "text/html" },
+    });
+    expect(configResponse.status).toBe(200);
+    expect(configResponse.headers.get("content-type")).toContain("text/html");
+    expect(await configResponse.text()).toContain(desktopIndexHtml);
+
+    const runResponse = await fetch(`http://127.0.0.1:${server.port}/run`, {
+      headers: { Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+    });
+    expect(runResponse.status).toBe(200);
+    expect(await runResponse.text()).toContain(desktopIndexHtml);
+  });
+
   it("rejects missing files and traversal attempts from the renderer server", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "multi-crane-renderer-"));
-    const distRoot = path.join(tempRoot, "dist");
-    await fs.mkdir(distRoot);
-    await fs.mkdir(path.join(distRoot, "assets"));
-    await fs.writeFile(path.join(distRoot, "desktop-index.html"), "<!doctype html><h1>Desktop</h1>", "utf8");
+    const { tempRoot, distRoot } = await createRendererDist();
     await fs.writeFile(path.join(tempRoot, "package.json"), "{\"private\":true}", "utf8");
 
     const server = await startRendererServer({ distRoot, port: 0 });

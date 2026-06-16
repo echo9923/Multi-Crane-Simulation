@@ -27,7 +27,6 @@ export interface StartBackendOptions extends BackendLaunchOptions {
 
 export interface RuntimeScriptOptions {
   port: number;
-  assetBaseUrl?: string;
 }
 
 export interface RendererServerOptions {
@@ -52,4 +51,3 @@ export function startRendererServer(options: RendererServerOptions): Promise<Ren
 export function escapeJsonForInlineScript(value: unknown): string;
 export function runtimeScriptTag(options: RuntimeScriptOptions): string;
 export function withRuntimeScript(html: string, options: RuntimeScriptOptions): string;
-export function rewriteRootRelativeAssetUrls(html: string, options?: Pick<RuntimeScriptOptions, "assetBaseUrl">): string;

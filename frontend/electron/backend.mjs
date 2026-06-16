@@ -122,19 +122,10 @@ export function escapeJsonForInlineScript(value) {
 export function withRuntimeScript(html, options) {
   const { port } = options;
   const tag = runtimeScriptTag({ port });
-  const htmlWithAssets = rewriteRootRelativeAssetUrls(html, options);
-  if (htmlWithAssets.includes("</head>")) {
-    return htmlWithAssets.replace("</head>", `${tag}</head>`);
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${tag}</head>`);
   }
-  return `${tag}${htmlWithAssets}`;
-}
-
-export function rewriteRootRelativeAssetUrls(html, { assetBaseUrl } = {}) {
-  if (!assetBaseUrl) {
-    return html;
-  }
-  const base = assetBaseUrl.endsWith("/") ? assetBaseUrl : `${assetBaseUrl}/`;
-  return html.replaceAll(/((?:src|href)=["'])\/assets\//g, `$1${base}assets/`);
+  return `${tag}${html}`;
 }
 
 export function rendererIndexUrl(port) {
@@ -168,7 +159,12 @@ export async function startRendererServer({ distRoot, port = 0 }) {
 }
 
 async function serveRendererRequest({ request, response, distRoot }) {
-  const filePath = resolveRendererFilePath(request.url ?? "/", distRoot);
+  const filePath = resolveRendererFilePath({
+    requestUrl: request.url ?? "/",
+    method: request.method,
+    acceptHeader: request.headers.accept,
+    distRoot,
+  });
   if (!filePath) {
     respondNotFound(response);
     return;
@@ -196,7 +192,7 @@ async function serveRendererRequest({ request, response, distRoot }) {
   }
 }
 
-function resolveRendererFilePath(requestUrl, distRoot) {
+function resolveRendererFilePath({ requestUrl, method, acceptHeader, distRoot }) {
   const rawPathname = requestUrl.split(/[?#]/, 1)[0] || "/";
   let decodedRawPathname;
   try {
@@ -222,13 +218,36 @@ function resolveRendererFilePath(requestUrl, distRoot) {
     return undefined;
   }
 
-  const normalizedPathname = decodedPathname === "/" ? "/desktop-index.html" : decodedPathname;
+  const normalizedPathname =
+    decodedPathname === "/" || isSpaNavigationRequest({ pathname: decodedPathname, method, acceptHeader })
+      ? "/desktop-index.html"
+      : decodedPathname;
   const relativePath = normalizedPathname.replace(/^\/+/, "");
   const filePath = path.resolve(distRoot, relativePath);
   if (!isPathInsideAllowedRoots(filePath, [distRoot])) {
     return undefined;
   }
   return filePath;
+}
+
+function isSpaNavigationRequest({ pathname, method, acceptHeader }) {
+  if (method !== "GET" && method !== "HEAD") {
+    return false;
+  }
+  if (!acceptsHtml(acceptHeader)) {
+    return false;
+  }
+  return path.posix.extname(pathname) === "";
+}
+
+function acceptsHtml(acceptHeader) {
+  if (typeof acceptHeader !== "string") {
+    return false;
+  }
+  return acceptHeader
+    .split(",")
+    .map((entry) => entry.split(";", 1)[0].trim().toLowerCase())
+    .some((mediaType) => mediaType === "text/html" || mediaType === "application/xhtml+xml");
 }
 
 function contentTypeForPath(filePath) {
