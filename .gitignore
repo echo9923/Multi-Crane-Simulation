@@ -3,5 +3,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 runs/
+.worktrees/
 .env.local
 .env.*.local
