@@ -30,6 +30,7 @@ export function resolvePythonPath(options, legacyPlatform = process.platform) {
 
   const {
     env = process.env,
+    fallbackProjectRoot,
     isPackaged = false,
     pathExists = fs.existsSync,
     platform = process.platform,
@@ -44,6 +45,16 @@ export function resolvePythonPath(options, legacyPlatform = process.platform) {
     const packagedPythonPath = venvPythonPath(resourceRoot, platform);
     if (pathExists(packagedPythonPath)) {
       return packagedPythonPath;
+    }
+    if (typeof fallbackProjectRoot === "string" && fallbackProjectRoot.trim().length > 0) {
+      const fallbackPythonPath = venvPythonPath(fallbackProjectRoot, platform);
+      if (pathExists(fallbackPythonPath)) {
+        return fallbackPythonPath;
+      }
+      throw new Error(
+        `Packaged Python runtime is missing at ${packagedPythonPath}; fallback Python runtime is missing at ${fallbackPythonPath}. ` +
+          "Set MULTI_CRANE_PYTHON to an existing Python executable to launch the desktop backend.",
+      );
     }
     throw new Error(
       `Packaged Python runtime is missing at ${packagedPythonPath}. ` +

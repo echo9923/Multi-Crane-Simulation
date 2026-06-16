@@ -84,11 +84,11 @@
           "!**/__pycache__/**",
           "!**/*.pyc",
           "!**/.pytest_cache/**",
-          "!**/*.pem",
           "!**/*.p12",
           "!**/*.key",
           "!**/*token*.json",
-          "!**/*credentials*.json"
+          "!**/*credentials*.json",
+          "**/certifi/cacert.pem"
         ]
       },
       {

@@ -23,6 +23,7 @@ export interface DesktopRootResolutionOptions {
 export interface PythonResolutionOptions {
   projectRoot: string;
   resourceRoot?: string;
+  fallbackProjectRoot?: string;
   isPackaged?: boolean;
   platform?: NodeJS.Platform;
   env?: Partial<Pick<NodeJS.ProcessEnv, "MULTI_CRANE_PYTHON">>;

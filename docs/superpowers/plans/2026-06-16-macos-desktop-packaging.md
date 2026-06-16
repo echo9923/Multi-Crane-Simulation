@@ -119,4 +119,3 @@ git diff --check
 git add docs/desktop_workbench_phase1.md docs/desktop_packaging.md
 git commit -m "docs(desktop): document mac packaging workflow"
 ```
-

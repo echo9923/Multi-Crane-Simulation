@@ -54,6 +54,7 @@ app.whenReady().then(async () => {
     desktopUserDataPath = app.getPath("userData");
     const port = await findAvailablePort();
     const pythonPath = resolvePythonPath({
+      fallbackProjectRoot: process.env.MULTI_CRANE_DEV_PROJECT_ROOT,
       projectRoot,
       resourceRoot,
       isPackaged: app.isPackaged,

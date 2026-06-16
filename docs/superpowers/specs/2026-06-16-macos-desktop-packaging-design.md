@@ -8,7 +8,7 @@ Produce a macOS desktop package for the Phase 1 workbench that can be opened by 
 
 This packaging pass creates a macOS Electron package around the existing Phase 1 desktop workbench. It includes the React build output, Electron main/preload code, project backend source, configs, and docs needed by the desktop shell.
 
-This pass does not create a fully standalone Python-free Windows EXE. The packaged app still expects a usable Python environment to exist, preferring an explicit `MULTI_CRANE_PYTHON` path, then the repository `.venv`, then a bundled/adjacent `.venv` if present. A later packaging phase can replace that with a PyInstaller or Nuitka backend binary.
+This pass does not create a fully standalone Python-free Windows EXE. The packaged app still expects a usable Python environment to exist, preferring an explicit `MULTI_CRANE_PYTHON` path, then a packaged resource `.venv`, then a development checkout `.venv` fallback when explicitly configured. A later packaging phase can replace that with a PyInstaller or Nuitka backend binary.
 
 ## Architecture
 
@@ -66,4 +66,3 @@ Implementation must add tests for packaged path/resource resolution and package 
 - backend desktop route/service tests.
 
 Full backend regression can exclude the existing external DeepSeek production test when `DEEPSEEK_API_KEY` is not configured.
-

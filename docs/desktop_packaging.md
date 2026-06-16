@@ -18,7 +18,13 @@ For a distributable macOS target, run:
 cd frontend && npm run desktop:dist
 ```
 
-`desktop:dist` runs the same production renderer build and then `electron-builder --mac`. The current `package.json` requests `dir` and `dmg` macOS targets. DMG creation may depend on the local macOS signing/notarization setup; use `desktop:pack` for the repeatable unsigned local package check.
+`desktop:dist` runs the same production renderer build and then `electron-builder --mac`. The current `package.json` requests `dir` and `dmg` macOS targets. The resulting DMG is not a signed/notarized release unless a signing and notarization workflow is added and configured; use `desktop:pack` for the repeatable unsigned local package check.
+
+If the Electron runtime download from GitHub times out, rerun the same package script with an Electron mirror:
+
+```bash
+(cd frontend && ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm run desktop:pack)
+```
 
 ## Output Location
 
@@ -57,7 +63,7 @@ Contents/Resources/project/pyproject.toml
 
 ## Packaged Contents
 
-The package includes the frontend production build, Electron main/preload code, backend source, configs, `pyproject.toml`, and the local `.venv` copied into Electron resources.
+The package includes the frontend production build, Electron main/preload code, backend source, configs, `pyproject.toml`, and the local `.venv` copied into Electron resources. Because `.venv` is copied as-is, rebuild from a clean dependency-synchronized environment before sharing a package internally.
 
 The package intentionally excludes local secrets and generated output. The Electron Builder `extraResources` filters exclude:
 
@@ -84,15 +90,22 @@ Electron resolves Python in this order:
 
 1. `MULTI_CRANE_PYTHON`, when set to a non-empty executable path.
 2. `Contents/Resources/.venv/bin/python` in a packaged macOS app.
-3. The repository `.venv/bin/python` during development checkout runs.
+3. `MULTI_CRANE_DEV_PROJECT_ROOT/.venv/bin/python`, when that optional development checkout root is set for packaged-app troubleshooting.
+4. The repository `.venv/bin/python` during development checkout runs.
 
 If the packaged `.venv` is missing or incompatible, set `MULTI_CRANE_PYTHON` before launching the app so Electron can start the backend with another interpreter:
 
 ```bash
-MULTI_CRANE_PYTHON=/absolute/path/to/python open "frontend/release/mac-arm64/Multi Crane Workbench.app"
+open --env MULTI_CRANE_PYTHON=/absolute/path/to/python "frontend/release/mac-arm64/Multi Crane Workbench.app"
 ```
 
 For double-click launches on macOS, environment variables may need to be exported into the GUI launch environment, for example with `launchctl setenv MULTI_CRANE_PYTHON /absolute/path/to/python`, before opening the app from Finder.
+
+When testing a packaged app on the same development machine, `MULTI_CRANE_DEV_PROJECT_ROOT` can point to the repository checkout as a fallback if the copied `.venv` is missing:
+
+```bash
+open --env MULTI_CRANE_DEV_PROJECT_ROOT=/absolute/path/to/Multi-Crane-Simulation "frontend/release/mac-arm64/Multi Crane Workbench.app"
+```
 
 Because `.venv` contains platform-specific Python packages, rebuild the package on the target macOS architecture. Do not treat the copied `.venv` as a portable Windows or Linux runtime.
 
@@ -130,8 +143,8 @@ The next packaging phase should replace the source-plus-venv backend runtime wit
 After packaging, inspect the unpacked app resources and run the regression checks:
 
 ```bash
-cd frontend && npm run desktop:pack
-cd frontend && npm run typecheck && npm test && npm run build
+(cd frontend && npm run desktop:pack)
+(cd frontend && npm run typecheck && npm test && npm run build)
 .venv/bin/python -m pytest backend/app/tests/test_desktop_routes.py backend/app/tests/test_desktop_service.py -v
 git diff --check
 ```

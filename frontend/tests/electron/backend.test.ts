@@ -98,7 +98,28 @@ describe("electron backend helpers", () => {
     ).toBe("/resources/.venv/bin/python");
   });
 
-  it("throws a clear packaged runtime error when the packaged resource venv is missing", () => {
+  it("falls back to a development checkout venv when the packaged resource venv is missing", () => {
+    const resourcesPath = "/Applications/Multi Crane.app/Contents/Resources";
+    const desktopRoots = {
+      electronRoot: path.join(resourcesPath, "app.asar", "electron"),
+      isPackaged: true,
+      resourcesPath,
+    };
+
+    expect(
+      resolvePythonPath({
+        fallbackProjectRoot: "/repo",
+        projectRoot: resolveProjectRoot(desktopRoots),
+        resourceRoot: resolveResourceRoot(desktopRoots),
+        env: {},
+        isPackaged: true,
+        pathExists: (candidatePath) => candidatePath === "/repo/.venv/bin/python",
+        platform: "darwin",
+      }),
+    ).toBe("/repo/.venv/bin/python");
+  });
+
+  it("throws a clear packaged runtime error when packaged and fallback venvs are missing", () => {
     const resourcesPath = "/Applications/Multi Crane.app/Contents/Resources";
     const desktopRoots = {
       electronRoot: path.join(resourcesPath, "app.asar", "electron"),
@@ -108,6 +129,7 @@ describe("electron backend helpers", () => {
 
     expect(() =>
       resolvePythonPath({
+        fallbackProjectRoot: "/repo",
         projectRoot: resolveProjectRoot(desktopRoots),
         resourceRoot: resolveResourceRoot(desktopRoots),
         env: {},
@@ -115,7 +137,7 @@ describe("electron backend helpers", () => {
         pathExists: () => false,
         platform: "darwin",
       }),
-    ).toThrow(/Packaged Python runtime is missing.*MULTI_CRANE_PYTHON/s);
+    ).toThrow(/Packaged Python runtime is missing.*\/Resources\/\.venv\/bin\/python.*\/repo\/\.venv\/bin\/python.*MULTI_CRANE_PYTHON/s);
   });
 
   it("uses the repo venv in development", () => {
@@ -150,7 +172,10 @@ describe("electron backend helpers", () => {
     const copiedResourceFilters = packageJson.build.extraResources
       .filter((resource) => ["../backend", "../configs", "../.venv"].includes(resource.from))
       .map((resource) => resource.filter);
-    const requiredExclusions = [
+    const venvResourceFilter = packageJson.build.extraResources.find(
+      (resource) => resource.from === "../.venv",
+    )?.filter;
+    const requiredCommonExclusions = [
       "!**/.env*",
       "!**/.claude/**",
       "!**/.worktrees/**",
@@ -158,17 +183,24 @@ describe("electron backend helpers", () => {
       "!**/__pycache__/**",
       "!**/*.pyc",
       "!**/.pytest_cache/**",
-      "!**/*.pem",
       "!**/*.p12",
       "!**/*.key",
       "!**/*token*.json",
       "!**/*credentials*.json",
     ];
+    const requiredProjectExclusions = [...requiredCommonExclusions, "!**/*.pem"];
 
     expect(copiedResourceFilters).toHaveLength(3);
     for (const filter of copiedResourceFilters) {
-      expect(filter).toEqual(expect.arrayContaining(requiredExclusions));
+      expect(filter).toEqual(expect.arrayContaining(requiredCommonExclusions));
       expect(filter).not.toContain("!**/*secret*");
+    }
+    expect(venvResourceFilter).not.toContain("!**/*.pem");
+    expect(venvResourceFilter).toEqual(expect.arrayContaining(["**/certifi/cacert.pem"]));
+    for (const projectResource of packageJson.build.extraResources.filter((resource) =>
+      ["../backend", "../configs"].includes(resource.from),
+    )) {
+      expect(projectResource.filter).toEqual(expect.arrayContaining(requiredProjectExclusions));
     }
   });
 
