@@ -4,5 +4,6 @@ __pycache__/
 .pytest_cache/
 runs/
 .worktrees/
+.desktop/
 .env.local
 .env.*.local
