@@ -1,19 +1,33 @@
-// Module M REST client. All JSON calls go through /api (the Vite dev proxy strips
-// the prefix to the backend at 127.0.0.1:8000). Success responses are unwrapped
+// Module M REST client. Browser JSON calls default to /api (the Vite dev proxy
+// strips the prefix); desktop runtime can inject an absolute backend base.
+// Success responses are unwrapped
 // from {code:0,data,message}; error responses (code is an M_E_* string) raise
 // ApiClientError. The download endpoint returns a raw zip (not wrapped).
 
 import type {
   ApiResponse,
+  DatasetListResponse,
+  DesktopConfigTextResponse,
+  DesktopEnvironmentResponse,
+  DesktopExperimentDraftResponse,
+  DesktopRecentExperimentsResponse,
+  DesktopRunFilesResponse,
+  DesktopRunsResponse,
+  DesktopTemplatesResponse,
+  EpisodeControlResponse,
+  EpisodeStartRequest,
+  EpisodeStartResponse,
+  EpisodeStateResponse,
   ScenarioValidateRequest,
   ScenarioValidateResult,
-  EpisodeStateResponse,
-  DatasetListResponse,
 } from "@/types/api";
 import { ApiClientError } from "@/types/api";
 import type { EpisodeSummary } from "@/types/sim";
+import { getApiBase } from "@/runtime";
 
-const API_BASE = "/api";
+function apiBase(): string {
+  return getApiBase();
+}
 
 async function request<T>(
   method: "GET" | "POST",
@@ -23,7 +37,7 @@ async function request<T>(
 ): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
+    res = await fetch(`${apiBase()}${path}`, {
       method,
       headers: body != null ? { "content-type": "application/json" } : undefined,
       body: body != null ? JSON.stringify(body) : undefined,
@@ -70,8 +84,56 @@ export function getEpisodeSummary(episodeId: string, init?: { signal?: AbortSign
   return request<EpisodeSummary>("GET", `/episodes/${episodeId}/summary`, undefined, init);
 }
 
+export function startEpisode(req: EpisodeStartRequest, init?: { signal?: AbortSignal }) {
+  return request<EpisodeStartResponse>("POST", "/episodes/start", req, init);
+}
+
+export function pauseEpisode(episodeId: string, init?: { signal?: AbortSignal }) {
+  return request<EpisodeControlResponse>("POST", `/episodes/${episodeId}/pause`, undefined, init);
+}
+
+export function resumeEpisode(episodeId: string, init?: { signal?: AbortSignal }) {
+  return request<EpisodeControlResponse>("POST", `/episodes/${episodeId}/resume`, undefined, init);
+}
+
+export function stopEpisode(episodeId: string, init?: { signal?: AbortSignal }) {
+  return request<EpisodeControlResponse>("POST", `/episodes/${episodeId}/stop`, undefined, init);
+}
+
 export function listDatasets(limit = 50, offset = 0, init?: { signal?: AbortSignal }) {
   return request<DatasetListResponse>("GET", `/datasets?limit=${limit}&offset=${offset}`, undefined, init);
+}
+
+export function listDesktopTemplates(init?: { signal?: AbortSignal }) {
+  return request<DesktopTemplatesResponse>("GET", "/desktop/templates", undefined, init);
+}
+
+export function renderDesktopConfig(templateId: string, coreOverrides: Record<string, unknown>, init?: { signal?: AbortSignal }) {
+  return request<DesktopConfigTextResponse>("POST", "/desktop/config/render", { template_id: templateId, core_overrides: coreOverrides }, init);
+}
+
+export function patchDesktopConfig(yamlText: string, patches: Record<string, unknown>, init?: { signal?: AbortSignal }) {
+  return request<DesktopConfigTextResponse>("POST", "/desktop/config/patch", { yaml_text: yamlText, patches }, init);
+}
+
+export function saveDesktopDraft(experimentId: string, yamlText: string, metadata: Record<string, unknown>, init?: { signal?: AbortSignal }) {
+  return request<DesktopExperimentDraftResponse>("POST", "/desktop/experiments/draft", { experiment_id: experimentId, yaml_text: yamlText, metadata }, init);
+}
+
+export function listRecentExperiments(init?: { signal?: AbortSignal }) {
+  return request<DesktopRecentExperimentsResponse>("GET", "/desktop/experiments/recent", undefined, init);
+}
+
+export function listDesktopRuns(init?: { signal?: AbortSignal }) {
+  return request<DesktopRunsResponse>("GET", "/desktop/runs", undefined, init);
+}
+
+export function listDesktopRunFiles(episodeId: string, init?: { signal?: AbortSignal }) {
+  return request<DesktopRunFilesResponse>("GET", `/desktop/runs/${episodeId}/files`, undefined, init);
+}
+
+export function getDesktopEnvironment(init?: { signal?: AbortSignal }) {
+  return request<DesktopEnvironmentResponse>("GET", "/desktop/environment", undefined, init);
 }
 
 export interface DownloadOpts {
@@ -87,9 +149,10 @@ export async function downloadEpisode(episodeId: string, opts: DownloadOpts = {}
   if (opts.include_data !== undefined) params.set("include_data", String(opts.include_data));
   if (opts.include_visual !== undefined) params.set("include_visual", String(opts.include_visual));
   const qs = params.toString();
+  const base = apiBase();
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/episodes/${episodeId}/download${qs ? `?${qs}` : ""}`);
+    res = await fetch(`${base}/episodes/${episodeId}/download${qs ? `?${qs}` : ""}`);
   } catch (e) {
     throw new ApiClientError(`network error: ${(e as Error).message}`, { code: "N_E_TRANSPORT" });
   }

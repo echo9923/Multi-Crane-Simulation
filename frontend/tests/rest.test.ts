@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { validateScenario, downloadEpisode, getEpisodeState } from "@/api/rest";
+import {
+  downloadEpisode,
+  getDesktopEnvironment,
+  getEpisodeState,
+  listDesktopTemplates,
+  pauseEpisode,
+  renderDesktopConfig,
+  startEpisode,
+  validateScenario,
+} from "@/api/rest";
 import { ApiClientError } from "@/types/api";
 
 type FetchImpl = (input: string, init?: RequestInit) => Promise<Partial<Response> & { ok: boolean; status: number }>;
@@ -20,6 +29,8 @@ function jsonRes(body: unknown, status = 200) {
 
 beforeEach(() => {
   global.fetch = vi.fn(async () => jsonRes({})) as unknown as typeof fetch;
+  window.history.replaceState(null, "", "/");
+  delete window.__MULTI_CRANE_DESKTOP__;
 });
 
 describe("validateScenario", () => {
@@ -76,5 +87,71 @@ describe("downloadEpisode", () => {
   it("falls back to M_E_DOWNLOAD_FAILED on non-JSON error body", async () => {
     setFetch(async () => ({ ok: false, status: 502, json: async () => { throw new Error("nope"); } } as unknown as Response));
     await expect(downloadEpisode("E1")).rejects.toMatchObject({ code: "M_E_DOWNLOAD_FAILED" });
+  });
+});
+
+describe("desktop REST endpoints", () => {
+  it("uses the injected desktop API base", async () => {
+    window.__MULTI_CRANE_DESKTOP__ = { apiBase: "http://127.0.0.1:8765", mode: "desktop" };
+    setFetch(async () =>
+      jsonRes({
+        code: 0,
+        data: { project_root: "/repo", python_path: null, python_version: null, run_roots: [], backend_port: 8765 },
+        message: "ok",
+      }),
+    );
+
+    await getDesktopEnvironment();
+
+    expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8765/desktop/environment", expect.any(Object));
+  });
+
+  it("starts and pauses episodes", async () => {
+    setFetch(async (input) => {
+      if (input === "/api/episodes/start") {
+        return jsonRes({
+          code: 0,
+          data: { episode_id: "E1", run_id: null, run_dir: null, status: "running", resolved_config_hash: null, websocket_url: null },
+          message: "ok",
+        });
+      }
+      return jsonRes({
+        code: 0,
+        data: { episode_id: "E1", previous_status: "running", status: "paused", accepted: true, reason: null },
+        message: "ok",
+      });
+    });
+
+    const started = await startEpisode({ autostart: true });
+    const paused = await pauseEpisode("E1");
+
+    expect(started.episode_id).toBe("E1");
+    expect(paused.status).toBe("paused");
+    expect(global.fetch).toHaveBeenCalledWith("/api/episodes/start", expect.objectContaining({ method: "POST" }));
+    expect(global.fetch).toHaveBeenCalledWith("/api/episodes/E1/pause", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("lists templates and renders desktop config", async () => {
+    setFetch(async (input) => {
+      if (input === "/api/desktop/templates") {
+        return jsonRes({
+          code: 0,
+          data: { items: [{ template_id: "t1", name: "Template", path: "/tmp/t.yaml", scenario_id: null, experiment_id: null, description: null }] },
+          message: "ok",
+        });
+      }
+      return jsonRes({ code: 0, data: { yaml_text: "scenario: {}" }, message: "ok" });
+    });
+
+    const templates = await listDesktopTemplates();
+    const rendered = await renderDesktopConfig("t1", { speed: 2 });
+
+    expect(templates.items[0].template_id).toBe("t1");
+    expect(rendered.yaml_text).toBe("scenario: {}");
+    expect(global.fetch).toHaveBeenCalledWith("/api/desktop/templates", expect.objectContaining({ method: "GET" }));
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/desktop/config/render",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ template_id: "t1", core_overrides: { speed: 2 } }) }),
+    );
   });
 });

@@ -8,6 +8,7 @@
 import type { SimFrame } from "@/types/sim";
 import type { ApiError } from "@/types/api";
 import type { ConnectionStatus } from "@/state/store";
+import { getWsBase } from "@/runtime";
 
 export type WSMessage =
   | { type: "sim_frame"; data: SimFrame }
@@ -28,7 +29,7 @@ export type ScheduleFn = (fn: () => void, ms: number) => () => void; // returns 
 
 export interface WSClientOptions {
   episodeId: string;
-  baseUrl?: string; // default: built from window.location, path prefix "/ws"
+  baseUrl?: string; // default: runtime WS base, usually "/ws"
   socketFactory?: SocketFactory;
   onFrame: (frame: SimFrame) => void;
   onStatus: (status: ConnectionStatus, error?: string | null, attempts?: number) => void;
@@ -49,14 +50,6 @@ function defaultSchedule(fn: () => void, ms: number): () => void {
 
 function defaultSocketFactory(url: string): WebSocketLike {
   return new WebSocket(url) as unknown as WebSocketLike;
-}
-
-function defaultUrl(episodeId: string): string {
-  if (typeof window !== "undefined" && window.location) {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.host}/ws/episodes/${episodeId}`;
-  }
-  return `/ws/episodes/${episodeId}`;
 }
 
 export class EpisodeWebSocketClient {
@@ -82,7 +75,7 @@ export class EpisodeWebSocketClient {
     this.socketFactory = opts.socketFactory ?? defaultSocketFactory;
     this.url = opts.baseUrl
       ? `${opts.baseUrl}/episodes/${opts.episodeId}`
-      : defaultUrl(opts.episodeId);
+      : `${getWsBase()}/episodes/${opts.episodeId}`;
     this.maxAttempts = opts.maxAttempts ?? 8;
     this.heartbeatTimeoutMs = opts.heartbeatTimeoutMs ?? 15000;
     this.lastMsgAt = this.now();

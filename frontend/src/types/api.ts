@@ -63,6 +63,94 @@ export interface EpisodeStartResponse {
   websocket_url: string | null;
 }
 
+export interface EpisodeControlResponse {
+  episode_id: string;
+  previous_status: string;
+  status: string;
+  accepted: boolean;
+  reason: string | null;
+}
+
+export interface EpisodeStartRequest {
+  config_path?: string | null;
+  scenario?: Record<string, unknown> | null;
+  experiment?: Record<string, unknown> | null;
+  dataset?: Record<string, unknown> | null;
+  overrides?: Record<string, unknown>;
+  run_mode?: RunMode | null;
+  runner?: "production" | "local" | null;
+  episode_id?: string | null;
+  autostart?: boolean;
+}
+
+export interface DesktopTemplate {
+  template_id: string;
+  name: string;
+  path: string;
+  scenario_id: string | null;
+  experiment_id: string | null;
+  description: string | null;
+}
+
+export interface DesktopTemplatesResponse {
+  items: DesktopTemplate[];
+}
+
+export interface DesktopConfigTextResponse {
+  yaml_text: string;
+}
+
+export interface DesktopExperimentDraftResponse {
+  experiment_id: string;
+  yaml_path: string;
+  metadata_path: string;
+}
+
+export interface DesktopRecentExperiment {
+  experiment_id: string;
+  yaml_path: string;
+  metadata_path: string;
+  template_id: string | null;
+  last_validation_hash: string | null;
+  updated_at: string | null;
+}
+
+export interface DesktopRecentExperimentsResponse {
+  items: DesktopRecentExperiment[];
+}
+
+export interface DesktopRunItem {
+  episode_id: string;
+  path: string;
+  status: string | null;
+  created_at: string | null;
+  summary_available: boolean;
+}
+
+export interface DesktopRunsResponse {
+  items: DesktopRunItem[];
+}
+
+export interface DesktopRunFile {
+  relative_path: string;
+  path: string;
+  size_bytes: number;
+  kind: string;
+}
+
+export interface DesktopRunFilesResponse {
+  episode_id: string;
+  files: DesktopRunFile[];
+}
+
+export interface DesktopEnvironmentResponse {
+  project_root: string;
+  python_path: string | null;
+  python_version: string | null;
+  run_roots: string[];
+  backend_port: number | null;
+}
+
 export interface DatasetListItem {
   dataset_id: string;
   path: string;

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import { EpisodeWebSocketClient, type WebSocketLike, type SocketFactory, type ScheduleFn } from "@/api/ws";
 import type { SimFrame } from "@/types/sim";
 import { parseFramesJsonl } from "@/api/loader";
@@ -8,6 +8,11 @@ import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const frames = parseFramesJsonl(readFileSync(join(here, "fixtures", "frames.jsonl"), "utf8")).frames;
+
+beforeEach(() => {
+  window.history.replaceState(null, "", "/");
+  delete window.__MULTI_CRANE_DESKTOP__;
+});
 
 // ---- fakes ----
 
@@ -244,6 +249,27 @@ describe("EpisodeWebSocketClient reconnect", () => {
     clock.advance(500);
     sockets[1].fireOpen(); // resets
     expect(c.getAttempts()).toBe(0);
+    c.stop();
+  });
+});
+
+describe("EpisodeWebSocketClient runtime URL", () => {
+  it("uses the injected desktop WS base when no explicit baseUrl is passed", () => {
+    window.__MULTI_CRANE_DESKTOP__ = { wsBase: "ws://127.0.0.1:8765/ws", mode: "desktop" };
+    const { factory, sockets } = fakeFactory();
+    const clock = fakeClock();
+    const c = new EpisodeWebSocketClient({
+      episodeId: "E1",
+      socketFactory: factory,
+      now: clock.now,
+      schedule: clock.schedule,
+      onFrame: () => {},
+      onStatus: () => {},
+    });
+
+    c.connect();
+
+    expect(sockets[0].url).toBe("ws://127.0.0.1:8765/ws/episodes/E1");
     c.stop();
   });
 });

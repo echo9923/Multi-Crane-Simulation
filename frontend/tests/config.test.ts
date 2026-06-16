@@ -14,6 +14,15 @@ describe("scrubSecrets", () => {
     expect((out.scenario.site as Record<string, unknown>).name).toBe("demo");
   });
 
+  it("keeps api_key_env visible while masking raw api_key", () => {
+    const out = scrubSecrets({
+      api_key: "sk-real",
+      api_key_env: "DEEPSEEK_API_KEY",
+    }) as Record<string, unknown>;
+    expect(out.api_key).toBe("***");
+    expect(out.api_key_env).toBe("DEEPSEEK_API_KEY");
+  });
+
   it("walks arrays", () => {
     const out = scrubSecrets([{ token: "x" }, { ok: 1 }]) as Record<string, unknown>[];
     expect(out[0].token).toBe("***");

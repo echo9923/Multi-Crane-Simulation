@@ -7,6 +7,7 @@ import yaml from "js-yaml";
 import type { ScenarioValidateRequest } from "@/types/api";
 
 const SECRET_KEY = /(^|[_-])(api[-_]?key|apikey|token|secret|authorization|password)([_-]|$)/i;
+const SECRET_ALLOWLIST = new Set(["api_key_env"]);
 
 /** Recursively replace secret-like values with "***". */
 export function scrubSecrets(obj: unknown): unknown {
@@ -14,7 +15,7 @@ export function scrubSecrets(obj: unknown): unknown {
   if (obj && typeof obj === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-      out[k] = SECRET_KEY.test(k) ? "***" : scrubSecrets(v);
+      out[k] = SECRET_ALLOWLIST.has(k) ? scrubSecrets(v) : SECRET_KEY.test(k) ? "***" : scrubSecrets(v);
     }
     return out;
   }
