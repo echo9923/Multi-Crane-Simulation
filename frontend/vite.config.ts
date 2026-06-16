@@ -2,7 +2,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Backend serves at 127.0.0.1:8000 with NO /api prefix and NO CORS.
+// Backend serves at 127.0.0.1:8000 with no /api prefix and narrow local-origin CORS.
 // The frontend calls REST under "/api/*" and the dev proxy strips the prefix;
 // WebSocket uses "/ws/*" (backend path is already "/ws/...").
 // Production should put a reverse proxy in front (out of Module N scope).

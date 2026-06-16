@@ -1,14 +1,25 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   escapeJsonForInlineScript,
   isPathInsideAllowedRoots,
   makeBackendLaunch,
   resolvePythonPath,
   runtimeScriptTag,
+  rendererIndexUrl,
+  startRendererServer,
   withRuntimeScript,
 } from "../../electron/backend.mjs";
 
 describe("electron backend helpers", () => {
+  const rendererServers: Array<{ close: () => Promise<void> }> = [];
+
+  afterEach(async () => {
+    await Promise.all(rendererServers.splice(0).map((server) => server.close()));
+  });
+
   it("resolves platform-specific venv python path", () => {
     expect(resolvePythonPath("/repo", "darwin")).toBe("/repo/.venv/bin/python");
     expect(resolvePythonPath("/repo", "linux")).toBe("/repo/.venv/bin/python");
@@ -81,7 +92,7 @@ describe("electron backend helpers", () => {
     expect(injected).toContain(html);
   });
 
-  it("rewrites Vite root-relative built assets to the desktop dist asset directory", () => {
+  it("leaves Vite root-relative built assets unchanged for loopback HTTP serving", () => {
     const html = `<!doctype html>
 <html>
   <head>
@@ -93,12 +104,55 @@ describe("electron backend helpers", () => {
 
     const injected = withRuntimeScript(html, {
       port: 8765,
-      assetBaseUrl: "file:///repo/frontend/dist/",
     });
 
-    expect(injected).toContain('src="file:///repo/frontend/dist/assets/index.js"');
-    expect(injected).toContain('href="file:///repo/frontend/dist/assets/index.css"');
-    expect(injected).not.toContain('src="/assets/index.js"');
-    expect(injected).not.toContain('href="/assets/index.css"');
+    expect(injected).toContain('src="/assets/index.js"');
+    expect(injected).toContain('href="/assets/index.css"');
+  });
+
+  it("builds the loopback renderer desktop index URL", () => {
+    expect(rendererIndexUrl(61234)).toBe("http://127.0.0.1:61234/desktop-index.html");
+  });
+
+  it("serves built renderer files from a temp dist directory", async () => {
+    const distRoot = await fs.mkdtemp(path.join(os.tmpdir(), "multi-crane-renderer-"));
+    await fs.mkdir(path.join(distRoot, "assets"));
+    await fs.writeFile(path.join(distRoot, "desktop-index.html"), "<!doctype html><h1>Desktop</h1>", "utf8");
+    await fs.writeFile(path.join(distRoot, "assets", "index.js"), "console.log('desktop');", "utf8");
+
+    const server = await startRendererServer({ distRoot, port: 0 });
+    rendererServers.push(server);
+
+    const indexResponse = await fetch(rendererIndexUrl(server.port));
+    expect(indexResponse.status).toBe(200);
+    expect(indexResponse.headers.get("content-type")).toContain("text/html");
+    expect(await indexResponse.text()).toContain("<h1>Desktop</h1>");
+
+    const assetResponse = await fetch(`http://127.0.0.1:${server.port}/assets/index.js`);
+    expect(assetResponse.status).toBe(200);
+    expect(assetResponse.headers.get("content-type")).toContain("text/javascript");
+    expect(await assetResponse.text()).toContain("console.log('desktop');");
+  });
+
+  it("rejects missing files and traversal attempts from the renderer server", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "multi-crane-renderer-"));
+    const distRoot = path.join(tempRoot, "dist");
+    await fs.mkdir(distRoot);
+    await fs.mkdir(path.join(distRoot, "assets"));
+    await fs.writeFile(path.join(distRoot, "desktop-index.html"), "<!doctype html><h1>Desktop</h1>", "utf8");
+    await fs.writeFile(path.join(tempRoot, "package.json"), "{\"private\":true}", "utf8");
+
+    const server = await startRendererServer({ distRoot, port: 0 });
+    rendererServers.push(server);
+
+    const missingResponse = await fetch(`http://127.0.0.1:${server.port}/assets/missing.js`);
+    expect(missingResponse.status).toBe(404);
+
+    const traversalResponse = await fetch(`http://127.0.0.1:${server.port}/../package.json`);
+    expect(traversalResponse.status).toBe(404);
+
+    const encodedTraversalResponse = await fetch(`http://127.0.0.1:${server.port}/%2e%2e/package.json`);
+    expect(encodedTraversalResponse.status).toBe(404);
+    expect(await encodedTraversalResponse.text()).not.toContain("\"private\":true");
   });
 });

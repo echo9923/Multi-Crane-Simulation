@@ -1,12 +1,14 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
   findAvailablePort,
   isPathInsideAllowedRoots,
+  rendererIndexUrl,
   resolvePythonPath,
   startBackend,
+  startRendererServer,
   waitForHealth,
   withRuntimeScript,
 } from "./backend.mjs";
@@ -21,6 +23,7 @@ let backendChild;
 let backendPort;
 let desktopUserDataPath;
 let mainWindow;
+let rendererServer;
 let isQuitting = false;
 
 ipcMain.handle("desktop:openPath", async (_event, targetPath) => {
@@ -56,6 +59,7 @@ app.whenReady().then(async () => {
     await waitForHealth({ port });
     mainWindow = await createMainWindow(port);
   } catch (error) {
+    await stopRendererServer();
     stopBackend();
     mainWindow = createFailureWindow(error);
   }
@@ -69,6 +73,7 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  void stopRendererServer();
   stopBackend();
 });
 
@@ -128,13 +133,14 @@ async function loadBuiltIndex(window, port) {
   const distPath = path.join(frontendRoot, "dist");
   const indexPath = path.join(distPath, "index.html");
   const html = await fs.readFile(indexPath, "utf8");
-  const injectedHtml = withRuntimeScript(html, {
-    port,
-    assetBaseUrl: pathToFileURL(distPath).toString(),
-  });
+  const injectedHtml = withRuntimeScript(html, { port });
   const desktopIndexPath = path.join(distPath, "desktop-index.html");
   await fs.writeFile(desktopIndexPath, injectedHtml, "utf8");
-  await window.loadFile(desktopIndexPath);
+
+  if (!rendererServer) {
+    rendererServer = await startRendererServer({ distRoot: distPath });
+  }
+  await window.loadURL(rendererIndexUrl(rendererServer.port));
 }
 
 function trackBackendExit(child) {
@@ -153,6 +159,15 @@ function stopBackend() {
   if (child && !child.killed && child.exitCode === null && child.signalCode === null) {
     child.kill();
   }
+}
+
+function stopRendererServer() {
+  const server = rendererServer;
+  rendererServer = undefined;
+  if (!server) {
+    return Promise.resolve();
+  }
+  return server.close();
 }
 
 function createFailureWindow(error) {

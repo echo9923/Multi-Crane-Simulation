@@ -29,7 +29,7 @@ cd frontend && npm run desktop:dev
 
 Electron resolves the project root, chooses an available backend port, starts FastAPI with `.venv/bin/python -m uvicorn backend.app.main:app`, passes the selected port through `MULTI_CRANE_BACKEND_PORT`, waits for `/health`, then loads the Vite dev server with desktop API and WebSocket runtime parameters. FastAPI enables narrowly scoped CORS for local renderer origins such as `http://127.0.0.1:5173` and `http://localhost:5173`; arbitrary remote origins are not allowed.
 
-For non-dev `npm run desktop`, build the frontend first with `npm run build`. Electron reads `frontend/dist/index.html`, injects the desktop runtime config into `frontend/dist/desktop-index.html`, rewrites Vite root-relative asset URLs to `file://` URLs under `frontend/dist/assets`, and loads that generated file. The build output must remain available while the desktop shell is running.
+For non-dev `npm run desktop`, build the frontend first with `npm run build`. Electron reads `frontend/dist/index.html`, injects the desktop runtime config into `frontend/dist/desktop-index.html`, starts an Electron-owned static renderer server bound to `127.0.0.1`, and loads `http://127.0.0.1:<renderer-port>/desktop-index.html`. The built renderer uses the same narrow local HTTP origin shape as the development renderer, so backend CORS does not need to allow `Origin: null`. The build output must remain available while the desktop shell is running.
 
 ## Workbench Tabs And Module Mapping
 

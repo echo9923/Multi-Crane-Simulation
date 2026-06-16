@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 
@@ -132,6 +135,147 @@ export function rewriteRootRelativeAssetUrls(html, { assetBaseUrl } = {}) {
   }
   const base = assetBaseUrl.endsWith("/") ? assetBaseUrl : `${assetBaseUrl}/`;
   return html.replaceAll(/((?:src|href)=["'])\/assets\//g, `$1${base}assets/`);
+}
+
+export function rendererIndexUrl(port) {
+  return `http://127.0.0.1:${port}/desktop-index.html`;
+}
+
+export async function startRendererServer({ distRoot, port = 0 }) {
+  const resolvedDistRoot = path.resolve(distRoot);
+  const server = http.createServer((request, response) => {
+    serveRendererRequest({ request, response, distRoot: resolvedDistRoot });
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Renderer server did not bind to a TCP port.");
+  }
+
+  return {
+    port: address.port,
+    url: rendererIndexUrl(address.port),
+    close: () => closeServer(server),
+  };
+}
+
+async function serveRendererRequest({ request, response, distRoot }) {
+  const filePath = resolveRendererFilePath(request.url ?? "/", distRoot);
+  if (!filePath) {
+    respondNotFound(response);
+    return;
+  }
+
+  try {
+    const stat = await fsp.stat(filePath);
+    if (!stat.isFile()) {
+      respondNotFound(response);
+      return;
+    }
+    response.writeHead(200, {
+      "Content-Type": contentTypeForPath(filePath),
+      "Content-Length": stat.size,
+      "Cache-Control": "no-store",
+    });
+    fs.createReadStream(filePath).pipe(response);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Internal server error");
+      return;
+    }
+    respondNotFound(response);
+  }
+}
+
+function resolveRendererFilePath(requestUrl, distRoot) {
+  const rawPathname = requestUrl.split(/[?#]/, 1)[0] || "/";
+  let decodedRawPathname;
+  try {
+    decodedRawPathname = decodeURIComponent(rawPathname);
+  } catch {
+    return undefined;
+  }
+  if (decodedRawPathname.split("/").includes("..")) {
+    return undefined;
+  }
+
+  let pathname;
+  try {
+    pathname = new URL(requestUrl, "http://127.0.0.1").pathname;
+  } catch {
+    return undefined;
+  }
+
+  let decodedPathname;
+  try {
+    decodedPathname = decodeURIComponent(pathname);
+  } catch {
+    return undefined;
+  }
+
+  const normalizedPathname = decodedPathname === "/" ? "/desktop-index.html" : decodedPathname;
+  const relativePath = normalizedPathname.replace(/^\/+/, "");
+  const filePath = path.resolve(distRoot, relativePath);
+  if (!isPathInsideAllowedRoots(filePath, [distRoot])) {
+    return undefined;
+  }
+  return filePath;
+}
+
+function contentTypeForPath(filePath) {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".js":
+    case ".mjs":
+      return "text/javascript; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".woff":
+      return "font/woff";
+    case ".woff2":
+      return "font/woff2";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+function respondNotFound(response) {
+  response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+  response.end("Not found");
+}
+
+function closeServer(server) {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+    server.closeAllConnections?.();
+  });
 }
 
 function canListen(port, host) {
