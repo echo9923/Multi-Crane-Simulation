@@ -31,6 +31,7 @@ export function resolvePythonPath(options, legacyPlatform = process.platform) {
   const {
     env = process.env,
     isPackaged = false,
+    pathExists = fs.existsSync,
     platform = process.platform,
     projectRoot,
     resourceRoot,
@@ -40,7 +41,10 @@ export function resolvePythonPath(options, legacyPlatform = process.platform) {
     return explicitPythonPath;
   }
   if (isPackaged && typeof resourceRoot === "string" && resourceRoot.trim().length > 0) {
-    return venvPythonPath(resourceRoot, platform);
+    const packagedPythonPath = venvPythonPath(resourceRoot, platform);
+    if (pathExists(packagedPythonPath)) {
+      return packagedPythonPath;
+    }
   }
   return venvPythonPath(projectRoot, platform);
 }

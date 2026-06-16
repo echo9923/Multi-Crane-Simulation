@@ -85,17 +85,33 @@ describe("electron backend helpers", () => {
     ).toBe("/opt/python/bin/python");
   });
 
-  it("supports packaged resource venv before falling back to the repo venv", () => {
+  it("supports packaged resource venv when it exists", () => {
     expect(
       resolvePythonPath({
         projectRoot: "/repo",
         resourceRoot: "/resources",
         env: {},
         isPackaged: true,
+        pathExists: (candidatePath) => candidatePath === "/resources/.venv/bin/python",
         platform: "darwin",
       }),
     ).toBe("/resources/.venv/bin/python");
+  });
 
+  it("falls back to the repo venv when the packaged resource venv is missing", () => {
+    expect(
+      resolvePythonPath({
+        projectRoot: "/repo",
+        resourceRoot: "/resources",
+        env: {},
+        isPackaged: true,
+        pathExists: () => false,
+        platform: "darwin",
+      }),
+    ).toBe("/repo/.venv/bin/python");
+  });
+
+  it("uses the repo venv in development", () => {
     expect(
       resolvePythonPath({
         projectRoot: "/repo",

@@ -26,6 +26,7 @@ export interface PythonResolutionOptions {
   isPackaged?: boolean;
   platform?: NodeJS.Platform;
   env?: Partial<Pick<NodeJS.ProcessEnv, "MULTI_CRANE_PYTHON">>;
+  pathExists?: (path: string) => boolean;
 }
 
 export interface HealthWaitOptions {
