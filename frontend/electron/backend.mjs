@@ -45,6 +45,10 @@ export function resolvePythonPath(options, legacyPlatform = process.platform) {
     if (pathExists(packagedPythonPath)) {
       return packagedPythonPath;
     }
+    throw new Error(
+      `Packaged Python runtime is missing at ${packagedPythonPath}. ` +
+        "Set MULTI_CRANE_PYTHON to an existing Python executable to launch the desktop backend.",
+    );
   }
   return venvPythonPath(projectRoot, platform);
 }

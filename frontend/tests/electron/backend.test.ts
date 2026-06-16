@@ -98,17 +98,24 @@ describe("electron backend helpers", () => {
     ).toBe("/resources/.venv/bin/python");
   });
 
-  it("falls back to the repo venv when the packaged resource venv is missing", () => {
-    expect(
+  it("throws a clear packaged runtime error when the packaged resource venv is missing", () => {
+    const resourcesPath = "/Applications/Multi Crane.app/Contents/Resources";
+    const desktopRoots = {
+      electronRoot: path.join(resourcesPath, "app.asar", "electron"),
+      isPackaged: true,
+      resourcesPath,
+    };
+
+    expect(() =>
       resolvePythonPath({
-        projectRoot: "/repo",
-        resourceRoot: "/resources",
+        projectRoot: resolveProjectRoot(desktopRoots),
+        resourceRoot: resolveResourceRoot(desktopRoots),
         env: {},
         isPackaged: true,
         pathExists: () => false,
         platform: "darwin",
       }),
-    ).toBe("/repo/.venv/bin/python");
+    ).toThrow(/Packaged Python runtime is missing.*MULTI_CRANE_PYTHON/s);
   });
 
   it("uses the repo venv in development", () => {
@@ -140,11 +147,29 @@ describe("electron backend helpers", () => {
       ]),
     );
 
-    const serializedBuildConfig = JSON.stringify(packageJson.build);
-    expect(serializedBuildConfig).not.toContain(".env.local");
-    expect(serializedBuildConfig).not.toContain(".claude");
-    expect(serializedBuildConfig).not.toContain(".worktrees");
-    expect(serializedBuildConfig).not.toContain("runs");
+    const copiedResourceFilters = packageJson.build.extraResources
+      .filter((resource) => ["../backend", "../configs", "../.venv"].includes(resource.from))
+      .map((resource) => resource.filter);
+    const requiredExclusions = [
+      "!**/.env*",
+      "!**/.claude/**",
+      "!**/.worktrees/**",
+      "!**/runs/**",
+      "!**/__pycache__/**",
+      "!**/*.pyc",
+      "!**/.pytest_cache/**",
+      "!**/*.pem",
+      "!**/*.p12",
+      "!**/*.key",
+      "!**/*token*.json",
+      "!**/*credentials*.json",
+    ];
+
+    expect(copiedResourceFilters).toHaveLength(3);
+    for (const filter of copiedResourceFilters) {
+      expect(filter).toEqual(expect.arrayContaining(requiredExclusions));
+      expect(filter).not.toContain("!**/*secret*");
+    }
   });
 
   it("allows paths inside configured safe roots only", () => {
