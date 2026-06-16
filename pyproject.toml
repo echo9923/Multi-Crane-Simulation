@@ -9,6 +9,7 @@ dependencies = [
   "pydantic>=2.13,<3",
   "pyarrow>=18.1,<19",
   "PyYAML>=6.0,<7",
+  "uvicorn[standard]>=0.30,<1",
 ]
 
 [project.optional-dependencies]
