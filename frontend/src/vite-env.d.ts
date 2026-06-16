@@ -7,4 +7,7 @@ interface Window {
     backendPort?: number;
     mode?: "browser" | "desktop";
   };
+  multiCraneDesktop?: {
+    openPath(path: string): Promise<{ ok: boolean; error?: string }>;
+  };
 }
