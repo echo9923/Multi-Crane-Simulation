@@ -512,6 +512,7 @@
     border-radius: var(--radius-md);
     background: var(--panel);
     padding: 16px;
+    margin-bottom: 14px;
   }
 
   .workbench-panel h2 {
@@ -586,6 +587,48 @@
     margin-bottom: 12px;
   }
 
+  .workbench-validation-details {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--panel);
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .workbench-validation-details h3 {
+    margin: 0 0 5px;
+    color: var(--faint);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .workbench-validation-details ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 4px;
+  }
+
+  .workbench-validation-details li {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  .workbench-validation-code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #be123c;
+    font-weight: 600;
+  }
+
   .chip-ok {
     border-color: #bbf7d0;
     background: #f0fdf4;
@@ -624,6 +667,34 @@
     margin: 0;
     color: var(--text);
     font-size: 14px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .workbench-run-panel h2 {
+    margin-bottom: 12px;
+  }
+
+  .workbench-module-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+  }
+
+  .workbench-module-card {
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--panel-2);
+    padding: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .workbench-module-id {
+    min-width: 0;
     font-weight: 600;
     overflow-wrap: anywhere;
   }
