@@ -46,13 +46,13 @@ describe("workbench config model", () => {
       experimentId: "exp2",
       numCranes: 6,
       durationS: 300,
-      llmProvider: "openai_compatible",
+      llmProvider: "mock",
     });
 
     expect(patches["experiment.experiment_id"]).toBe("exp2");
     expect(patches["scenario.layout.num_cranes"]).toBe(6);
     expect(patches["experiment.sim.duration_s"]).toBe(300);
-    expect(patches["experiment.llm.provider"]).toBe("openai_compatible");
+    expect(patches["experiment.llm.provider"]).toBe("mock");
   });
 
   it("extracts craneModelId from the first concrete crane", () => {

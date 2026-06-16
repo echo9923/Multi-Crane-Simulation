@@ -522,6 +522,112 @@
     margin: 0;
   }
 
+  .workbench-config-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .workbench-config-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+  }
+
+  .workbench-form-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .workbench-form-grid label {
+    display: grid;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .workbench-form-grid input,
+  .workbench-form-grid select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .workbench-yaml-panel {
+    display: grid;
+    grid-template-rows: auto minmax(420px, 56vh);
+    gap: 8px;
+  }
+
+  .workbench-yaml-label {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .workbench-yaml-panel textarea {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    resize: vertical;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .workbench-notice {
+    border: 1px solid #fecaca;
+    background: #fff1f2;
+    color: #be123c;
+    border-radius: var(--radius-md);
+    padding: 9px 12px;
+    margin-bottom: 12px;
+  }
+
+  .chip-ok {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+    color: #15803d;
+  }
+
+  .chip-warn {
+    border-color: #fde68a;
+    background: #fffbeb;
+    color: #b45309;
+  }
+
+  .workbench-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0;
+  }
+
+  .workbench-summary-grid div {
+    min-width: 0;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+  }
+
+  .workbench-summary-grid dt {
+    margin: 0 0 4px;
+    color: var(--faint);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .workbench-summary-grid dd {
+    margin: 0;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
   .workbench-visualization {
     height: 100%;
     min-height: 0;
