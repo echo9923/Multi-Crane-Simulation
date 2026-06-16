@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "e2e": "playwright test",
     "desktop": "electron electron/main.mjs",
-    "desktop:dev": "VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron electron/main.mjs"
+    "desktop:dev": "electron electron/dev.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.2",

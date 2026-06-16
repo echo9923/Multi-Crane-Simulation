@@ -25,7 +25,11 @@ In another terminal, start Electron:
 cd frontend && npm run desktop:dev
 ```
 
-`desktop:dev` sets `VITE_DEV_SERVER_URL=http://127.0.0.1:5173` and launches `electron/main.mjs`. Electron resolves the project root, starts FastAPI with `.venv/bin/python -m uvicorn backend.app.main:app`, waits for `/health`, then loads the Vite dev server with desktop API and WebSocket runtime parameters.
+`desktop:dev` launches `electron/dev.mjs`, which sets `VITE_DEV_SERVER_URL=http://127.0.0.1:5173` in Node before importing the main Electron process. This keeps the command cross-platform for Unix and Windows npm shells.
+
+Electron resolves the project root, chooses an available backend port, starts FastAPI with `.venv/bin/python -m uvicorn backend.app.main:app`, passes the selected port through `MULTI_CRANE_BACKEND_PORT`, waits for `/health`, then loads the Vite dev server with desktop API and WebSocket runtime parameters. FastAPI enables narrowly scoped CORS for local renderer origins such as `http://127.0.0.1:5173` and `http://localhost:5173`; arbitrary remote origins are not allowed.
+
+For non-dev `npm run desktop`, build the frontend first with `npm run build`. Electron reads `frontend/dist/index.html`, injects the desktop runtime config into `frontend/dist/desktop-index.html`, rewrites Vite root-relative asset URLs to `file://` URLs under `frontend/dist/assets`, and loads that generated file. The build output must remain available while the desktop shell is running.
 
 ## Workbench Tabs And Module Mapping
 
@@ -71,7 +75,7 @@ cd frontend && npm run typecheck
 Focused frontend workbench tests:
 
 ```bash
-cd frontend && npm test -- tests/workbench/export-settings.test.tsx tests/workbench/run.test.tsx tests/workbench/configuration.test.tsx tests/workbench/shell.test.tsx tests/workbench/configModel.test.ts tests/state/workbench.test.ts
+cd frontend && npm test -- tests/workbench/export-settings.test.tsx tests/workbench/run.test.tsx tests/workbench/configuration.test.tsx tests/workbench/shell.test.tsx tests/workbench/configModel.test.ts tests/state/workbench.test.ts tests/electron/backend.test.ts
 ```
 
 Frontend build:

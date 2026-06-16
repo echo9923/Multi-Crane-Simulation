@@ -80,4 +80,25 @@ describe("electron backend helpers", () => {
     expect(injected.startsWith("<script>window.__MULTI_CRANE_DESKTOP__=")).toBe(true);
     expect(injected).toContain(html);
   });
+
+  it("rewrites Vite root-relative built assets to the desktop dist asset directory", () => {
+    const html = `<!doctype html>
+<html>
+  <head>
+    <script type="module" crossorigin src="/assets/index.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index.css">
+  </head>
+  <body><div id="root"></div></body>
+</html>`;
+
+    const injected = withRuntimeScript(html, {
+      port: 8765,
+      assetBaseUrl: "file:///repo/frontend/dist/",
+    });
+
+    expect(injected).toContain('src="file:///repo/frontend/dist/assets/index.js"');
+    expect(injected).toContain('href="file:///repo/frontend/dist/assets/index.css"');
+    expect(injected).not.toContain('src="/assets/index.js"');
+    expect(injected).not.toContain('href="/assets/index.css"');
+  });
 });

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api.errors import register_exception_handlers
 from backend.app.api.routes_desktop import router as desktop_router
@@ -19,7 +22,14 @@ def create_app() -> FastAPI:
         title="Multi Crane Simulation API",
         version="1.0.0",
     )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1):\d+$",
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["content-type"],
+    )
     register_exception_handlers(app)
+    app.state.backend_port = _backend_port_from_env()
     app.state.websocket_manager = WebSocketConnectionManager()
     app.state.runner_factory = _production_runner_factory(app)
     app.include_router(health_router)
@@ -28,6 +38,17 @@ def create_app() -> FastAPI:
     app.include_router(datasets_router)
     app.include_router(websocket_router)
     return app
+
+
+def _backend_port_from_env() -> int | None:
+    port = os.environ.get("MULTI_CRANE_BACKEND_PORT")
+    if port is None:
+        return None
+    try:
+        parsed = int(port)
+    except ValueError:
+        return None
+    return parsed if 1 <= parsed <= 65535 else None
 
 
 def _production_runner_factory(app: FastAPI):

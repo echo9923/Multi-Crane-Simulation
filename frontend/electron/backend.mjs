@@ -116,12 +116,22 @@ export function escapeJsonForInlineScript(value) {
   return JSON.stringify(value).replaceAll("<", "\\u003c");
 }
 
-export function withRuntimeScript(html, { port }) {
+export function withRuntimeScript(html, options) {
+  const { port } = options;
   const tag = runtimeScriptTag({ port });
-  if (html.includes("</head>")) {
-    return html.replace("</head>", `${tag}</head>`);
+  const htmlWithAssets = rewriteRootRelativeAssetUrls(html, options);
+  if (htmlWithAssets.includes("</head>")) {
+    return htmlWithAssets.replace("</head>", `${tag}</head>`);
   }
-  return `${tag}${html}`;
+  return `${tag}${htmlWithAssets}`;
+}
+
+export function rewriteRootRelativeAssetUrls(html, { assetBaseUrl } = {}) {
+  if (!assetBaseUrl) {
+    return html;
+  }
+  const base = assetBaseUrl.endsWith("/") ? assetBaseUrl : `${assetBaseUrl}/`;
+  return html.replaceAll(/((?:src|href)=["'])\/assets\//g, `$1${base}assets/`);
 }
 
 function canListen(port, host) {

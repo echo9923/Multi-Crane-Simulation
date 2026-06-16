@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   findAvailablePort,
   isPathInsideAllowedRoots,
@@ -125,10 +125,14 @@ async function loadDevServer(window, port) {
 }
 
 async function loadBuiltIndex(window, port) {
-  const indexPath = path.join(frontendRoot, "dist", "index.html");
+  const distPath = path.join(frontendRoot, "dist");
+  const indexPath = path.join(distPath, "index.html");
   const html = await fs.readFile(indexPath, "utf8");
-  const injectedHtml = withRuntimeScript(html, { port });
-  const desktopIndexPath = path.join(desktopUserDataPath ?? app.getPath("userData"), "desktop-index.html");
+  const injectedHtml = withRuntimeScript(html, {
+    port,
+    assetBaseUrl: pathToFileURL(distPath).toString(),
+  });
+  const desktopIndexPath = path.join(distPath, "desktop-index.html");
   await fs.writeFile(desktopIndexPath, injectedHtml, "utf8");
   await window.loadFile(desktopIndexPath);
 }

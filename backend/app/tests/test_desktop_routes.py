@@ -194,3 +194,59 @@ def test_environment_route_reports_project_root(tmp_path: Path) -> None:
     data = res.json()["data"]
     assert data["project_root"] == str(tmp_path.resolve())
     assert data["backend_port"] == 8765
+
+
+def test_vite_dev_origin_receives_cors_headers() -> None:
+    client = TestClient(create_app())
+
+    res = client.options(
+        "/desktop/environment",
+        headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+
+
+def test_localhost_vite_dev_origin_receives_cors_headers() -> None:
+    client = TestClient(create_app())
+
+    res = client.get(
+        "/desktop/environment",
+        headers={"Origin": "http://localhost:5173"},
+    )
+
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_non_local_origin_does_not_receive_cors_headers() -> None:
+    client = TestClient(create_app())
+
+    res = client.get(
+        "/desktop/environment",
+        headers={"Origin": "https://example.com"},
+    )
+
+    assert res.status_code == 200
+    assert "access-control-allow-origin" not in res.headers
+
+
+def test_environment_route_reports_backend_port_from_electron_env(monkeypatch) -> None:
+    monkeypatch.setenv("MULTI_CRANE_BACKEND_PORT", "8765")
+    client = TestClient(create_app())
+
+    res = client.get("/desktop/environment")
+
+    assert res.status_code == 200
+    assert res.json()["data"]["backend_port"] == 8765
+
+
+def test_invalid_backend_port_env_is_ignored(monkeypatch) -> None:
+    monkeypatch.setenv("MULTI_CRANE_BACKEND_PORT", "not-a-port")
+    app = create_app()
+
+    assert app.state.backend_port is None
