@@ -5,7 +5,50 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 
-export function resolvePythonPath(projectRoot, platform = process.platform) {
+export function resolveResourceRoot({ electronRoot, isPackaged = false, resourcesPath } = {}) {
+  if (isPackaged && typeof resourcesPath === "string" && resourcesPath.trim().length > 0) {
+    return resourcesPath;
+  }
+  if (typeof electronRoot !== "string" || electronRoot.trim().length === 0) {
+    throw new Error("electronRoot is required to resolve desktop resources.");
+  }
+  return path.resolve(electronRoot, "..", "..");
+}
+
+export function resolveProjectRoot({ electronRoot, isPackaged = false, resourcesPath } = {}) {
+  const resourceRoot = resolveResourceRoot({ electronRoot, isPackaged, resourcesPath });
+  if (isPackaged) {
+    return path.join(resourceRoot, "project");
+  }
+  return resourceRoot;
+}
+
+export function resolvePythonPath(options, legacyPlatform = process.platform) {
+  if (typeof options === "string") {
+    return venvPythonPath(options, legacyPlatform);
+  }
+
+  const {
+    env = process.env,
+    isPackaged = false,
+    platform = process.platform,
+    projectRoot,
+    resourceRoot,
+  } = options ?? {};
+  const explicitPythonPath = env.MULTI_CRANE_PYTHON?.trim();
+  if (explicitPythonPath) {
+    return explicitPythonPath;
+  }
+  if (isPackaged && typeof resourceRoot === "string" && resourceRoot.trim().length > 0) {
+    return venvPythonPath(resourceRoot, platform);
+  }
+  return venvPythonPath(projectRoot, platform);
+}
+
+function venvPythonPath(projectRoot, platform = process.platform) {
+  if (typeof projectRoot !== "string" || projectRoot.trim().length === 0) {
+    throw new Error("projectRoot is required to resolve the Python executable.");
+  }
   if (platform === "win32") {
     if (projectRoot.includes("\\")) {
       return path.win32.join(projectRoot, ".venv", "Scripts", "python.exe");
@@ -132,10 +175,10 @@ export function rendererIndexUrl(port) {
   return `http://127.0.0.1:${port}/desktop-index.html`;
 }
 
-export async function startRendererServer({ distRoot, port = 0 }) {
+export async function startRendererServer({ distRoot, port = 0, desktopIndexHtml } = {}) {
   const resolvedDistRoot = path.resolve(distRoot);
   const server = http.createServer((request, response) => {
-    serveRendererRequest({ request, response, distRoot: resolvedDistRoot });
+    serveRendererRequest({ request, response, distRoot: resolvedDistRoot, desktopIndexHtml });
   });
 
   await new Promise((resolve, reject) => {
@@ -158,7 +201,7 @@ export async function startRendererServer({ distRoot, port = 0 }) {
   };
 }
 
-async function serveRendererRequest({ request, response, distRoot }) {
+async function serveRendererRequest({ request, response, distRoot, desktopIndexHtml }) {
   const filePath = resolveRendererFilePath({
     requestUrl: request.url ?? "/",
     method: request.method,
@@ -167,6 +210,14 @@ async function serveRendererRequest({ request, response, distRoot }) {
   });
   if (!filePath) {
     respondNotFound(response);
+    return;
+  }
+  if (
+    typeof desktopIndexHtml === "string" &&
+    path.basename(filePath) === "desktop-index.html" &&
+    isPathInsideAllowedRoots(filePath, [distRoot])
+  ) {
+    respondHtml(response, desktopIndexHtml);
     return;
   }
 
@@ -282,6 +333,15 @@ function contentTypeForPath(filePath) {
 function respondNotFound(response) {
   response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
   response.end("Not found");
+}
+
+function respondHtml(response, html) {
+  response.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(html),
+    "Cache-Control": "no-store",
+  });
+  response.end(html);
 }
 
 function closeServer(server) {

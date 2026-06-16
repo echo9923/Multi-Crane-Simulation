@@ -14,6 +14,20 @@ export interface BackendLaunchOptions {
   port: number;
 }
 
+export interface DesktopRootResolutionOptions {
+  electronRoot: string;
+  isPackaged?: boolean;
+  resourcesPath?: string;
+}
+
+export interface PythonResolutionOptions {
+  projectRoot: string;
+  resourceRoot?: string;
+  isPackaged?: boolean;
+  platform?: NodeJS.Platform;
+  env?: Partial<Pick<NodeJS.ProcessEnv, "MULTI_CRANE_PYTHON">>;
+}
+
 export interface HealthWaitOptions {
   port: number;
   timeoutMs?: number;
@@ -32,6 +46,7 @@ export interface RuntimeScriptOptions {
 export interface RendererServerOptions {
   distRoot: string;
   port?: number;
+  desktopIndexHtml?: string;
 }
 
 export interface RendererServer {
@@ -40,6 +55,9 @@ export interface RendererServer {
   close: () => Promise<void>;
 }
 
+export function resolveResourceRoot(options: DesktopRootResolutionOptions): string;
+export function resolveProjectRoot(options: DesktopRootResolutionOptions): string;
+export function resolvePythonPath(options: PythonResolutionOptions): string;
 export function resolvePythonPath(projectRoot: string, platform?: NodeJS.Platform): string;
 export function isPathInsideAllowedRoots(targetPath: string, allowedRoots: string[]): boolean;
 export function makeBackendLaunch(options: BackendLaunchOptions): BackendLaunch;

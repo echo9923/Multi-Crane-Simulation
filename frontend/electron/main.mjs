@@ -6,7 +6,9 @@ import {
   findAvailablePort,
   isPathInsideAllowedRoots,
   rendererIndexUrl,
+  resolveProjectRoot,
   resolvePythonPath,
+  resolveResourceRoot,
   startBackend,
   startRendererServer,
   waitForHealth,
@@ -15,7 +17,13 @@ import {
 
 const electronRoot = path.dirname(fileURLToPath(import.meta.url));
 const frontendRoot = path.resolve(electronRoot, "..");
-const projectRoot = path.resolve(frontendRoot, "..");
+const desktopRoots = {
+  electronRoot,
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+};
+const resourceRoot = resolveResourceRoot(desktopRoots);
+const projectRoot = resolveProjectRoot(desktopRoots);
 const preloadPath = path.join(electronRoot, "preload.mjs");
 const backendLogs = [];
 
@@ -45,7 +53,12 @@ app.whenReady().then(async () => {
   try {
     desktopUserDataPath = app.getPath("userData");
     const port = await findAvailablePort();
-    const pythonPath = resolvePythonPath(projectRoot);
+    const pythonPath = resolvePythonPath({
+      projectRoot,
+      resourceRoot,
+      isPackaged: app.isPackaged,
+      env: process.env,
+    });
     backendPort = port;
 
     backendChild = startBackend({
@@ -136,11 +149,9 @@ async function loadBuiltIndex(window, port) {
   const indexPath = path.join(distPath, "index.html");
   const html = await fs.readFile(indexPath, "utf8");
   const injectedHtml = withRuntimeScript(html, { port });
-  const desktopIndexPath = path.join(distPath, "desktop-index.html");
-  await fs.writeFile(desktopIndexPath, injectedHtml, "utf8");
 
   if (!rendererServer) {
-    rendererServer = await startRendererServer({ distRoot: distPath });
+    rendererServer = await startRendererServer({ distRoot: distPath, desktopIndexHtml: injectedHtml });
   }
   await window.loadURL(rendererIndexUrl(rendererServer.port));
 }

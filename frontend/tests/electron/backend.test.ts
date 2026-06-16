@@ -6,12 +6,15 @@ import {
   escapeJsonForInlineScript,
   isPathInsideAllowedRoots,
   makeBackendLaunch,
+  resolveProjectRoot,
   resolvePythonPath,
+  resolveResourceRoot,
   runtimeScriptTag,
   rendererIndexUrl,
   startRendererServer,
   withRuntimeScript,
 } from "../../electron/backend.mjs";
+import packageJson from "../../package.json" with { type: "json" };
 
 describe("electron backend helpers", () => {
   const rendererServers: Array<{ close: () => Promise<void> }> = [];
@@ -31,11 +34,101 @@ describe("electron backend helpers", () => {
     return { tempRoot, distRoot };
   }
 
+  it("resolves the repo project root in development", () => {
+    expect(
+      resolveProjectRoot({
+        electronRoot: "/repo/frontend/electron",
+        isPackaged: false,
+        resourcesPath: "/Applications/Multi Crane.app/Contents/Resources",
+      }),
+    ).toBe("/repo");
+  });
+
+  it("resolves packaged project and resource roots from Electron Builder resources", () => {
+    const resourcesPath = "/Applications/Multi Crane.app/Contents/Resources";
+
+    expect(
+      resolveResourceRoot({
+        electronRoot: "/Applications/Multi Crane.app/Contents/Resources/app.asar/electron",
+        isPackaged: true,
+        resourcesPath,
+      }),
+    ).toBe(resourcesPath);
+    expect(
+      resolveProjectRoot({
+        electronRoot: "/Applications/Multi Crane.app/Contents/Resources/app.asar/electron",
+        isPackaged: true,
+        resourcesPath,
+      }),
+    ).toBe(path.join(resourcesPath, "project"));
+  });
+
   it("resolves platform-specific venv python path", () => {
-    expect(resolvePythonPath("/repo", "darwin")).toBe("/repo/.venv/bin/python");
-    expect(resolvePythonPath("/repo", "linux")).toBe("/repo/.venv/bin/python");
-    expect(resolvePythonPath("C:/repo", "win32")).toBe("C:/repo/.venv/Scripts/python.exe");
-    expect(resolvePythonPath("C:\\repo", "win32")).toBe("C:\\repo\\.venv\\Scripts\\python.exe");
+    expect(resolvePythonPath({ projectRoot: "/repo", platform: "darwin" })).toBe("/repo/.venv/bin/python");
+    expect(resolvePythonPath({ projectRoot: "/repo", platform: "linux" })).toBe("/repo/.venv/bin/python");
+    expect(resolvePythonPath({ projectRoot: "C:/repo", platform: "win32" })).toBe(
+      "C:/repo/.venv/Scripts/python.exe",
+    );
+    expect(resolvePythonPath({ projectRoot: "C:\\repo", platform: "win32" })).toBe(
+      "C:\\repo\\.venv\\Scripts\\python.exe",
+    );
+  });
+
+  it("prefers an explicit MULTI_CRANE_PYTHON path", () => {
+    expect(
+      resolvePythonPath({
+        projectRoot: "/repo",
+        resourceRoot: "/resources",
+        env: { MULTI_CRANE_PYTHON: "/opt/python/bin/python" },
+        platform: "darwin",
+      }),
+    ).toBe("/opt/python/bin/python");
+  });
+
+  it("supports packaged resource venv before falling back to the repo venv", () => {
+    expect(
+      resolvePythonPath({
+        projectRoot: "/repo",
+        resourceRoot: "/resources",
+        env: {},
+        isPackaged: true,
+        platform: "darwin",
+      }),
+    ).toBe("/resources/.venv/bin/python");
+
+    expect(
+      resolvePythonPath({
+        projectRoot: "/repo",
+        resourceRoot: "/resources",
+        env: {},
+        isPackaged: false,
+        platform: "darwin",
+      }),
+    ).toBe("/repo/.venv/bin/python");
+  });
+
+  it("configures Electron Builder scripts and resource inclusion rules", () => {
+    expect(packageJson.scripts["desktop:pack"]).toBe("npm run build && electron-builder --mac --dir");
+    expect(packageJson.scripts["desktop:dist"]).toBe("npm run build && electron-builder --mac");
+    expect(packageJson.main).toBe("electron/main.mjs");
+    expect(packageJson.devDependencies).toHaveProperty("electron-builder");
+
+    expect(packageJson.build.files).toEqual(
+      expect.arrayContaining(["dist/**", "electron/**", "package.json"]),
+    );
+    expect(packageJson.build.extraResources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ from: "../backend", to: "project/backend" }),
+        expect.objectContaining({ from: "../configs", to: "project/configs" }),
+        expect.objectContaining({ from: "../.venv", to: ".venv" }),
+      ]),
+    );
+
+    const serializedBuildConfig = JSON.stringify(packageJson.build);
+    expect(serializedBuildConfig).not.toContain(".env.local");
+    expect(serializedBuildConfig).not.toContain(".claude");
+    expect(serializedBuildConfig).not.toContain(".worktrees");
+    expect(serializedBuildConfig).not.toContain("runs");
   });
 
   it("allows paths inside configured safe roots only", () => {
