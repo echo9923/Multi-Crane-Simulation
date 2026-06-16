@@ -6,7 +6,7 @@ import { test, expect } from "@playwright/test";
 
 test.describe("offline replay smoke", () => {
   test("renders the scene and panels from the demo episode", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/visualization");
 
     // 3D canvas mounts.
     await expect(page.getByTestId("scene-canvas")).toBeVisible();
@@ -29,7 +29,7 @@ test.describe("offline replay smoke", () => {
   });
 
   test("playback advances the timeline", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/visualization");
     await expect(page.getByTestId("crane-status")).toContainText("C1");
     const before = await page.getByTestId("timeline").textContent();
     // Press play, let it run, then pause.
@@ -42,7 +42,7 @@ test.describe("offline replay smoke", () => {
   });
 
   test("selecting a crane highlights it and follow toggles", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/visualization");
     await expect(page.getByTestId("crane-list")).toContainText("C2");
     await page.getByTestId("crane-list").getByText("C2", { exact: true }).click();
     await expect(page.getByTestId("follow-toggle")).toBeVisible();

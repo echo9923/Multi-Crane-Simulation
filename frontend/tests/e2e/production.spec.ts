@@ -23,7 +23,7 @@ function productionState(): ProductionE2EState {
 test.describe("production runner frontend integration", () => {
   test("loads production frames.jsonl and manifest into replay panels", async ({ page }) => {
     const state = productionState();
-    await page.goto("/");
+    await page.goto("/visualization");
 
     await page.getByTestId("file-input").setInputFiles([
       state.frontend_replay_files.frames_jsonl,
