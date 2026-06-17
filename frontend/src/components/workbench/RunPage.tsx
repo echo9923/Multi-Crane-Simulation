@@ -1,4 +1,7 @@
-import { buildValidateRequest } from "@/api/config";
+import { useEffect } from "react";
+import { Link } from "react-router-dom";
+
+import { buildStartRequest, buildValidateRequest } from "@/api/config";
 import {
   getEpisodeState,
   pauseEpisode,
@@ -11,6 +14,17 @@ import { useStore } from "@/state/store";
 import { useWorkbenchStore } from "@/state/workbench";
 
 const modulePipeline = ["C", "D", "E", "F", "G", "H", "I", "L"];
+const terminalStatuses = new Set([
+  "completed",
+  "timeout",
+  "failed_collision",
+  "failed_invalid_state",
+  "llm_failed",
+  "failed_replay_mismatch",
+  "failed_recovery_blocked",
+  "failed_recovery_timeout",
+  "stopped_by_user",
+]);
 
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -36,12 +50,58 @@ function issueMessage(issue: unknown): string {
   return issueField(issue, "message") ?? issueField(issue, "text") ?? String(issue);
 }
 
+function moduleEvidence(
+  moduleId: string,
+  status: string | null,
+  frameIndex: number | null,
+  runDir: string | null,
+) {
+  if (moduleId === "C") {
+    return { chip: status ? "state" : "idle", detail: status ? `episode state: ${status}` : "no episode" };
+  }
+  if (moduleId === "D") {
+    return {
+      chip: frameIndex && frameIndex > 0 ? "observed" : "waiting",
+      detail: frameIndex && frameIndex > 0 ? `frame index ${frameIndex}` : "no frame",
+    };
+  }
+  if (moduleId === "E") {
+    return {
+      chip: status === "running" || status === "paused" ? "active" : status ?? "idle",
+      detail: "runtime scheduler",
+    };
+  }
+  if (moduleId === "F") {
+    return { chip: status === "running" ? "active" : "standby", detail: "LLM path" };
+  }
+  if (moduleId === "G") {
+    return {
+      chip: frameIndex && frameIndex > 0 ? "synced" : "waiting",
+      detail: "simulation frame",
+    };
+  }
+  if (moduleId === "H") {
+    return {
+      chip: status === "paused" ? "paused" : status === "running" ? "ready" : "standby",
+      detail: "control loop",
+    };
+  }
+  if (moduleId === "I") {
+    return {
+      chip: terminalStatuses.has(status ?? "") ? "final" : status === "running" ? "live" : "pending",
+      detail: "episode lifecycle",
+    };
+  }
+  return { chip: runDir ? "writing" : "waiting", detail: runDir ?? "no run_dir" };
+}
+
 export function RunPage() {
   const yamlText = useWorkbenchStore((s) => s.yamlText);
   const validation = useWorkbenchStore((s) => s.validation);
   const validationError = useWorkbenchStore((s) => s.validationError);
   const currentEpisode = useWorkbenchStore((s) => s.currentEpisode);
   const episodeState = useWorkbenchStore((s) => s.episodeState);
+  const currentEpisodeStale = useWorkbenchStore((s) => s.currentEpisodeStale);
   const busy = useWorkbenchStore((s) => s.busy);
   const setValidation = useWorkbenchStore((s) => s.setValidation);
   const setCurrentEpisode = useWorkbenchStore((s) => s.setCurrentEpisode);
@@ -51,7 +111,15 @@ export function RunPage() {
   const setLegacyMode = useStore((s) => s.setMode);
 
   const episodeId = currentEpisode?.episode_id ?? null;
-  const canUseEpisode = Boolean(episodeId);
+  const status = episodeState?.status ?? currentEpisode?.status ?? null;
+  const frameIndex = episodeState?.frame_index ?? null;
+  const runDir = episodeState?.run_dir ?? currentEpisode?.run_dir ?? null;
+  const isTerminal = terminalStatuses.has(status ?? "");
+  const canRefreshEpisode = Boolean(episodeId);
+  const canControlEpisode = Boolean(episodeId && !currentEpisodeStale);
+  const canPause = canControlEpisode && status === "running";
+  const canResume = canControlEpisode && status === "paused";
+  const canStop = canControlEpisode && !isTerminal;
   const validationErrors = validation?.errors ?? [];
   const validationWarnings = validation?.warnings ?? [];
   const hasValidationDetails =
@@ -63,6 +131,24 @@ export function RunPage() {
     const state = await getEpisodeState(id);
     setEpisodeState(state);
   };
+
+  useEffect(() => {
+    if (!episodeId || currentEpisodeStale || isTerminal) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const state = await getEpisodeState(episodeId);
+        if (!cancelled) setEpisodeState(state);
+      } catch {
+        // Explicit refresh actions surface errors; polling stays quiet.
+      }
+    };
+    const timer = window.setInterval(refresh, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [currentEpisodeStale, episodeId, isTerminal, setEpisodeState]);
 
   const runAction = async (action: () => Promise<void>) => {
     if (useWorkbenchStore.getState().busy) return;
@@ -85,7 +171,7 @@ export function RunPage() {
 
   const startRun = () =>
     runAction(async () => {
-      const req = buildValidateRequest(yamlText);
+      const req = buildStartRequest(yamlText);
       const started = await startEpisode({
         ...req,
         run_mode: "interactive_server",
@@ -140,16 +226,17 @@ export function RunPage() {
         <button type="button" onClick={startRun} disabled={busy || !yamlText}>
           启动
         </button>
-        <button type="button" onClick={pauseRun} disabled={busy || !canUseEpisode}>
+        <button type="button" onClick={pauseRun} disabled={busy || !canPause}>
           暂停
         </button>
-        <button type="button" onClick={resumeRun} disabled={busy || !canUseEpisode}>
+        <button type="button" onClick={resumeRun} disabled={busy || !canResume}>
           继续
         </button>
-        <button type="button" onClick={stopRun} disabled={busy || !canUseEpisode}>
+        <button type="button" onClick={stopRun} disabled={busy || !canStop}>
           停止
         </button>
-        <button type="button" onClick={refreshRun} disabled={busy || !canUseEpisode}>
+        {episodeId ? <Link to={`/live/${episodeId}`}>Live 3D</Link> : null}
+        <button type="button" onClick={refreshRun} disabled={busy || !canRefreshEpisode}>
           刷新状态
         </button>
         {validation?.valid ? <span className="chip chip-ok">校验通过</span> : null}
@@ -162,6 +249,12 @@ export function RunPage() {
       {validationError ? (
         <div className="workbench-notice" role="alert">
           {validationError}
+        </div>
+      ) : null}
+
+      {currentEpisodeStale ? (
+        <div className="workbench-notice" role="status">
+          Config changed after this Episode started. Start a new Episode before sending controls.
         </div>
       ) : null}
 
@@ -213,11 +306,11 @@ export function RunPage() {
           </div>
           <div>
             <dt>Status</dt>
-            <dd>{displayValue(episodeState?.status ?? currentEpisode?.status)}</dd>
+            <dd>{displayValue(status)}</dd>
           </div>
           <div>
             <dt>Frame</dt>
-            <dd>{episodeState ? `frame ${episodeState.frame_index}` : "-"}</dd>
+            <dd>{frameIndex !== null ? `frame ${frameIndex}` : "-"}</dd>
           </div>
           <div>
             <dt>Time</dt>
@@ -225,7 +318,7 @@ export function RunPage() {
           </div>
           <div>
             <dt>Run Dir</dt>
-            <dd>{displayValue(episodeState?.run_dir ?? currentEpisode?.run_dir)}</dd>
+            <dd>{displayValue(runDir)}</dd>
           </div>
           <div>
             <dt>Terminal Reason</dt>
@@ -237,12 +330,16 @@ export function RunPage() {
       <div className="workbench-panel workbench-run-panel">
         <h2>模块流水线</h2>
         <div className="workbench-module-grid">
-          {modulePipeline.map((moduleId) => (
-            <div className="workbench-module-card" key={moduleId}>
-              <span className="workbench-module-id">Module {moduleId}</span>
-              <span className="chip">待接入</span>
-            </div>
-          ))}
+          {modulePipeline.map((moduleId) => {
+            const evidence = moduleEvidence(moduleId, status, frameIndex, runDir);
+            return (
+              <div className="workbench-module-card" key={moduleId}>
+                <span className="workbench-module-id">Module {moduleId}</span>
+                <span className="chip">{evidence.chip}</span>
+                <span className="muted">{evidence.detail}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
     </section>

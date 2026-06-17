@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   downloadEpisode,
+  getEpisodeState,
   listDesktopRunFiles,
   listDesktopRuns,
 } from "@/api/rest";
@@ -37,6 +38,8 @@ const researchModules = [
 
 export function DataExportPage() {
   const currentEpisode = useWorkbenchStore((s) => s.currentEpisode);
+  const episodeState = useWorkbenchStore((s) => s.episodeState);
+  const setEpisodeState = useWorkbenchStore((s) => s.setEpisodeState);
   const [runs, setRuns] = useState<DesktopRunItem[]>([]);
   const [files, setFiles] = useState<DesktopRunFile[]>([]);
   const [status, setStatus] = useState<string>(
@@ -44,8 +47,25 @@ export function DataExportPage() {
   );
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
-  const episodeId = currentEpisode?.episode_id ?? null;
-  const runDir = currentEpisode?.run_dir ?? null;
+  const episodeId = episodeState?.episode_id ?? currentEpisode?.episode_id ?? null;
+  const currentStatus = episodeState?.status ?? currentEpisode?.status ?? null;
+  const runDir = episodeState?.run_dir ?? currentEpisode?.run_dir ?? null;
+
+  useEffect(() => {
+    const id = currentEpisode?.episode_id;
+    if (!id) return;
+    let cancelled = false;
+    getEpisodeState(id)
+      .then((state) => {
+        if (!cancelled) setEpisodeState(state);
+      })
+      .catch(() => {
+        // User-triggered refresh actions surface errors; entry refresh stays quiet.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentEpisode?.episode_id, setEpisodeState]);
 
   const runAction = async (name: string, action: () => Promise<void>) => {
     if (busyAction) return;
@@ -166,7 +186,7 @@ export function DataExportPage() {
           </div>
           <div>
             <dt>Status</dt>
-            <dd>{displayValue(currentEpisode?.status)}</dd>
+            <dd>{displayValue(currentStatus)}</dd>
           </div>
           <div>
             <dt>Run Dir</dt>

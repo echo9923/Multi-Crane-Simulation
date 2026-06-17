@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "@/App";
 import { useStore } from "@/state/store";
 import { useWorkbenchStore } from "@/state/workbench";
+import type { EpisodeStateResponse } from "@/types/api";
 
 function envelope(data: unknown) {
   return new Response(JSON.stringify({ code: 0, data, message: "ok" }), {
@@ -38,7 +39,21 @@ const minimalYaml = [
   "    provider: deepseek",
 ].join("\n");
 
-const runningState = {
+const yamlWithApiKey = [
+  "scenario:",
+  "  scenario_id: demo_scenario",
+  "  layout:",
+  "    num_cranes: 4",
+  "experiment:",
+  "  experiment_id: demo_experiment",
+  "  sim:",
+  "    duration_s: 7200",
+  "  llm:",
+  "    provider: deepseek",
+  "    api_key: sk-real-secret-123456",
+].join("\n");
+
+const runningState: EpisodeStateResponse = {
   episode_id: "E1",
   status: "running",
   frame_index: 3,
@@ -61,6 +76,7 @@ const startedEpisode = {
 function installFetchMock(
   options: { startResponse?: Promise<Response>; validateData?: unknown } = {},
 ) {
+  let currentState: EpisodeStateResponse = { ...runningState };
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/scenarios/validate")) {
@@ -74,12 +90,14 @@ function installFetchMock(
       );
     }
     if (url.includes("/episodes/start")) {
+      currentState = { ...runningState };
       return options.startResponse ?? ok(startedEpisode);
     }
     if (url.includes("/episodes/E1/state")) {
-      return ok(runningState);
+      return ok(currentState);
     }
     if (url.includes("/episodes/E1/pause")) {
+      currentState = { ...currentState, status: "paused" };
       return ok({
         episode_id: "E1",
         previous_status: "running",
@@ -89,6 +107,7 @@ function installFetchMock(
       });
     }
     if (url.includes("/episodes/E1/resume")) {
+      currentState = { ...currentState, status: "running" };
       return ok({
         episode_id: "E1",
         previous_status: "paused",
@@ -98,6 +117,7 @@ function installFetchMock(
       });
     }
     if (url.includes("/episodes/E1/stop")) {
+      currentState = { ...currentState, status: "stopped_by_user", terminal_reason: "stopped_by_user" };
       return ok({
         episode_id: "E1",
         previous_status: "running",
@@ -170,6 +190,33 @@ describe("workbench run controls", () => {
       sim: { duration_s: 7200 },
       llm: { provider: "deepseek" },
     });
+  });
+
+  it("scrubs secrets for validation but preserves local start secrets", async () => {
+    const fetchMock = vi.mocked(fetch);
+    useWorkbenchStore.getState().setYamlText(yamlWithApiKey);
+    renderRunPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /校验|鏍￠獙/ }));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/scenarios/validate"),
+        expect.anything(),
+      );
+    });
+    const validateBody = requestBodyFor(fetchMock, "/scenarios/validate");
+    expect(
+      ((validateBody.experiment as Record<string, unknown>).llm as Record<string, unknown>)
+        .api_key,
+    ).toBe("***");
+
+    fireEvent.click(screen.getByRole("button", { name: /启动|鍚姩/ }));
+    await screen.findByText("frame 3");
+    const startBody = requestBodyFor(fetchMock, "/episodes/start");
+    expect(
+      ((startBody.experiment as Record<string, unknown>).llm as Record<string, unknown>)
+        .api_key,
+    ).toBe("sk-real-secret-123456");
   });
 
   it("supports pause resume and stop controls with state refreshes", async () => {

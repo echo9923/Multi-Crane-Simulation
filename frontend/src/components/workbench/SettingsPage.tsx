@@ -303,7 +303,7 @@ export function SettingsPage() {
         {selectedSummary ? (
           <div className="workbench-module-grid">
             <div className="workbench-module-card">
-              <span className="workbench-module-id">{selectedSummary.provider}</span>
+              <span className="workbench-module-id">Provider {selectedSummary.provider}</span>
               <span className={selectedSummary.has_saved_key ? "chip chip-ok" : "chip"}>
                 {providerStatusText(selectedSummary)}
               </span>

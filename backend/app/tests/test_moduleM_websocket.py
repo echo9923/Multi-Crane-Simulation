@@ -16,15 +16,21 @@ class NoopRunner:
 
 
 class FakeWebSocket:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_send: bool = False, delay_s: float = 0.0) -> None:
         self.accepted = False
         self.sent: list[dict] = []
         self.closed = False
+        self.fail_send = fail_send
+        self.delay_s = delay_s
 
     async def accept(self) -> None:
         self.accepted = True
 
     async def send_json(self, payload: dict) -> None:
+        if self.delay_s:
+            await asyncio.sleep(self.delay_s)
+        if self.fail_send:
+            raise RuntimeError("send failed")
         self.sent.append(payload)
 
     async def close(self) -> None:
@@ -53,6 +59,7 @@ def _service_with_episode() -> EpisodeService:
         runner=NoopRunner(),
         run_dir=None,
         status=EpisodeStatus.RUNNING,
+        last_frame=_frame(),
     )
     return service
 
@@ -169,6 +176,43 @@ def test_manager_can_emit_heartbeat() -> None:
     assert websocket.sent == [
         {"type": "heartbeat", "data": {"server_time_s": 1.25}}
     ]
+
+
+def test_manager_disconnects_failing_clients_without_blocking_others() -> None:
+    from backend.app.api.websocket import WebSocketConnectionManager
+
+    manager = WebSocketConnectionManager(send_timeout_s=0.01)
+    good = FakeWebSocket()
+    failing = FakeWebSocket(fail_send=True)
+
+    async def scenario() -> None:
+        await manager.connect("E-ws", good)
+        await manager.connect("E-ws", failing)
+        await manager.broadcast_sim_frame("E-ws", _frame())
+
+    asyncio.run(scenario())
+
+    assert len(good.sent) == 1
+    assert good in manager.connections["E-ws"]
+    assert failing not in manager.connections["E-ws"]
+
+
+def test_manager_sends_last_frame_to_new_connection() -> None:
+    from backend.app.api.websocket import WebSocketConnectionManager
+
+    manager = WebSocketConnectionManager()
+    websocket = FakeWebSocket()
+    handle = _service_with_episode().get_handle("E-ws")
+
+    async def scenario() -> None:
+        await manager.connect("E-ws", websocket)
+        await manager.send_initial_frame("E-ws", websocket, handle)
+
+    asyncio.run(scenario())
+
+    assert websocket.sent[0]["type"] == "sim_frame"
+    assert websocket.sent[0]["data"]["episode_id"] == "E-ws"
+    assert websocket.sent[0]["data"]["frame"] == 1
 
 
 def test_websocket_module_does_not_define_duplicate_simframe_schema() -> None:

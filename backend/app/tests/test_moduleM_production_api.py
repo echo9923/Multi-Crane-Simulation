@@ -116,6 +116,7 @@ def test_start_episode_default_production_broadcasts_live_sim_frame(
         service = client.app.state.episode_service
         handle = service.get_handle(episode_id)
         service._advance_handle_once(handle)
+        await asyncio.sleep(0)
 
     asyncio.run(scenario())
 

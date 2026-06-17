@@ -18,6 +18,9 @@ export interface WorkbenchState {
   validationError: string | null;
   currentEpisode: EpisodeStartResponse | null;
   episodeState: EpisodeStateResponse | null;
+  configRevision: number;
+  currentEpisodeConfigRevision: number | null;
+  currentEpisodeStale: boolean;
   busy: boolean;
   setTemplates(items: DesktopTemplate[]): void;
   setTemplate(id: string | null): void;
@@ -42,6 +45,9 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   validationError: null,
   currentEpisode: null,
   episodeState: null,
+  configRevision: 0,
+  currentEpisodeConfigRevision: null,
+  currentEpisodeStale: false,
   busy: false,
   setTemplates: (items) => set({ templates: items }),
   setTemplate: (id) => set({ selectedTemplateId: id }),
@@ -52,12 +58,25 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     } catch {
       summary = null;
     }
-    set({ yamlText: text, summary });
+    set((state) => {
+      const configRevision = state.configRevision + 1;
+      return {
+        yamlText: text,
+        summary,
+        configRevision,
+        currentEpisodeStale: state.currentEpisode !== null,
+      };
+    });
   },
   setFormPatch: (patch) => set((state) => ({ form: { ...state.form, ...patch } })),
   setValidation: (result, error = null) =>
     set({ validation: result, validationError: error }),
-  setCurrentEpisode: (result) => set({ currentEpisode: result }),
+  setCurrentEpisode: (result) =>
+    set((state) => ({
+      currentEpisode: result,
+      currentEpisodeConfigRevision: result ? state.configRevision : null,
+      currentEpisodeStale: false,
+    })),
   setEpisodeState: (result) => set({ episodeState: result }),
   setBusy: (busy) => set({ busy }),
   resetWorkbench: () =>
@@ -71,6 +90,9 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
       validationError: null,
       currentEpisode: null,
       episodeState: null,
+      configRevision: 0,
+      currentEpisodeConfigRevision: null,
+      currentEpisodeStale: false,
       busy: false,
     }),
 }));

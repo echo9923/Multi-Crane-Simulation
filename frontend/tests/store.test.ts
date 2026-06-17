@@ -55,6 +55,19 @@ describe("store loadEpisode / setFrame", () => {
     const s = useStore.getState();
     expect(s.latestFrame).toBe(f);
     expect(s.episodeId).toBe(f.episode_id);
+    expect(s.frames).toEqual([f]);
+    expect(s.currentIndex).toBe(0);
+  });
+
+  it("pushRealtimeFrame ignores duplicate or older frames in the live buffer", () => {
+    const first = frames[2];
+    const older = frames[1];
+    useStore.getState().pushRealtimeFrame(first);
+    useStore.getState().pushRealtimeFrame(older);
+    const s = useStore.getState();
+    expect(s.frames).toEqual([first]);
+    expect(s.latestFrame).toBe(older);
+    expect(s.currentIndex).toBe(0);
   });
 });
 

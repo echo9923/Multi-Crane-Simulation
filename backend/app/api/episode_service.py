@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 import threading
 import time
+import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -44,6 +45,17 @@ class EpisodeHandle:
     worker_thread: Optional[threading.Thread] = None
 
 
+@dataclass(frozen=True)
+class EpisodeStateSnapshot:
+    episode_id: str
+    status: str
+    frame_index: int
+    time_s: float
+    run_dir: Optional[Path]
+    last_frame: Optional[SimFrame]
+    terminal_reason: Optional[str]
+
+
 class EpisodeService:
     def __init__(
         self,
@@ -54,16 +66,18 @@ class EpisodeService:
         self.runner_factory = runner_factory
         self.project_root = project_root
         self.handles: dict[str, EpisodeHandle] = {}
+        self._handles_lock = threading.RLock()
 
     def start_episode(self, request: EpisodeStartRequest) -> EpisodeStartResponse:
         episode_id = request.episode_id or _new_episode_id()
-        if episode_id in self.handles:
-            raise ApiException(
-                status_code=409,
-                code=M_E_INVALID_EPISODE_STATE,
-                message="episode already exists",
-                details={"episode_id": episode_id},
-            )
+        with self._handles_lock:
+            if episode_id in self.handles:
+                raise ApiException(
+                    status_code=409,
+                    code=M_E_INVALID_EPISODE_STATE,
+                    message="episode already exists",
+                    details={"episode_id": episode_id},
+                )
 
         resolved_config = self._resolve_start_config(request)
         try:
@@ -90,11 +104,19 @@ class EpisodeService:
             status=_runner_status(runner),
         )
 
-        if request.autostart:
-            self._advance_handle_once(handle)
-            handle.run_dir = _runner_run_dir(runner) or handle.run_dir
+        with self._handles_lock:
+            if episode_id in self.handles:
+                raise ApiException(
+                    status_code=409,
+                    code=M_E_INVALID_EPISODE_STATE,
+                    message="episode already exists",
+                    details={"episode_id": episode_id},
+                )
+            self.handles[episode_id] = handle
 
-        self.handles[episode_id] = handle
+        if request.autostart and not _needs_background_worker(request, handle):
+            self._advance_handle_once(handle)
+
         if request.autostart and _needs_background_worker(request, handle):
             self._start_background_worker(handle)
         return EpisodeStartResponse(
@@ -112,10 +134,11 @@ class EpisodeService:
 
     def pause_episode(self, episode_id: str) -> EpisodeControlResponse:
         handle = self.get_handle(episode_id)
-        previous = _display_status(handle)
-        if handle.status is not EpisodeStatus.RUNNING or handle.paused:
-            raise _invalid_state(episode_id, "episode cannot be paused", previous)
-        handle.paused = True
+        with handle.advance_lock:
+            previous = _display_status(handle)
+            if handle.status is not EpisodeStatus.RUNNING or handle.paused:
+                raise _invalid_state(episode_id, "episode cannot be paused", previous)
+            handle.paused = True
         return EpisodeControlResponse(
             episode_id=episode_id,
             previous_status=previous,
@@ -125,10 +148,11 @@ class EpisodeService:
 
     def resume_episode(self, episode_id: str) -> EpisodeControlResponse:
         handle = self.get_handle(episode_id)
-        previous = _display_status(handle)
-        if handle.status is not EpisodeStatus.RUNNING or not handle.paused:
-            raise _invalid_state(episode_id, "episode cannot be resumed", previous)
-        handle.paused = False
+        with handle.advance_lock:
+            previous = _display_status(handle)
+            if handle.status is not EpisodeStatus.RUNNING or not handle.paused:
+                raise _invalid_state(episode_id, "episode cannot be resumed", previous)
+            handle.paused = False
         return EpisodeControlResponse(
             episode_id=episode_id,
             previous_status=previous,
@@ -138,13 +162,22 @@ class EpisodeService:
 
     def stop_episode(self, episode_id: str) -> EpisodeControlResponse:
         handle = self.get_handle(episode_id)
-        previous = _display_status(handle)
-        if handle.status is not EpisodeStatus.RUNNING:
-            raise _invalid_state(episode_id, "episode cannot be stopped", previous)
+        with handle.advance_lock:
+            previous = _display_status(handle)
+            if _is_terminal_status(handle.status):
+                return EpisodeControlResponse(
+                    episode_id=episode_id,
+                    previous_status=previous,
+                    status=handle.status.value,
+                    accepted=False,
+                    reason="already_terminal",
+                )
+            if handle.status is not EpisodeStatus.RUNNING:
+                raise _invalid_state(episode_id, "episode cannot be stopped", previous)
+            handle.paused = False
         handle.runner.stop("api stop")
         self._advance_handle_once(handle)
         handle.worker_stop.set()
-        handle.run_dir = _runner_run_dir(handle.runner) or handle.run_dir
         return EpisodeControlResponse(
             episode_id=episode_id,
             previous_status=previous,
@@ -154,15 +187,36 @@ class EpisodeService:
         )
 
     def get_handle(self, episode_id: str) -> EpisodeHandle:
-        try:
-            return self.handles[episode_id]
-        except KeyError as exc:
-            raise ApiException(
-                status_code=404,
-                code=M_E_EPISODE_NOT_FOUND,
-                message="episode not found",
-                details={"episode_id": episode_id},
-            ) from exc
+        with self._handles_lock:
+            try:
+                return self.handles[episode_id]
+            except KeyError as exc:
+                raise ApiException(
+                    status_code=404,
+                    code=M_E_EPISODE_NOT_FOUND,
+                    message="episode not found",
+                    details={"episode_id": episode_id},
+                ) from exc
+
+    def snapshot_state(self, episode_id: str) -> EpisodeStateSnapshot:
+        handle = self.get_handle(episode_id)
+        with handle.advance_lock:
+            last_frame = _runner_last_frame(handle.runner) or handle.last_frame
+            run_dir = _runner_run_dir(handle.runner) or handle.run_dir
+            frame_index = handle.frame_index
+            time_s = handle.time_s
+            if last_frame is not None and frame_index == 0 and time_s == 0.0:
+                frame_index = last_frame.frame
+                time_s = last_frame.time_s
+            return EpisodeStateSnapshot(
+                episode_id=episode_id,
+                status=_display_status(handle),
+                frame_index=frame_index,
+                time_s=time_s,
+                run_dir=run_dir,
+                last_frame=last_frame,
+                terminal_reason=handle.terminal_reason,
+            )
 
     def _advance_handle_once(self, handle: EpisodeHandle) -> None:
         with handle.advance_lock:
@@ -170,9 +224,15 @@ class EpisodeService:
             handle.status = EpisodeStatus(result.status)
             handle.frame_index = result.frame_index
             handle.time_s = result.time_s
+            handle.run_dir = _runner_run_dir(handle.runner) or handle.run_dir
+            handle.last_frame = _runner_last_frame(handle.runner) or handle.last_frame
             if handle.status is not EpisodeStatus.RUNNING:
                 handle.paused = False
-                handle.terminal_reason = getattr(result, "reason", None) or handle.status.value
+                handle.terminal_reason = (
+                    getattr(result, "reason", None)
+                    or _runner_terminal_reason(handle.runner)
+                    or handle.status.value
+                )
 
     def _start_background_worker(self, handle: EpisodeHandle) -> None:
         if handle.worker_thread is not None and handle.worker_thread.is_alive():
@@ -188,26 +248,32 @@ class EpisodeService:
 
     def _background_worker(self, handle: EpisodeHandle) -> None:
         while not handle.worker_stop.is_set():
-            if handle.status is not EpisodeStatus.RUNNING:
-                break
-            if handle.paused:
+            with handle.advance_lock:
+                if handle.status is not EpisodeStatus.RUNNING:
+                    break
+                paused = handle.paused
+            if paused:
                 handle.worker_stop.wait(0.1)
                 continue
 
             started_at = time.monotonic()
             try:
                 self._advance_handle_once(handle)
-                handle.run_dir = _runner_run_dir(handle.runner) or handle.run_dir
             except Exception as exc:
-                handle.status = EpisodeStatus.FAILED_INVALID_STATE
-                handle.paused = False
-                handle.terminal_reason = str(exc)
+                with handle.advance_lock:
+                    handle.status = EpisodeStatus.FAILED_INVALID_STATE
+                    handle.paused = False
+                    handle.terminal_reason = str(exc)
+                    handle.run_dir = _runner_run_dir(handle.runner) or handle.run_dir
+                    handle.last_frame = _runner_last_frame(handle.runner) or handle.last_frame
                 break
 
-            if handle.status is not EpisodeStatus.RUNNING:
-                break
+            with handle.advance_lock:
+                if handle.status is not EpisodeStatus.RUNNING:
+                    break
+                delay_base_s = _runner_frame_delay_s(handle.runner)
             elapsed_s = time.monotonic() - started_at
-            delay_s = max(0.0, _runner_frame_delay_s(handle.runner) - elapsed_s)
+            delay_s = max(0.0, delay_base_s - elapsed_s)
             handle.worker_stop.wait(delay_s)
 
     def _resolve_start_config(self, request: EpisodeStartRequest) -> Any:
@@ -234,13 +300,17 @@ class EpisodeService:
             )
 
         try:
+            overrides = _request_overrides_with_run_mode(request)
             if request.config_path is not None:
                 scenario, experiment, dataset = load_demo_config(
                     request.config_path,
-                    overrides=request.overrides,
+                    overrides=overrides,
                 )
             else:
-                scenario, experiment, dataset = _load_inline_start_config(request)
+                scenario, experiment, dataset = _load_inline_start_config(
+                    request,
+                    overrides=overrides,
+                )
             if experiment is None:
                 raise ValueError("episode start config must include experiment section")
             return resolve_config(
@@ -276,6 +346,8 @@ def _has_inline_start_config(request: EpisodeStartRequest) -> bool:
 
 def _load_inline_start_config(
     request: EpisodeStartRequest,
+    *,
+    overrides: dict[str, Any],
 ) -> tuple[ScenarioConfig, ExperimentConfig, Optional[DatasetConfig]]:
     if request.scenario is None or request.experiment is None:
         missing = "scenario" if request.scenario is None else "experiment"
@@ -286,7 +358,6 @@ def _load_inline_start_config(
             details={"field_path": missing},
         )
 
-    overrides = request.overrides or {}
     forbidden_secret_values = _inline_secret_values(request.experiment)
     scenario = _validate_inline_section(
         request.scenario,
@@ -355,6 +426,10 @@ def _display_status(handle: EpisodeHandle) -> str:
     return handle.status.value
 
 
+def _is_terminal_status(status: EpisodeStatus) -> bool:
+    return status is not EpisodeStatus.RUNNING
+
+
 def _invalid_state(episode_id: str, message: str, status: str) -> ApiException:
     return ApiException(
         status_code=409,
@@ -401,6 +476,45 @@ def _runner_run_dir(runner: Any) -> Optional[Path]:
     recorder = getattr(runner, "recorder", None)
     run_dir = getattr(recorder, "run_dir", None)
     return Path(run_dir) if run_dir is not None else None
+
+
+def _runner_last_frame(runner: Any) -> Optional[SimFrame]:
+    for candidate in (
+        runner,
+        getattr(runner, "recorder", None),
+        getattr(getattr(runner, "recorder", None), "recorder", None),
+    ):
+        frame = getattr(candidate, "last_frame", None)
+        if frame is not None:
+            return frame
+    return None
+
+
+def _runner_terminal_reason(runner: Any) -> Optional[str]:
+    for candidate in (runner, getattr(runner, "runner", None)):
+        value = getattr(candidate, "terminal_reason", None)
+        if isinstance(value, str) and value:
+            return value
+        terminal = getattr(candidate, "terminal_candidate", None)
+        reason = getattr(terminal, "reason", None)
+        if isinstance(reason, str) and reason:
+            return reason
+    return None
+
+
+def _request_overrides_with_run_mode(request: EpisodeStartRequest) -> dict[str, Any]:
+    overrides = copy.deepcopy(request.overrides or {})
+    if request.run_mode is not None:
+        experiment = overrides.setdefault("experiment", {})
+        if not isinstance(experiment, dict):
+            experiment = {}
+            overrides["experiment"] = experiment
+        runtime = experiment.setdefault("runtime", {})
+        if not isinstance(runtime, dict):
+            runtime = {}
+            experiment["runtime"] = runtime
+        runtime["mode"] = request.run_mode
+    return overrides
 
 
 def default_runner_factory(*, episode_id: str, resolved_config: Any) -> Any:

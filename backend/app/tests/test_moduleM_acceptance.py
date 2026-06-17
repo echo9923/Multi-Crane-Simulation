@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.api.episode_service import EpisodeHandle, EpisodeService
@@ -15,6 +16,11 @@ from backend.app.main import create_app
 from backend.app.schemas.recorder import EpisodeSummary, SimFrame, SimFrameWeather
 from backend.app.schemas.scheduler import EpisodeStatus, FrameStepResult
 from backend.app.tests.test_config_schema import FIXTURE_DIR
+
+
+@pytest.fixture(autouse=True)
+def _deepseek_env_for_demo_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-secret-123456")
 
 
 @dataclass

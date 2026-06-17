@@ -212,6 +212,41 @@ def test_runs_and_files_routes(tmp_path: Path) -> None:
     assert files.json()["data"]["files"][0]["relative_path"] == "metadata/episode_summary.json"
 
 
+def test_runs_route_lists_metadata_only_running_runs(tmp_path: Path) -> None:
+    run = tmp_path / "runs" / "episode-live"
+    (run / "metadata").mkdir(parents=True)
+    (run / "metadata" / "episode_metadata.json").write_text(
+        json.dumps(
+            {
+                "episode_id": "episode-live",
+                "episode_status": "running",
+                "created_at": "2026-06-17T10:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run / "visual").mkdir()
+    (run / "visual" / "frames.jsonl").write_text("{}", encoding="utf-8")
+    client = _client(tmp_path)
+
+    runs = client.get("/desktop/runs")
+    files = client.get("/desktop/runs/episode-live/files")
+
+    assert runs.status_code == 200
+    items = runs.json()["data"]["items"]
+    assert items == [
+        {
+            "episode_id": "episode-live",
+            "path": str(run),
+            "status": "running",
+            "created_at": "2026-06-17T10:00:00Z",
+            "summary_available": False,
+        }
+    ]
+    assert files.status_code == 200
+    assert files.json()["data"]["files"][0]["relative_path"] == "metadata/episode_metadata.json"
+
+
 def test_run_files_route_rejects_arbitrary_outside_directories(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside-run"
     (outside / "metadata").mkdir(parents=True)

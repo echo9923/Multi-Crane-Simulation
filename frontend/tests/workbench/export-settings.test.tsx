@@ -71,6 +71,64 @@ function installFetchMock() {
         backend_port: 8765,
       });
     }
+    if (url.includes("/desktop/llm/providers")) {
+      return ok({
+        items: [
+          {
+            provider: "deepseek",
+            display_name: "deepseek",
+            default_base_url: "https://api.deepseek.com",
+            default_model: "deepseek-chat",
+            api_key_env: "DEEPSEEK_API_KEY",
+            has_saved_key: false,
+            key_masked: null,
+            updated_at: null,
+          },
+          {
+            provider: "minimax",
+            display_name: "minimax",
+            default_base_url: "https://api.minimax.chat",
+            default_model: "abab6.5s-chat",
+            api_key_env: "MINIMAX_API_KEY",
+            has_saved_key: false,
+            key_masked: null,
+            updated_at: null,
+          },
+          {
+            provider: "mock",
+            display_name: "mock",
+            default_base_url: null,
+            default_model: "mock",
+            api_key_env: null,
+            has_saved_key: false,
+            key_masked: null,
+            updated_at: null,
+          },
+          {
+            provider: "replay",
+            display_name: "replay",
+            default_base_url: null,
+            default_model: "replay",
+            api_key_env: null,
+            has_saved_key: false,
+            key_masked: null,
+            updated_at: null,
+          },
+        ],
+      });
+    }
+    if (url.includes("/episodes/E1/state")) {
+      return ok({
+        episode_id: "E1",
+        status: "running",
+        frame_index: 7,
+        time_s: 1.4,
+        run_dir: "runs/E1-live",
+        last_frame: null,
+        terminal_reason: null,
+        metrics: {},
+      });
+    }
     if (url.includes("/episodes/E1/download")) {
       return zipResponse();
     }
@@ -88,6 +146,19 @@ function seedCurrentEpisode(runDir: string | null = "runs/E1") {
     status: "completed",
     resolved_config_hash: "h",
     websocket_url: null,
+  });
+}
+
+function seedEpisodeState(status = "running", runDir: string | null = "runs/E1-live") {
+  useWorkbenchStore.getState().setEpisodeState({
+    episode_id: "E1",
+    status,
+    frame_index: 7,
+    time_s: 1.4,
+    run_dir: runDir,
+    last_frame: null,
+    terminal_reason: null,
+    metrics: {},
   });
 }
 
@@ -155,6 +226,22 @@ describe("workbench data export and settings pages", () => {
       expect.stringContaining("/desktop/runs/E1/files"),
       expect.anything(),
     );
+  });
+
+  it("shows latest episode state before stale start response status", async () => {
+    seedEpisodeState("running", "runs/E1-live");
+
+    renderWorkbench("/data");
+
+    expect(screen.getByText("running")).toBeTruthy();
+    expect(screen.getByText("runs/E1-live")).toBeTruthy();
+    expect(screen.queryByText("completed")).toBeNull();
+    await waitFor(() => {
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        expect.stringContaining("/episodes/E1/state"),
+        expect.anything(),
+      );
+    });
   });
 
   it("refreshes the desktop run list", async () => {

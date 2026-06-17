@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,34 @@ class FakeRunnerFactory:
         if self.fail_next:
             raise RuntimeError("runner boom")
         runner = FakeRunner()
+        self.created.append(
+            {
+                "episode_id": episode_id,
+                "resolved_config": resolved_config,
+                "resolved_config_hash": resolved_config.resolved_config_hash,
+                "runner": runner,
+            }
+        )
+        return runner
+
+
+class BlockingFirstFrameRunner(FakeRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered_first_frame = threading.Event()
+        self.release_first_frame = threading.Event()
+
+    def run_one_frame(self) -> FrameStepResult:
+        if self.run_one_frame_calls == 0:
+            self.entered_first_frame.set()
+            if not self.release_first_frame.wait(2.0):
+                raise RuntimeError("first frame was not released")
+        return super().run_one_frame()
+
+
+class BlockingRunnerFactory(FakeRunnerFactory):
+    def __call__(self, *, episode_id: str, resolved_config: Any) -> BlockingFirstFrameRunner:
+        runner = BlockingFirstFrameRunner()
         self.created.append(
             {
                 "episode_id": episode_id,
@@ -341,8 +370,8 @@ def test_autostart_true_advances_runner_once() -> None:
     assert handle.time_s == 0.5
 
 
-def test_interactive_server_autostart_advances_in_background() -> None:
-    factory = FakeRunnerFactory()
+def test_interactive_server_autostart_returns_before_first_frame_then_advances() -> None:
+    factory = BlockingRunnerFactory()
     client = _client_with_factory(factory)
 
     response = client.post(
@@ -352,6 +381,9 @@ def test_interactive_server_autostart_advances_in_background() -> None:
 
     assert response.status_code == 200
     runner = factory.created[0]["runner"]
+    assert runner.run_one_frame_calls == 0
+    assert runner.entered_first_frame.wait(1.0)
+    runner.release_first_frame.set()
     deadline = time.monotonic() + 1.5
     while time.monotonic() < deadline and runner.run_one_frame_calls < 2:
         time.sleep(0.02)
@@ -400,6 +432,9 @@ def test_pause_resume_stop_lifecycle_flow() -> None:
     assert pause.json()["data"]["accepted"] is True
     assert pause.json()["data"]["status"] == "paused"
     assert client.app.state.episode_service.get_handle("E-life").paused is True
+    state = client.get("/episodes/E-life/state")
+    assert state.status_code == 200
+    assert state.json()["data"]["status"] == "paused"
 
     resume = client.post("/episodes/E-life/resume")
     assert resume.status_code == 200
@@ -436,6 +471,21 @@ def test_terminal_episode_rejects_pause_and_resume() -> None:
     assert pause.json()["code"] == "M_E_INVALID_EPISODE_STATE"
     assert resume.status_code == 409
     assert resume.json()["code"] == "M_E_INVALID_EPISODE_STATE"
+
+
+def test_terminal_episode_stop_is_idempotent_noop() -> None:
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory)
+    client.post("/episodes/start", json=_start_payload())
+    handle = client.app.state.episode_service.get_handle("E-life")
+    handle.status = EpisodeStatus.COMPLETED
+
+    stop = client.post("/episodes/E-life/stop")
+
+    assert stop.status_code == 200
+    assert stop.json()["data"]["accepted"] is False
+    assert stop.json()["data"]["status"] == "completed"
+    assert stop.json()["data"]["reason"] == "already_terminal"
 
 
 def test_duplicate_episode_id_is_conflict_and_does_not_overwrite_handle() -> None:

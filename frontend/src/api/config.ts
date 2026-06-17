@@ -4,7 +4,7 @@
 // only feeds POST /scenarios/validate and never starts a run.
 
 import yaml from "js-yaml";
-import type { ScenarioValidateRequest } from "@/types/api";
+import type { EpisodeStartRequest, ScenarioValidateRequest } from "@/types/api";
 
 const SECRET_KEY = /(^|[_-])(api[-_]?key|apikey|token|secret|authorization|password)([_-]|$)/i;
 const SECRET_ALLOWLIST = new Set(["api_key_env"]);
@@ -58,4 +58,24 @@ export function toValidateRequest(parsed: unknown): ScenarioValidateRequest {
 
 export function buildValidateRequest(text: string): ScenarioValidateRequest {
   return toValidateRequest(scrubSecrets(parseConfigText(text)));
+}
+
+export function toStartRequest(parsed: unknown): EpisodeStartRequest {
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const rec = parsed as Record<string, unknown>;
+    if (rec.scenario !== undefined || rec.experiment !== undefined || rec.dataset !== undefined) {
+      return {
+        scenario: rec.scenario != null ? (rec.scenario as Record<string, unknown>) : null,
+        experiment: rec.experiment != null ? (rec.experiment as Record<string, unknown>) : null,
+        dataset: rec.dataset != null ? (rec.dataset as Record<string, unknown>) : null,
+        overrides: (rec.overrides ?? {}) as Record<string, unknown>,
+      };
+    }
+    return { scenario: rec };
+  }
+  throw new Error("config root must be an object");
+}
+
+export function buildStartRequest(text: string): EpisodeStartRequest {
+  return toStartRequest(parseConfigText(text));
 }

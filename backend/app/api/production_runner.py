@@ -535,6 +535,7 @@ class ProductionRecorderAdapter:
         self.risk_config = risk_config
         self.crane_configs = [copy.deepcopy(config) for config in crane_configs]
         self._finalized = False
+        self.last_frame: Any = None
 
     @property
     def layout(self) -> Any:
@@ -557,11 +558,13 @@ class ProductionRecorderAdapter:
                 time_s=float(kwargs.get("time_s", 0.0)),
             )
         frame = self.recorder.record_initial_frame(**kwargs)
+        self.last_frame = frame
         self._flush_open_writers()
         return frame
 
     def record_step(self, **kwargs: Any) -> Any:
         frame = self.recorder.record_step(**kwargs)
+        self.last_frame = frame
         self._flush_open_writers()
         return frame
 

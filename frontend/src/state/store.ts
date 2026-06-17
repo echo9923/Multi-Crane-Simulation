@@ -91,6 +91,7 @@ const initialUI: UIState = {
   showRisk: true,
   showZones: true,
 };
+const LIVE_FRAME_LIMIT = 5000;
 
 // Binary search for the frame whose time_s is closest to (<=) target.
 export function seekIndexByTime(frames: SimFrame[], timeS: number): number {
@@ -153,7 +154,23 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   pushRealtimeFrame: (frame) =>
-    set({ latestFrame: frame, episodeId: frame.episode_id }),
+    set((state) => {
+      const last = state.frames[state.frames.length - 1];
+      if (last && frame.frame <= last.frame) {
+        return { latestFrame: frame, episodeId: frame.episode_id };
+      }
+      const appended = [...state.frames, frame];
+      const frames =
+        appended.length > LIVE_FRAME_LIMIT
+          ? appended.slice(appended.length - LIVE_FRAME_LIMIT)
+          : appended;
+      return {
+        frames,
+        latestFrame: frame,
+        currentIndex: frames.length - 1,
+        episodeId: frame.episode_id,
+      };
+    }),
 
   setPlaying: (playing) => set((s) => ({ playback: { ...s.playback, playing } })),
   setSpeed: (speed) => set((s) => ({ playback: { ...s.playback, speed } })),

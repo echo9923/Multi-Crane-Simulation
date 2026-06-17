@@ -54,21 +54,21 @@ def stop_episode(request: Request, episode_id: str) -> ApiResponse:
 
 @router.get("/episodes/{episode_id}/state", response_model=ApiResponse)
 def get_episode_state(request: Request, episode_id: str) -> ApiResponse:
-    handle = _episode_service(request).get_handle(episode_id)
-    last_frame = handle.last_frame or _read_last_frame(handle.run_dir)
-    frame_index = handle.frame_index
-    time_s = handle.time_s
+    snapshot = _episode_service(request).snapshot_state(episode_id)
+    last_frame = snapshot.last_frame or _read_last_frame(snapshot.run_dir)
+    frame_index = snapshot.frame_index
+    time_s = snapshot.time_s
     if last_frame is not None and frame_index == 0 and time_s == 0.0:
         frame_index = last_frame.frame
         time_s = last_frame.time_s
     result = EpisodeStateResponse(
         episode_id=episode_id,
-        status=handle.status.value,
+        status=snapshot.status,
         frame_index=frame_index,
         time_s=time_s,
-        run_dir=str(handle.run_dir) if handle.run_dir is not None else None,
+        run_dir=str(snapshot.run_dir) if snapshot.run_dir is not None else None,
         last_frame=last_frame,
-        terminal_reason=handle.terminal_reason,
+        terminal_reason=snapshot.terminal_reason,
     )
     return ApiResponse(data=result.model_dump(mode="json"))
 

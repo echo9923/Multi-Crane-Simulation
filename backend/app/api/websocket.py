@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -8,7 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from backend.app.schemas.recorder import SimFrame
 from backend.app.sim.recorder import build_sim_frame
 
-from .episode_service import EpisodeService, default_runner_factory
+from .episode_service import EpisodeHandle, EpisodeService, default_runner_factory
 from .schemas import (
     ApiError,
     API_SCHEMA_VERSION,
@@ -20,8 +21,9 @@ router = APIRouter()
 
 
 class WebSocketConnectionManager:
-    def __init__(self) -> None:
+    def __init__(self, *, send_timeout_s: float = 0.5) -> None:
         self.connections: dict[str, set[Any]] = {}
+        self.send_timeout_s = send_timeout_s
 
     async def connect(self, episode_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -61,13 +63,45 @@ class WebSocketConnectionManager:
             {"type": "heartbeat", "data": {"server_time_s": server_time_s}},
         )
 
+    async def send_initial_frame(
+        self,
+        episode_id: str,
+        websocket: WebSocket,
+        handle: EpisodeHandle,
+    ) -> None:
+        frame = handle.last_frame
+        if frame is None:
+            return
+        if frame.offline_labels is not None:
+            return
+        await self._send_one(
+            episode_id,
+            websocket,
+            {"type": "sim_frame", "data": frame.model_dump(mode="json")},
+        )
+
     async def _broadcast(self, episode_id: str, payload: dict[str, Any]) -> None:
         clients = list(self.connections.get(episode_id, set()))
-        for websocket in clients:
-            try:
-                await websocket.send_json(payload)
-            except Exception:
-                self.disconnect(episode_id, websocket)
+        if not clients:
+            return
+        await asyncio.gather(
+            *[self._send_one(episode_id, websocket, payload) for websocket in clients],
+            return_exceptions=True,
+        )
+
+    async def _send_one(
+        self,
+        episode_id: str,
+        websocket: WebSocket,
+        payload: dict[str, Any],
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                websocket.send_json(payload),
+                timeout=self.send_timeout_s,
+            )
+        except Exception:
+            self.disconnect(episode_id, websocket)
 
 
 @router.websocket("/ws/episodes/{episode_id}")
@@ -75,7 +109,7 @@ async def episode_websocket(websocket: WebSocket, episode_id: str) -> None:
     service = _episode_service(websocket)
     manager = _websocket_manager(websocket)
     try:
-        service.get_handle(episode_id)
+        handle = service.get_handle(episode_id)
     except Exception:
         await websocket.accept()
         error = ApiError(
@@ -88,11 +122,33 @@ async def episode_websocket(websocket: WebSocket, episode_id: str) -> None:
         return
 
     await manager.connect(episode_id, websocket)
+    await manager.send_initial_frame(episode_id, websocket, handle)
+    heartbeat = asyncio.create_task(_heartbeat_loop(manager, episode_id, websocket))
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(episode_id, websocket)
+    finally:
+        heartbeat.cancel()
+        try:
+            await heartbeat
+        except asyncio.CancelledError:
+            pass
+
+
+async def _heartbeat_loop(
+    manager: WebSocketConnectionManager,
+    episode_id: str,
+    websocket: WebSocket,
+) -> None:
+    while True:
+        await asyncio.sleep(5.0)
+        await manager._send_one(
+            episode_id,
+            websocket,
+            {"type": "heartbeat", "data": {"server_time_s": time.time()}},
+        )
 
 
 def _episode_service(websocket: WebSocket) -> EpisodeService:

@@ -207,25 +207,47 @@ def list_runs(
     project_root: Path | str,
     run_roots: list[Path | str] | None = None,
 ) -> list[DesktopRunItem]:
-    """Find episode run directories that contain metadata/episode_summary.json."""
-    items: list[DesktopRunItem] = []
+    """Find episode run directories from metadata, including active runs."""
+    run_dirs: dict[Path, dict[str, Any]] = {}
     for root in _run_roots(project_root, run_roots):
         if not root.is_dir():
             continue
+        for metadata_path in sorted(root.rglob("metadata/episode_metadata.json")):
+            run_dir = metadata_path.parent.parent
+            run_dirs.setdefault(run_dir, {})["metadata"] = _read_json_mapping(metadata_path)
         for summary_path in sorted(root.rglob("metadata/episode_summary.json")):
             run_dir = summary_path.parent.parent
-            summary = _read_json_mapping(summary_path)
-            episode_id = _string_or_none(summary.get("episode_id")) or run_dir.name
-            items.append(
-                DesktopRunItem(
-                    episode_id=episode_id,
-                    path=str(run_dir),
-                    status=_string_or_none(summary.get("status")),
-                    created_at=_string_or_none(summary.get("created_at"))
-                    or _string_or_none(summary.get("started_at")),
-                    summary_available=True,
-                )
+            run_dirs.setdefault(run_dir, {})["summary"] = _read_json_mapping(summary_path)
+    items: list[DesktopRunItem] = []
+    for run_dir, payloads in run_dirs.items():
+        metadata = payloads.get("metadata") or {}
+        summary = payloads.get("summary") or {}
+        episode_id = (
+            _string_or_none(summary.get("episode_id"))
+            or _string_or_none(metadata.get("episode_id"))
+            or run_dir.name
+        )
+        status = (
+            _string_or_none(summary.get("status"))
+            or _string_or_none(summary.get("episode_status"))
+            or _string_or_none(metadata.get("status"))
+            or _string_or_none(metadata.get("episode_status"))
+        )
+        created_at = (
+            _string_or_none(summary.get("created_at"))
+            or _string_or_none(summary.get("started_at"))
+            or _string_or_none(metadata.get("created_at"))
+            or _string_or_none(metadata.get("started_at"))
+        )
+        items.append(
+            DesktopRunItem(
+                episode_id=episode_id,
+                path=str(run_dir),
+                status=status,
+                created_at=created_at,
+                summary_available=bool(summary),
             )
+        )
     return sorted(items, key=lambda item: item.path)
 
 
