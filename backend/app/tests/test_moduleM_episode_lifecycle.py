@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
 from backend.app.schemas.scheduler import EpisodeStatus, FrameStepResult
-from backend.app.tests.test_config_schema import FIXTURE_DIR
+from backend.app.tests.test_config_schema import FIXTURE_DIR, load_fixture
 
 
 @dataclass
@@ -81,6 +81,21 @@ def _start_payload(episode_id: str = "E-life", *, autostart: bool = False) -> di
     }
 
 
+def _inline_payload(
+    episode_id: str = "E-inline",
+    *,
+    autostart: bool = False,
+) -> dict[str, Any]:
+    raw = load_fixture("demo_valid.yaml")
+    return {
+        "scenario": raw["scenario"],
+        "experiment": raw["experiment"],
+        "dataset": raw.get("dataset"),
+        "episode_id": episode_id,
+        "autostart": autostart,
+    }
+
+
 def test_start_episode_creates_registry_handle_with_explicit_id() -> None:
     factory = FakeRunnerFactory()
     client = _client_with_factory(factory)
@@ -98,6 +113,41 @@ def test_start_episode_creates_registry_handle_with_explicit_id() -> None:
     handle = service.get_handle("E-life")
     assert handle.episode_id == "E-life"
     assert handle.runner is factory.created[0]["runner"]
+
+
+def test_start_episode_accepts_inline_config_payload() -> None:
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory)
+
+    response = client.post("/episodes/start", json=_inline_payload())
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["code"] == 0
+    assert payload["data"]["episode_id"] == "E-inline"
+    assert payload["data"]["status"] == "running"
+    assert payload["data"]["resolved_config_hash"]
+    assert factory.created[0]["episode_id"] == "E-inline"
+
+
+def test_start_episode_rejects_ambiguous_config_sources() -> None:
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory)
+
+    response = client.post(
+        "/episodes/start",
+        json={
+            **_inline_payload("E-ambiguous"),
+            "config_path": str(FIXTURE_DIR / "demo_valid.yaml"),
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "M_E_EPISODE_START_FAILED"
+    assert payload["data"] is None
+    assert payload["details"]["field_path"] == "config_path"
+    assert factory.created == []
 
 
 def test_start_episode_prefers_runner_reported_run_dir(tmp_path: Path) -> None:

@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from backend.app.core.config_loader import load_demo_config
+from backend.app.core.config_loader import apply_overrides, load_demo_config
 from backend.app.core.config_resolver import resolve_config
+from backend.app.schemas.config import DatasetConfig, ExperimentConfig, ScenarioConfig
 from backend.app.schemas.recorder import SimFrame
 from backend.app.schemas.scheduler import EpisodeStatus
 
@@ -157,20 +158,38 @@ class EpisodeService:
             handle.terminal_reason = getattr(result, "reason", None) or handle.status.value
 
     def _resolve_start_config(self, request: EpisodeStartRequest) -> Any:
-        if request.config_path is None:
+        has_inline = _has_inline_start_config(request)
+        if request.config_path is not None and has_inline:
             raise ApiException(
                 status_code=422,
                 code=M_E_EPISODE_START_FAILED,
-                message="Episode start currently requires config_path",
-                details={"field_path": "config_path"},
+                message="Episode start cannot combine config_path with inline config payload",
+                details={
+                    "field_path": "config_path",
+                    "source_file": request.config_path,
+                },
             )
+        if request.config_path is None and not has_inline:
+            raise ApiException(
+                status_code=422,
+                code=M_E_EPISODE_START_FAILED,
+                message=(
+                    "Episode start requires either config_path or inline "
+                    "scenario and experiment sections"
+                ),
+                details={"field_path": "scenario"},
+            )
+
         try:
-            scenario, experiment, dataset = load_demo_config(
-                request.config_path,
-                overrides=request.overrides,
-            )
+            if request.config_path is not None:
+                scenario, experiment, dataset = load_demo_config(
+                    request.config_path,
+                    overrides=request.overrides,
+                )
+            else:
+                scenario, experiment, dataset = _load_inline_start_config(request)
             if experiment is None:
-                raise ValueError("demo config must include experiment section")
+                raise ValueError("episode start config must include experiment section")
             return resolve_config(scenario, experiment, dataset)
         except ApiException:
             raise
@@ -179,11 +198,90 @@ class EpisodeService:
                 exc,
                 config_kind="scenario",
                 source_file=request.config_path,
+                forbidden_secret_values=_inline_secret_values(request.experiment),
             ) from exc
 
 
 def _new_episode_id() -> str:
     return f"E-{uuid.uuid4().hex[:12]}"
+
+
+def _has_inline_start_config(request: EpisodeStartRequest) -> bool:
+    return any(
+        value is not None
+        for value in (request.scenario, request.experiment, request.dataset)
+    )
+
+
+def _load_inline_start_config(
+    request: EpisodeStartRequest,
+) -> tuple[ScenarioConfig, ExperimentConfig, Optional[DatasetConfig]]:
+    if request.scenario is None or request.experiment is None:
+        missing = "scenario" if request.scenario is None else "experiment"
+        raise ApiException(
+            status_code=422,
+            code=M_E_EPISODE_START_FAILED,
+            message="Inline episode start requires scenario and experiment sections",
+            details={"field_path": missing},
+        )
+
+    overrides = request.overrides or {}
+    forbidden_secret_values = _inline_secret_values(request.experiment)
+    scenario = _validate_inline_section(
+        request.scenario,
+        overrides.get("scenario"),
+        ScenarioConfig,
+        "scenario",
+        forbidden_secret_values=forbidden_secret_values,
+    )
+    experiment = _validate_inline_section(
+        request.experiment,
+        overrides.get("experiment"),
+        ExperimentConfig,
+        "experiment",
+        forbidden_secret_values=forbidden_secret_values,
+    )
+    dataset = (
+        _validate_inline_section(
+            request.dataset,
+            overrides.get("dataset"),
+            DatasetConfig,
+            "dataset",
+            forbidden_secret_values=forbidden_secret_values,
+        )
+        if request.dataset is not None
+        else None
+    )
+    return scenario, experiment, dataset
+
+
+def _validate_inline_section(
+    raw: dict[str, Any],
+    overrides: Any,
+    model_class: type[Any],
+    config_kind: str,
+    *,
+    forbidden_secret_values: list[str],
+) -> Any:
+    try:
+        merged = apply_overrides(raw, overrides)
+        return model_class.model_validate(merged)
+    except Exception as exc:
+        raise config_api_error_from_exception(
+            exc,
+            config_kind=config_kind,
+            forbidden_secret_values=forbidden_secret_values,
+        ) from exc
+
+
+def _inline_secret_values(experiment: Optional[dict[str, Any]]) -> list[str]:
+    if not isinstance(experiment, dict):
+        return []
+    llm = experiment.get("llm")
+    if not isinstance(llm, dict):
+        return []
+    value = llm.get("api_key")
+    return [value] if isinstance(value, str) and value else []
 
 
 def _runner_status(runner: Any) -> EpisodeStatus:

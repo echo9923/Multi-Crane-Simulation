@@ -160,6 +160,16 @@ describe("workbench run controls", () => {
     expect(body.run_mode).toBe("interactive_server");
     expect(body.runner).toBe("production");
     expect(body.autostart).toBe(true);
+    expect(body.config_path).toBeUndefined();
+    expect(body.scenario).toMatchObject({
+      scenario_id: "demo_scenario",
+      layout: { num_cranes: 4 },
+    });
+    expect(body.experiment).toMatchObject({
+      experiment_id: "demo_experiment",
+      sim: { duration_s: 7200 },
+      llm: { provider: "deepseek" },
+    });
   });
 
   it("supports pause resume and stop controls with state refreshes", async () => {
