@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   UNSUPPORTED_CORE_PATCH_FIELDS,
+  applyCoreFormToYaml,
   coreFormToPatches,
   defaultCoreForm,
   extractExperimentSummary,
@@ -244,6 +245,22 @@ describe("workbench config model", () => {
     ]);
     expect(patches["experiment.llm.max_retries"]).toBe(2);
     expect(typeof patches["experiment.llm.max_retries"]).toBe("number");
+  });
+
+  it("applies core form values to YAML for live preview", () => {
+    const nextYaml = applyCoreFormToYaml(yamlText, {
+      ...defaultCoreForm(),
+      scenarioId: "demo",
+      experimentId: "exp",
+      numCranes: 5,
+      maxRetries: 3,
+      llmProvider: "mock",
+    });
+
+    expect(nextYaml).toContain("num_cranes: 5");
+    expect(nextYaml).toContain("max_retries: 3");
+    expect(nextYaml).toContain("provider: mock");
+    expect(yamlToCoreForm(nextYaml).numCranes).toBe(5);
   });
 
   it("formats pydantic integer errors with a field path", () => {

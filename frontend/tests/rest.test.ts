@@ -47,6 +47,29 @@ describe("validateScenario", () => {
     await expect(validateScenario({ scenario: {} })).rejects.toMatchObject({ code: "M_E_CONFIG_INVALID" });
   });
 
+  it("preserves backend validation details on business errors", async () => {
+    const details = {
+      field_path: "experiment.llm.max_retries",
+      errors: [{ loc: ["experiment", "llm", "max_retries"], input: "1.0" }],
+    };
+    setFetch(async () =>
+      jsonRes(
+        {
+          code: "M_E_CONFIG_INVALID",
+          data: null,
+          message: "Input should be a valid integer, unable to parse string as an integer",
+          details,
+        },
+        422,
+      ),
+    );
+
+    await expect(validateScenario({ scenario: {} })).rejects.toMatchObject({
+      code: "M_E_CONFIG_INVALID",
+      details,
+    });
+  });
+
   it("throws N_E_TRANSPORT on a network failure", async () => {
     setFetch(async () => {
       throw new Error("offline");

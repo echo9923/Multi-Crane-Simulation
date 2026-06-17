@@ -176,6 +176,29 @@ function zoneToYaml(item: BoxZoneFormItem, listKey: "load_types" | "accepted_loa
   return payload;
 }
 
+function setPatchPath(
+  root: Record<string, unknown>,
+  path: string,
+  value: unknown,
+): void {
+  const parts = path.split(".");
+  let cursor = root;
+  for (const [index, part] of parts.entries()) {
+    if (index === parts.length - 1) {
+      cursor[part] = value;
+      return;
+    }
+    const existing = cursor[part];
+    if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
+      const next: Record<string, unknown> = {};
+      cursor[part] = next;
+      cursor = next;
+    } else {
+      cursor = existing as Record<string, unknown>;
+    }
+  }
+}
+
 export function defaultCoreForm(): CoreExperimentForm {
   return {
     scenarioId: "desktop_demo",
@@ -642,6 +665,20 @@ export function coreFormToPatches(form: CoreExperimentForm): Record<string, unkn
     "experiment.output.save_parquet": form.saveParquet,
     "experiment.output.save_replay": form.saveReplay,
   };
+}
+
+export function applyCoreFormToYaml(text: string, form: CoreExperimentForm): string {
+  const parsed = yaml.load(text);
+  const root = asRecord(parsed);
+  const patches = coreFormToPatches(form);
+  for (const [path, value] of Object.entries(patches)) {
+    setPatchPath(root, path, value);
+  }
+  return yaml.dump(root, {
+    lineWidth: -1,
+    noRefs: true,
+    sortKeys: false,
+  });
 }
 
 export function formatConfigError(error: unknown): string {
