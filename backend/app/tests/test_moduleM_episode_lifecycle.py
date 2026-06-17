@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -338,6 +339,55 @@ def test_autostart_true_advances_runner_once() -> None:
     handle = client.app.state.episode_service.get_handle("E-life")
     assert handle.frame_index == 1
     assert handle.time_s == 0.5
+
+
+def test_interactive_server_autostart_advances_in_background() -> None:
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory)
+
+    response = client.post(
+        "/episodes/start",
+        json={**_start_payload(autostart=True), "run_mode": "interactive_server"},
+    )
+
+    assert response.status_code == 200
+    runner = factory.created[0]["runner"]
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline and runner.run_one_frame_calls < 2:
+        time.sleep(0.02)
+    handle = client.app.state.episode_service.get_handle("E-life")
+    handle.worker_stop.set()
+    assert runner.run_one_frame_calls >= 2
+    assert handle.frame_index >= 2
+
+
+def test_pause_stops_background_advancement_until_resume() -> None:
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory)
+    client.post(
+        "/episodes/start",
+        json={**_start_payload(autostart=True), "run_mode": "interactive_server"},
+    )
+    runner = factory.created[0]["runner"]
+    handle = client.app.state.episode_service.get_handle("E-life")
+
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline and runner.run_one_frame_calls < 2:
+        time.sleep(0.02)
+
+    pause = client.post("/episodes/E-life/pause")
+    assert pause.status_code == 200
+    paused_calls = runner.run_one_frame_calls
+    time.sleep(0.25)
+    assert runner.run_one_frame_calls == paused_calls
+
+    resume = client.post("/episodes/E-life/resume")
+    assert resume.status_code == 200
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline and runner.run_one_frame_calls == paused_calls:
+        time.sleep(0.02)
+    handle.worker_stop.set()
+    assert runner.run_one_frame_calls > paused_calls
 
 
 def test_pause_resume_stop_lifecycle_flow() -> None:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+import threading
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -37,6 +39,9 @@ class EpisodeHandle:
     paused: bool = False
     last_frame: Optional[SimFrame] = None
     terminal_reason: Optional[str] = None
+    advance_lock: Any = field(default_factory=threading.RLock)
+    worker_stop: threading.Event = field(default_factory=threading.Event)
+    worker_thread: Optional[threading.Thread] = None
 
 
 class EpisodeService:
@@ -90,6 +95,8 @@ class EpisodeService:
             handle.run_dir = _runner_run_dir(runner) or handle.run_dir
 
         self.handles[episode_id] = handle
+        if request.autostart and _needs_background_worker(request, handle):
+            self._start_background_worker(handle)
         return EpisodeStartResponse(
             episode_id=episode_id,
             run_id=getattr(resolved_config, "run_id", None),
@@ -136,6 +143,7 @@ class EpisodeService:
             raise _invalid_state(episode_id, "episode cannot be stopped", previous)
         handle.runner.stop("api stop")
         self._advance_handle_once(handle)
+        handle.worker_stop.set()
         handle.run_dir = _runner_run_dir(handle.runner) or handle.run_dir
         return EpisodeControlResponse(
             episode_id=episode_id,
@@ -157,13 +165,50 @@ class EpisodeService:
             ) from exc
 
     def _advance_handle_once(self, handle: EpisodeHandle) -> None:
-        result = handle.runner.run_one_frame()
-        handle.status = EpisodeStatus(result.status)
-        handle.frame_index = result.frame_index
-        handle.time_s = result.time_s
-        if handle.status is not EpisodeStatus.RUNNING:
-            handle.paused = False
-            handle.terminal_reason = getattr(result, "reason", None) or handle.status.value
+        with handle.advance_lock:
+            result = handle.runner.run_one_frame()
+            handle.status = EpisodeStatus(result.status)
+            handle.frame_index = result.frame_index
+            handle.time_s = result.time_s
+            if handle.status is not EpisodeStatus.RUNNING:
+                handle.paused = False
+                handle.terminal_reason = getattr(result, "reason", None) or handle.status.value
+
+    def _start_background_worker(self, handle: EpisodeHandle) -> None:
+        if handle.worker_thread is not None and handle.worker_thread.is_alive():
+            return
+        handle.worker_stop.clear()
+        handle.worker_thread = threading.Thread(
+            target=self._background_worker,
+            args=(handle,),
+            name=f"episode-worker-{handle.episode_id}",
+            daemon=True,
+        )
+        handle.worker_thread.start()
+
+    def _background_worker(self, handle: EpisodeHandle) -> None:
+        while not handle.worker_stop.is_set():
+            if handle.status is not EpisodeStatus.RUNNING:
+                break
+            if handle.paused:
+                handle.worker_stop.wait(0.1)
+                continue
+
+            started_at = time.monotonic()
+            try:
+                self._advance_handle_once(handle)
+                handle.run_dir = _runner_run_dir(handle.runner) or handle.run_dir
+            except Exception as exc:
+                handle.status = EpisodeStatus.FAILED_INVALID_STATE
+                handle.paused = False
+                handle.terminal_reason = str(exc)
+                break
+
+            if handle.status is not EpisodeStatus.RUNNING:
+                break
+            elapsed_s = time.monotonic() - started_at
+            delay_s = max(0.0, _runner_frame_delay_s(handle.runner) - elapsed_s)
+            handle.worker_stop.wait(delay_s)
 
     def _resolve_start_config(self, request: EpisodeStartRequest) -> Any:
         has_inline = _has_inline_start_config(request)
@@ -317,6 +362,29 @@ def _invalid_state(episode_id: str, message: str, status: str) -> ApiException:
         message=message,
         details={"episode_id": episode_id, "status": status},
     )
+
+
+def _needs_background_worker(
+    request: EpisodeStartRequest,
+    handle: EpisodeHandle,
+) -> bool:
+    return (
+        request.run_mode == "interactive_server"
+        and handle.status is EpisodeStatus.RUNNING
+    )
+
+
+def _runner_frame_delay_s(runner: Any) -> float:
+    inner = getattr(runner, "runner", runner)
+    config = getattr(inner, "config", None)
+    dt_s = getattr(config, "dt_s", None)
+    try:
+        value = float(dt_s)
+    except (TypeError, ValueError):
+        return 0.1
+    if value <= 0:
+        return 0.1
+    return min(max(value, 0.02), 1.0)
 
 
 def _resolved_run_dir(resolved_config: Any) -> Optional[Path]:
