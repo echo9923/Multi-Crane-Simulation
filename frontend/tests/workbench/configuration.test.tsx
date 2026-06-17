@@ -193,6 +193,8 @@ describe("workbench configuration flow", () => {
     });
     expect(yamlTextarea().value).toContain("scenario:");
     expect(useWorkbenchStore.getState().selectedTemplateId).toBe("demo");
+    const body = requestBodyFor(fetchMock, "/desktop/config/render");
+    expect(body.core_overrides).toEqual({});
   });
 
   it("patches YAML from form edits", async () => {
@@ -318,6 +320,20 @@ describe("workbench configuration flow", () => {
     expect(yamlTextarea().value).toContain("max_retries: 3");
   });
 
+  it("adds non-overlapping default cranes when crane count increases", async () => {
+    renderWorkbench();
+
+    fireEvent.click(screen.getByRole("button", { name: "加载模板" }));
+    await waitFor(() => expect(yamlTextarea().value).toContain("base: [-18, -18, 0]"));
+
+    fireEvent.change(screen.getByLabelText("塔吊数量"), {
+      target: { value: "5" },
+    });
+
+    expect(yamlTextarea().value).toContain("crane_id: C5");
+    expect(yamlTextarea().value).not.toContain("base:\n    - 0\n    - 0\n    - 0");
+  });
+
   it("does not patch crane count to zero when the field is cleared", async () => {
     const fetchMock = vi.mocked(fetch);
     renderWorkbench();
@@ -356,6 +372,26 @@ describe("workbench configuration flow", () => {
       );
     });
     expect(screen.getByText("校验通过")).toBeTruthy();
+  });
+
+  it("keeps template crane bases when validating loaded YAML", async () => {
+    const fetchMock = vi.mocked(fetch);
+    renderWorkbench();
+
+    fireEvent.click(screen.getByRole("button", { name: "加载模板" }));
+    await waitFor(() => expect(yamlTextarea().value).toContain("base: [-18, -18, 0]"));
+    fireEvent.click(screen.getByRole("button", { name: "校验配置" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/scenarios/validate"),
+        expect.anything(),
+      );
+    });
+    const body = requestBodyFor(fetchMock, "/scenarios/validate");
+    const scenario = body.scenario as Record<string, unknown>;
+    const cranes = scenario.cranes as Array<Record<string, unknown>>;
+    expect(cranes.map((crane) => crane.base)).toEqual([[-18, -18, 0]]);
   });
 
   it("shows field-specific config errors from the backend", async () => {

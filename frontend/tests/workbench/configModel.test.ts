@@ -57,6 +57,20 @@ describe("workbench config model", () => {
     expect(patches["experiment.llm.provider"]).toBe("mock");
   });
 
+  it("default manual cranes have distinct safe base positions", () => {
+    const form = defaultCoreForm();
+    const bases = form.cranes.map((crane) => [crane.baseX, crane.baseY, crane.baseZ]);
+
+    expect(new Set(bases.map((base) => base.join(","))).size).toBe(form.cranes.length);
+    for (let left = 0; left < bases.length; left += 1) {
+      for (let right = left + 1; right < bases.length; right += 1) {
+        const dx = bases[left][0] - bases[right][0];
+        const dy = bases[left][1] - bases[right][1];
+        expect(Math.hypot(dx, dy)).toBeGreaterThanOrEqual(8);
+      }
+    }
+  });
+
   it("extracts site, crane, zone, weather, risk, llm, and output fields", () => {
     const form = yamlToCoreForm([
       "scenario:",
@@ -279,6 +293,24 @@ describe("workbench config model", () => {
         },
       }),
     ).toContain("字段 experiment.llm.max_retries 需要整数");
+  });
+
+  it("formats manual crane layout distance errors with actionable details", () => {
+    const message = formatConfigError({
+      message: "crane bases are too close",
+      details: {
+        reason: "root_distance_too_small",
+        field_path: "cranes",
+        crane_id_a: "C1",
+        crane_id_b: "C2",
+        distance_m: 0,
+        min_base_distance_m: 8,
+      },
+    });
+
+    expect(message).toContain("塔吊基座距离太近");
+    expect(message).toContain("C1 与 C2");
+    expect(message).toContain("至少需要 8.00m");
   });
 
   it("extracts craneModelId from the first concrete crane", () => {

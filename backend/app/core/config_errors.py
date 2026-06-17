@@ -9,6 +9,8 @@ from backend.app.core.config_loader import ConfigLoadError
 from backend.app.core.path_utils import PathSecurityError
 from backend.app.core.secret_resolver import SecretGovernanceError
 from backend.app.schemas.errors import ConfigError, StartupFailureResult
+from backend.app.sim.auto_layout import AutoLayoutError, auto_layout_error_to_config_error
+from backend.app.sim.layout import LayoutResolutionError, layout_error_to_config_error
 
 
 CONFIG_KIND_ERROR_CODES = {
@@ -103,6 +105,12 @@ def config_error_from_exception(
             hint="Keep configuration paths under the allowed config root or run workspace.",
             details={"config_kind": config_kind, "path": exc.path, "root": exc.root},
         )
+
+    if isinstance(exc, AutoLayoutError):
+        return auto_layout_error_to_config_error(exc, source_file=source_file)
+
+    if isinstance(exc, LayoutResolutionError):
+        return layout_error_to_config_error(exc, source_file=source_file)
 
     return ConfigError(
         error_code=_error_code_for_kind(config_kind),

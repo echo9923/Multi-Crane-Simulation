@@ -127,3 +127,45 @@ def test_validate_scenario_error_response_redacts_inline_secret() -> None:
     response_text = response.text
     assert secret not in response_text
     assert response.json()["code"] == "M_E_CONFIG_INVALID"
+
+
+def test_validate_scenario_returns_manual_layout_error_details() -> None:
+    client = _client()
+    scenario = load_fixture("scenario_valid.yaml")
+    experiment = load_fixture("experiment_valid.yaml")
+    experiment["llm"]["provider"] = "mock"
+    experiment["llm"]["api_key_env"] = None
+    scenario["layout"]["mode"] = "manual"
+    scenario["layout"]["num_cranes"] = 2
+    scenario["cranes"] = [
+        {
+            "crane_id": "C1",
+            "model_id": "generic_flat_top_55m",
+            "base": [-60.0, -60.0, 0.0],
+            "mast_height_m": 45.0,
+            "theta_init_deg": 0.0,
+            "slew": {"mode": "continuous"},
+        },
+        {
+            "crane_id": "C2",
+            "model_id": "generic_flat_top_55m",
+            "base": [-55.0, -60.0, 0.0],
+            "mast_height_m": 45.0,
+            "theta_init_deg": 0.0,
+            "slew": {"mode": "continuous"},
+        },
+    ]
+
+    response = client.post(
+        "/scenarios/validate",
+        json={"scenario": scenario, "experiment": experiment},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "M_E_CONFIG_INVALID"
+    assert payload["message"] == "crane bases are too close"
+    assert payload["details"]["reason"] == "root_distance_too_small"
+    assert payload["details"]["crane_id_a"] == "C1"
+    assert payload["details"]["crane_id_b"] == "C2"
+    assert payload["details"]["min_base_distance_m"] == 8.0

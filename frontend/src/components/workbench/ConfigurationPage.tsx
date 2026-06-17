@@ -12,6 +12,7 @@ import { useWorkbenchStore } from "@/state/workbench";
 import {
   applyCoreFormToYaml,
   coreFormToPatches,
+  createDefaultCrane,
   formatConfigError,
   yamlToCoreForm,
 } from "@/workbench/configModel";
@@ -119,16 +120,11 @@ function ToggleField(props: {
 }
 
 function makeCrane(index: number, form: CoreExperimentForm): CraneFormItem {
-  return {
-    craneId: `C${index + 1}`,
-    modelId: form.craneModelId || "demo_flat_top_45m",
-    baseX: 0,
-    baseY: 0,
-    baseZ: 0,
-    mastHeightM: 30,
-    thetaInitDeg: 0,
-    slewMode: form.slewModeDefault || "continuous",
-  };
+  return createDefaultCrane(index, {
+    boundary: form.boundary,
+    modelId: form.craneModelId,
+    slewMode: form.slewModeDefault,
+  });
 }
 
 function makeZone(prefix: string, index: number): BoxZoneFormItem {
@@ -233,7 +229,7 @@ export function ConfigurationPage() {
       setTemplate(first.template_id);
       const rendered = await renderDesktopConfig(
         first.template_id,
-        coreFormToPatches(form),
+        {},
       );
       applyYamlToWorkbench(rendered.yaml_text);
     } catch (error) {

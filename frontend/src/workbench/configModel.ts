@@ -78,17 +78,37 @@ function defaultBoundary(): BoundaryForm {
   return { xMin: -80, xMax: 80, yMin: -80, yMax: 80, zMin: 0, zMax: 60 };
 }
 
-function defaultCrane(index = 0): CraneFormItem {
+export function createDefaultCrane(
+  index = 0,
+  opts: {
+    boundary?: BoundaryForm;
+    modelId?: string;
+    slewMode?: string;
+  } = {},
+): CraneFormItem {
+  const boundary = opts.boundary ?? defaultBoundary();
   const id = `C${index + 1}`;
+  const spanX = Math.max(16, boundary.xMax - boundary.xMin);
+  const spanY = Math.max(16, boundary.yMax - boundary.yMin);
+  const insetX = Math.min(spanX * 0.25, 18);
+  const insetY = Math.min(spanY * 0.25, 18);
+  const positions = [
+    [boundary.xMin + insetX, boundary.yMin + insetY],
+    [boundary.xMax - insetX, boundary.yMin + insetY],
+    [boundary.xMin + insetX, boundary.yMax - insetY],
+    [boundary.xMax - insetX, boundary.yMax - insetY],
+  ];
+  const [baseX, baseY] = positions[index % positions.length];
+  const row = Math.floor(index / positions.length);
   return {
     craneId: id,
-    modelId: "demo_flat_top_45m",
-    baseX: 0,
-    baseY: 0,
+    modelId: opts.modelId || "demo_flat_top_45m",
+    baseX: baseX + row * 10,
+    baseY,
     baseZ: 0,
-    mastHeightM: 30,
-    thetaInitDeg: 0,
-    slewMode: "continuous",
+    mastHeightM: 30 + (index % 4) * 2,
+    thetaInitDeg: [-135, -45, 135, 45][index % 4],
+    slewMode: opts.slewMode || "continuous",
   };
 }
 
@@ -200,6 +220,7 @@ function setPatchPath(
 }
 
 export function defaultCoreForm(): CoreExperimentForm {
+  const boundary = defaultBoundary();
   return {
     scenarioId: "desktop_demo",
     experimentId: "desktop_demo",
@@ -213,7 +234,7 @@ export function defaultCoreForm(): CoreExperimentForm {
     llmDecisionIntervalS: 1,
     stopWhenAllTasksDone: true,
     coordinateSystem: "ENU",
-    boundary: defaultBoundary(),
+    boundary,
     numCranes: 4,
     layoutMode: "manual",
     overlapLevel: "medium",
@@ -222,7 +243,12 @@ export function defaultCoreForm(): CoreExperimentForm {
     slewModeDefault: "continuous",
     maxSamplingAttempts: 500,
     craneModelId: "demo_flat_top_45m",
-    cranes: [defaultCrane(0), defaultCrane(1), defaultCrane(2), defaultCrane(3)],
+    cranes: [
+      createDefaultCrane(0, { boundary }),
+      createDefaultCrane(1, { boundary }),
+      createDefaultCrane(2, { boundary }),
+      createDefaultCrane(3, { boundary }),
+    ],
     materialZones: [defaultBoxZone("mat", 0)],
     workZones: [defaultBoxZone("work", 0)],
     forbiddenZones: [],
@@ -699,6 +725,30 @@ export function formatConfigError(error: unknown): string {
       : String(error);
   const input = first.input;
   const inputLine = input !== undefined ? `\n当前值: ${JSON.stringify(input)}` : "";
+  const reason = typeof details.reason === "string" ? details.reason : "";
+  if (reason === "root_distance_too_small") {
+    const craneA = typeof details.crane_id_a === "string" ? details.crane_id_a : "一台塔吊";
+    const craneB = typeof details.crane_id_b === "string" ? details.crane_id_b : "另一台塔吊";
+    const distance = typeof details.distance_m === "number" ? details.distance_m.toFixed(2) : "未知";
+    const minDistance = typeof details.min_base_distance_m === "number"
+      ? details.min_base_distance_m.toFixed(2)
+      : "规定";
+    return `塔吊基座距离太近: ${craneA} 与 ${craneB} 当前距离 ${distance}m，至少需要 ${minDistance}m。\n建议: 在配置页的“塔吊列表”里调整基座 X/Y，或切换为自动布局。`;
+  }
+  if (reason === "manual_count_mismatch") {
+    const expected = typeof details.expected === "number" ? details.expected : "配置的";
+    const actual = typeof details.actual === "number" ? details.actual : "当前";
+    return `塔吊数量不一致: 塔吊数量设置为 ${expected}，但塔吊列表里有 ${actual} 项。\n建议: 修改塔吊数量，或增删塔吊列表项，让两者一致。`;
+  }
+  if (reason === "base_out_of_boundary") {
+    const craneId = typeof details.crane_id === "string" ? details.crane_id : "该塔吊";
+    return `塔吊基座超出场地边界: ${craneId} 的 base 不在 site.boundary 范围内。\n建议: 调整该塔吊的基座 X/Y/Z，或扩大场地边界。`;
+  }
+  if (reason === "base_inside_forbidden_zone") {
+    const craneId = typeof details.crane_id === "string" ? details.crane_id : "该塔吊";
+    const zoneId = typeof details.zone_id === "string" ? details.zone_id : "禁入区";
+    return `塔吊基座落入禁入区: ${craneId} 位于 ${zoneId} 内。\n建议: 移动塔吊基座，或调整 forbidden_zones。`;
+  }
   const integerError = /valid integer|parse string as an integer/i.test(message);
   if (integerError && fieldPath) {
     return `字段 ${fieldPath} 需要整数${inputLine}\n建议: 填写不带小数点和单位的数字，例如 1`;
