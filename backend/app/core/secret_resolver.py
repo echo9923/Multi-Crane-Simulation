@@ -9,7 +9,11 @@ from backend.app.schemas.enums import LLMProviderName
 from backend.app.schemas.resolved_config import PersistedProviderSummary
 
 
-REAL_PROVIDERS = {LLMProviderName.DEEPSEEK, LLMProviderName.MINIMAX}
+REAL_PROVIDERS = {
+    LLMProviderName.DEEPSEEK,
+    LLMProviderName.MINIMAX,
+    LLMProviderName.SILICONFLOW,
+}
 FORBIDDEN_PERSISTED_SECRET_FIELDS = {
     "api_key",
     "resolved_full_api_key",
@@ -52,6 +56,7 @@ def resolve_provider_secrets(
     llm_config: LLMConfig,
     *,
     env: Optional[dict] = None,
+    local_api_key: Optional[str] = None,
 ) -> ProviderSecretResolution:
     env_mapping = os.environ if env is None else env
     inline_key = (
@@ -64,9 +69,17 @@ def resolve_provider_secrets(
         key_source = "inline"
         full_api_key = inline_key
         key_env_name = None
-    elif env_name:
+    elif env_name and env_key:
         key_source = "env"
         full_api_key = env_key
+        key_env_name = env_name
+    elif local_api_key:
+        key_source = "local_settings"
+        full_api_key = local_api_key
+        key_env_name = None
+    elif env_name:
+        key_source = "env"
+        full_api_key = None
         key_env_name = env_name
     else:
         key_source = "none"
@@ -77,7 +90,10 @@ def resolve_provider_secrets(
     if llm_config.enabled and provider in REAL_PROVIDERS and not full_api_key:
         missing_env = env_name if key_source == "env" else None
         raise SecretGovernanceError(
-            f"provider {provider.value} requires an API key before startup",
+            (
+                f"provider {provider.value} requires an API key before startup. "
+                "当前 provider 未找到 API Key，请回到配置页填写本机 API Key 并点击保存 Key。"
+            ),
             provider=provider.value,
             key_source=key_source,
             missing_env=missing_env,

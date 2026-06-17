@@ -37,6 +37,7 @@ from backend.app.sim.llm_provider import (
     ReplayCommandDuplicateError,
     ReplayCommandNotFoundError,
     ReplayProvider,
+    SiliconFlowProvider,
     create_llm_provider,
 )
 from backend.app.tests.test_config_schema import load_fixture
@@ -167,6 +168,7 @@ def test_create_llm_provider_returns_provider_by_config_name() -> None:
     )
     assert isinstance(create_llm_provider(_llm_config("deepseek")), DeepSeekProvider)
     assert isinstance(create_llm_provider(_llm_config("minimax")), MiniMaxProvider)
+    assert isinstance(create_llm_provider(_llm_config("siliconflow")), SiliconFlowProvider)
 
 
 def test_mock_provider_returns_deterministic_active_and_idle_raw_commands() -> None:
@@ -222,6 +224,7 @@ def test_replay_provider_reports_missing_and_duplicate_commands() -> None:
     [
         ("deepseek", DeepSeekProvider),
         ("minimax", MiniMaxProvider),
+        ("siliconflow", SiliconFlowProvider),
     ],
 )
 def test_real_provider_builds_chat_request_without_persisting_secret(

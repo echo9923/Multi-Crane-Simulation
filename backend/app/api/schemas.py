@@ -18,6 +18,7 @@ M_E_DOWNLOAD_FAILED = "M_E_DOWNLOAD_FAILED"
 M_E_DATASET_NOT_FOUND = "M_E_DATASET_NOT_FOUND"
 M_E_DATASET_NOT_IMPLEMENTED = "M_E_DATASET_NOT_IMPLEMENTED"
 M_E_WEBSOCKET_CLOSED = "M_E_WEBSOCKET_CLOSED"
+M_E_LLM_SETTINGS_INVALID = "M_E_LLM_SETTINGS_INVALID"
 M_E_INTERNAL = "M_E_INTERNAL"
 
 API_ERROR_CODES = (
@@ -31,6 +32,7 @@ API_ERROR_CODES = (
     M_E_DATASET_NOT_FOUND,
     M_E_DATASET_NOT_IMPLEMENTED,
     M_E_WEBSOCKET_CLOSED,
+    M_E_LLM_SETTINGS_INVALID,
     M_E_INTERNAL,
 )
 
@@ -208,6 +210,13 @@ class DesktopExperimentDraftResponse(ApiBaseModel):
     metadata_path: str
 
 
+class DesktopExperimentDraftLatestResponse(ApiBaseModel):
+    experiment_id: Optional[str] = None
+    yaml_text: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
+    updated_at: Optional[str] = None
+
+
 class DesktopRecentExperiment(ApiBaseModel):
     experiment_id: str
     yaml_path: str
@@ -253,6 +262,44 @@ class DesktopEnvironmentResponse(ApiBaseModel):
     backend_port: Optional[int] = Field(default=None, ge=1, le=65535)
 
 
+class DesktopLLMProviderSummary(ApiBaseModel):
+    provider: str
+    display_name: str
+    default_base_url: Optional[str] = None
+    default_model: str
+    api_key_env: Optional[str] = None
+    has_saved_key: bool
+    key_masked: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class DesktopLLMProvidersResponse(ApiBaseModel):
+    items: list[DesktopLLMProviderSummary]
+
+
+class DesktopLLMSecretSaveRequest(ApiBaseModel):
+    api_key: str = Field(min_length=1)
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+
+
+class DesktopLLMConnectivityTestRequest(ApiBaseModel):
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+
+
+class DesktopLLMConnectivityTestResponse(ApiBaseModel):
+    ok: bool
+    provider: str
+    base_url: str
+    latency_ms: float = Field(ge=0)
+    status_code: Optional[int] = None
+    model_count: Optional[int] = Field(default=None, ge=0)
+    sample_models: Optional[list[str]] = None
+    message: Optional[str] = None
+
+
 __all__ = [
     "API_ERROR_CODES",
     "API_SCHEMA_VERSION",
@@ -264,6 +311,7 @@ __all__ = [
     "M_E_EPISODE_START_FAILED",
     "M_E_INTERNAL",
     "M_E_INVALID_EPISODE_STATE",
+    "M_E_LLM_SETTINGS_INVALID",
     "M_E_RUNNER_FAILED",
     "M_E_SUMMARY_NOT_FOUND",
     "M_E_WEBSOCKET_CLOSED",
@@ -279,7 +327,13 @@ __all__ = [
     "DesktopConfigTextResponse",
     "DesktopEnvironmentResponse",
     "DesktopExperimentDraftRequest",
+    "DesktopExperimentDraftLatestResponse",
     "DesktopExperimentDraftResponse",
+    "DesktopLLMConnectivityTestRequest",
+    "DesktopLLMConnectivityTestResponse",
+    "DesktopLLMProviderSummary",
+    "DesktopLLMProvidersResponse",
+    "DesktopLLMSecretSaveRequest",
     "DesktopRecentExperiment",
     "DesktopRecentExperimentsResponse",
     "DesktopRunFile",

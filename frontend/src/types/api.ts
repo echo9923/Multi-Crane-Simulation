@@ -106,6 +106,13 @@ export interface DesktopExperimentDraftResponse {
   metadata_path: string;
 }
 
+export interface DesktopExperimentDraftLatestResponse {
+  experiment_id: string | null;
+  yaml_text: string | null;
+  metadata: Record<string, unknown> | null;
+  updated_at: string | null;
+}
+
 export interface DesktopRecentExperiment {
   experiment_id: string;
   yaml_path: string;
@@ -149,6 +156,44 @@ export interface DesktopEnvironmentResponse {
   python_version: string | null;
   run_roots: string[];
   backend_port: number | null;
+}
+
+export interface DesktopLLMProviderSummary {
+  provider: string;
+  display_name: string;
+  default_base_url: string | null;
+  default_model: string;
+  api_key_env: string | null;
+  has_saved_key: boolean;
+  key_masked: string | null;
+  updated_at: string | null;
+}
+
+export interface DesktopLLMProvidersResponse {
+  items: DesktopLLMProviderSummary[];
+}
+
+export interface DesktopLLMSecretSaveRequest {
+  api_key: string;
+  base_url?: string | null;
+  model?: string | null;
+}
+
+export interface DesktopLLMConnectivityTestRequest {
+  api_key?: string | null;
+  base_url?: string | null;
+  model?: string | null;
+}
+
+export interface DesktopLLMConnectivityTestResponse {
+  ok: boolean;
+  provider: string;
+  base_url: string;
+  latency_ms: number;
+  status_code: number | null;
+  model_count: number | null;
+  sample_models: string[] | null;
+  message: string | null;
 }
 
 export interface DatasetListItem {

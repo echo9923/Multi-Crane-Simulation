@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import {
+  getLatestDesktopDraft,
   listDesktopTemplates,
   patchDesktopConfig,
   renderDesktopConfig,
+  saveDesktopDraft,
+  saveDesktopLLMProviderSecret,
+  testDesktopLLMProvider,
   validateScenario,
 } from "@/api/rest";
 import { buildValidateRequest } from "@/api/config";
@@ -37,7 +41,24 @@ type BooleanCoreField = {
 
 type ZoneListKey = "materialZones" | "workZones" | "forbiddenZones";
 
-const LLM_PROVIDER_OPTIONS = ["deepseek", "minimax", "mock", "replay"];
+const LLM_PROVIDER_OPTIONS = ["deepseek", "minimax", "siliconflow", "mock", "replay"];
+const LLM_PROVIDER_DEFAULTS: Record<string, Partial<CoreExperimentForm>> = {
+  deepseek: {
+    llmModel: "deepseek-chat",
+    llmBaseUrl: "https://api.deepseek.com/v1",
+    llmApiKeyEnv: "DEEPSEEK_API_KEY",
+  },
+  minimax: {
+    llmModel: "abab6.5s-chat",
+    llmBaseUrl: "https://api.minimax.chat/v1",
+    llmApiKeyEnv: "MINIMAX_API_KEY",
+  },
+  siliconflow: {
+    llmModel: "deepseek-ai/DeepSeek-V4-Flash",
+    llmBaseUrl: "https://api.siliconflow.cn/v1",
+    llmApiKeyEnv: "SILICONFLOW_API_KEY",
+  },
+};
 const COORDINATE_OPTIONS = ["ENU", "NED"];
 const LAYOUT_OPTIONS = ["manual", "auto"];
 const OVERLAP_OPTIONS = ["low", "medium", "high"];
@@ -56,6 +77,8 @@ const HISTORY_OPTIONS = ["none", "short", "long"];
 const SUMMARIZER_OPTIONS = ["none", "rule", "llm"];
 const SUMMARIZER_PROVIDER_OPTIONS = ["same_as_operator", "explicit"];
 const FALLBACK_POLICY_OPTIONS = ["neutral_stop"];
+const REAL_LLM_PROVIDERS = new Set(["deepseek", "minimax", "siliconflow"]);
+const AUTOSAVE_DELAY_MS = 800;
 
 function parseNumber(
   value: string,
@@ -171,8 +194,26 @@ function validationCode(item: unknown): string {
   return "CONFIG";
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function safeDraftId(value: string): string {
+  const cleaned = value.trim().replace(/[^A-Za-z0-9_.-]/g, "_");
+  return cleaned || "desktop_autosave";
+}
+
 export function ConfigurationPage() {
   const [advancedYamlEnabled, setAdvancedYamlEnabled] = useState(false);
+  const [localApiKey, setLocalApiKey] = useState("");
+  const [llmSecretBusy, setLlmSecretBusy] = useState(false);
+  const [llmSecretStatus, setLlmSecretStatus] = useState(
+    "真实 API Key 只保存到本机设置，不写入 YAML。",
+  );
+  const [draftStatus, setDraftStatus] = useState("正在检查本机草稿。");
+  const [draftReady, setDraftReady] = useState(false);
+  const skipNextAutosaveRef = useRef(true);
+  const savingDraftRef = useRef(false);
 
   const templates = useWorkbenchStore((s) => s.templates);
   const selectedTemplateId = useWorkbenchStore((s) => s.selectedTemplateId);
@@ -191,6 +232,33 @@ export function ConfigurationPage() {
   const applyYamlToWorkbench = (text: string) => {
     setYamlText(text);
     setFormPatch(yamlToCoreForm(text));
+  };
+
+  const saveDraft = async (
+    text = useWorkbenchStore.getState().yamlText,
+    opts: { automatic?: boolean } = {},
+  ) => {
+    if (!text.trim() || savingDraftRef.current) return;
+    savingDraftRef.current = true;
+    setDraftStatus(opts.automatic ? "保存中。" : "正在保存草稿。");
+    try {
+      const state = useWorkbenchStore.getState();
+      const draftForm = state.form;
+      await saveDesktopDraft(
+        safeDraftId(draftForm.experimentId),
+        text,
+        {
+          template_id: state.selectedTemplateId,
+          last_validation_hash: state.validation?.resolved_config_hash ?? null,
+          autosaved: Boolean(opts.automatic),
+        },
+      );
+      setDraftStatus(opts.automatic ? "已自动保存。" : "草稿已保存。");
+    } catch (error) {
+      setDraftStatus(`保存失败：${errorText(error)}`);
+    } finally {
+      savingDraftRef.current = false;
+    }
   };
 
   const updateForm = (patch: Partial<CoreExperimentForm>) => {
@@ -215,6 +283,49 @@ export function ConfigurationPage() {
     }
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    const restoreLatestDraft = async () => {
+      try {
+        const latest = await getLatestDesktopDraft();
+        if (cancelled) return;
+        if (latest.yaml_text) {
+          skipNextAutosaveRef.current = true;
+          applyYamlToWorkbench(latest.yaml_text);
+          setDraftStatus(
+            latest.updated_at ? `已恢复上次草稿：${latest.updated_at}` : "已恢复上次草稿。",
+          );
+        } else {
+          setDraftStatus("暂无本机草稿。");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setDraftStatus(`草稿恢复失败：${errorText(error)}`);
+        }
+      } finally {
+        if (!cancelled) setDraftReady(true);
+      }
+    };
+    void restoreLatestDraft();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!draftReady || !yamlText.trim()) return;
+    if (skipNextAutosaveRef.current) {
+      skipNextAutosaveRef.current = false;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void saveDraft(yamlText, { automatic: true });
+    }, AUTOSAVE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftReady, yamlText]);
+
   const loadTemplate = async () => {
     setBusy(true);
     setValidation(null);
@@ -232,6 +343,7 @@ export function ConfigurationPage() {
         {},
       );
       applyYamlToWorkbench(rendered.yaml_text);
+      setDraftStatus("模板已加载，后续修改会自动保存。");
     } catch (error) {
       setValidation(null, formatConfigError(error));
     } finally {
@@ -266,6 +378,73 @@ export function ConfigurationPage() {
 
   const setTextField = (field: StringCoreField, value: string) => {
     updateForm({ [field]: value } as Partial<CoreExperimentForm>);
+  };
+
+  const setLLMProvider = (value: string) => {
+    updateForm({
+      llmProvider: value,
+      ...(LLM_PROVIDER_DEFAULTS[value] ?? {}),
+    });
+    setLocalApiKey("");
+    setLlmSecretStatus(
+      REAL_LLM_PROVIDERS.has(value)
+        ? "真实 API Key 只保存到本机设置，不写入 YAML。"
+        : "mock/replay 不需要 API Key。",
+    );
+  };
+
+  const saveLocalApiKey = async () => {
+    if (!REAL_LLM_PROVIDERS.has(form.llmProvider)) {
+      setLlmSecretStatus("当前 provider 不需要 API Key。");
+      return;
+    }
+    if (!localApiKey.trim()) {
+      setLlmSecretStatus("请输入 API Key 后再保存。");
+      return;
+    }
+    setLlmSecretBusy(true);
+    try {
+      const result = await saveDesktopLLMProviderSecret(form.llmProvider, {
+        api_key: localApiKey,
+        base_url: form.llmBaseUrl || null,
+        model: form.llmModel || null,
+      });
+      setLocalApiKey("");
+      setLlmSecretStatus(`已保存到本机设置：${result.key_masked ?? "已脱敏"}`);
+      await saveDraft(useWorkbenchStore.getState().yamlText, { automatic: true });
+    } catch (error) {
+      setLlmSecretStatus(`保存失败：${errorText(error)}`);
+    } finally {
+      setLlmSecretBusy(false);
+    }
+  };
+
+  const testLocalApiKey = async () => {
+    if (!REAL_LLM_PROVIDERS.has(form.llmProvider)) {
+      setLlmSecretStatus("当前 provider 不需要真实连通性测试。");
+      return;
+    }
+    setLlmSecretBusy(true);
+    try {
+      const result = await testDesktopLLMProvider(form.llmProvider, {
+        api_key: localApiKey || null,
+        base_url: form.llmBaseUrl || null,
+        model: form.llmModel || null,
+      });
+      const models = result.sample_models?.length
+        ? `，模型示例：${result.sample_models.join(", ")}`
+        : "";
+      const httpStatus = result.status_code !== null ? `，HTTP ${result.status_code}` : "";
+      setLlmSecretStatus(
+        `${result.ok ? "连通性测试成功" : "连通性测试失败"}：${
+          result.message ?? "无返回消息"
+        }${httpStatus}，${result.latency_ms.toFixed(0)} ms${models}`,
+      );
+    } catch (error) {
+      setLlmSecretStatus(`测试失败：${errorText(error)}`);
+    } finally {
+      setLlmSecretBusy(false);
+    }
   };
 
   const setNumberField = (
@@ -625,9 +804,13 @@ export function ConfigurationPage() {
         <button type="button" onClick={validateYaml} disabled={busy || !yamlText}>
           校验配置
         </button>
+        <button type="button" onClick={() => void saveDraft()} disabled={busy || !yamlText}>
+          保存草稿
+        </button>
         {selectedTemplate ? (
           <span className="chip">模板 {selectedTemplate.name}</span>
         ) : null}
+        <span className="chip">{draftStatus}</span>
         {validation?.valid ? <span className="chip chip-ok">校验通过</span> : null}
         {validation && !validation.valid ? (
           <span className="chip chip-warn">校验未通过</span>
@@ -1599,9 +1782,7 @@ export function ConfigurationPage() {
                 <select
                   id="config-llm-provider"
                   value={form.llmProvider}
-                  onChange={(event) =>
-                    setTextField("llmProvider", event.target.value)
-                  }
+                  onChange={(event) => setLLMProvider(event.target.value)}
                 >
                   {LLM_PROVIDER_OPTIONS.map(valueOption)}
                 </select>
@@ -1635,7 +1816,7 @@ export function ConfigurationPage() {
               <Field
                 id="config-llm-api-key-env"
                 label="API Key Env"
-                help="只填写环境变量名，不在配置文件保存真实密钥。"
+                help="可选环境变量名；真实密钥可在下方保存到本机设置，不写入 YAML。"
               >
                 <input
                   id="config-llm-api-key-env"
@@ -1646,6 +1827,46 @@ export function ConfigurationPage() {
                   }
                 />
               </Field>
+              <div className="workbench-field workbench-field-wide">
+                <div className="workbench-field-heading">
+                  <label htmlFor="config-llm-local-api-key">本机 API Key</label>
+                  <span
+                    className="workbench-field-tooltip"
+                    title="保存到 .desktop/secrets/llm_providers.json，只返回脱敏状态，不写入 YAML。"
+                  >
+                    ?
+                  </span>
+                </div>
+                <div className="workbench-inline-secret">
+                  <input
+                    id="config-llm-local-api-key"
+                    type="password"
+                    value={localApiKey}
+                    onChange={(event) => setLocalApiKey(event.target.value)}
+                    disabled={!REAL_LLM_PROVIDERS.has(form.llmProvider)}
+                    placeholder={
+                      REAL_LLM_PROVIDERS.has(form.llmProvider)
+                        ? "输入 API Key，可直接测试或保存到本机"
+                        : "mock/replay 无需 API Key"
+                    }
+                  />
+                  <button
+                    type="button"
+                    onClick={saveLocalApiKey}
+                    disabled={llmSecretBusy || !REAL_LLM_PROVIDERS.has(form.llmProvider)}
+                  >
+                    保存 Key
+                  </button>
+                  <button
+                    type="button"
+                    onClick={testLocalApiKey}
+                    disabled={llmSecretBusy || !REAL_LLM_PROVIDERS.has(form.llmProvider)}
+                  >
+                    测试连通性
+                  </button>
+                </div>
+                <p className="workbench-help">{llmSecretStatus}</p>
+              </div>
               <Field
                 id="config-llm-temperature"
                 label="Temperature"

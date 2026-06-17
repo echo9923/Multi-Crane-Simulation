@@ -156,3 +156,70 @@ def test_production_runner_uses_tasks_observations_llm_safety_and_recorder(
     assert (run_dir / "data" / "pair_risks.parquet").is_file()
     assert (run_dir / "visual" / "frames.jsonl").is_file()
     assert (run_dir / "visual" / "episode_manifest.json").is_file()
+
+
+def test_production_runner_wraps_siliconflow_provider_with_runtime_secret(
+    tmp_path: Path,
+) -> None:
+    from backend.app.api.desktop_llm_settings import save_provider_secret
+    from backend.app.api.production_runner import RuntimeSecretProvider, _provider_with_runtime_secret
+    from backend.app.schemas.config import ExperimentConfig
+
+    experiment = load_demo_config(FIXTURE_DIR / "demo_valid.yaml")[1]
+    assert experiment is not None
+    payload = experiment.model_dump(mode="json")
+    payload["llm"].update(
+        {
+            "provider": "siliconflow",
+            "model": "deepseek-ai/DeepSeek-V4-Flash",
+            "api_key": None,
+            "api_key_env": "SILICONFLOW_API_KEY",
+            "base_url": "https://api.siliconflow.cn/v1",
+        }
+    )
+    experiment = ExperimentConfig.model_validate(payload)
+    save_provider_secret(
+        tmp_path,
+        provider=experiment.llm.provider,
+        api_key="sf-local-secret-123456",
+    )
+
+    provider = _provider_with_runtime_secret(experiment.llm, project_root=tmp_path)
+
+    assert isinstance(provider, RuntimeSecretProvider)
+    assert provider.provider_name.value == "siliconflow"
+    assert provider.runtime_secret.full_api_key == "sf-local-secret-123456"
+
+
+def test_production_runner_runtime_secret_falls_back_to_cwd_project_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from backend.app.api.desktop_llm_settings import save_provider_secret
+    from backend.app.api.production_runner import RuntimeSecretProvider, _provider_with_runtime_secret
+    from backend.app.schemas.config import ExperimentConfig
+
+    monkeypatch.chdir(tmp_path)
+    experiment = load_demo_config(FIXTURE_DIR / "demo_valid.yaml")[1]
+    assert experiment is not None
+    payload = experiment.model_dump(mode="json")
+    payload["llm"].update(
+        {
+            "provider": "siliconflow",
+            "model": "deepseek-ai/DeepSeek-V4-Flash",
+            "api_key": None,
+            "api_key_env": "SILICONFLOW_API_KEY",
+            "base_url": "https://api.siliconflow.cn/v1",
+        }
+    )
+    experiment = ExperimentConfig.model_validate(payload)
+    save_provider_secret(
+        tmp_path,
+        provider=experiment.llm.provider,
+        api_key="sf-cwd-secret-123456",
+    )
+
+    provider = _provider_with_runtime_secret(experiment.llm)
+
+    assert isinstance(provider, RuntimeSecretProvider)
+    assert provider.runtime_secret.full_api_key == "sf-cwd-secret-123456"

@@ -102,6 +102,7 @@ class RuntimeMode(StrEnum):
 class LLMProviderName(StrEnum):
     DEEPSEEK = "deepseek"
     MINIMAX = "minimax"
+    SILICONFLOW = "siliconflow"
     MOCK = "mock"
     REPLAY = "replay"
 

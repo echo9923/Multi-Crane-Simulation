@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
+from .desktop_context import resolve_desktop_project_root
 from .episode_service import EpisodeService, default_runner_factory
 from backend.app.schemas.recorder import EpisodeSummary, SimFrame
 
@@ -108,7 +109,10 @@ def _episode_service(request: Request) -> EpisodeService:
     state = request.app.state
     if not hasattr(state, "episode_service"):
         runner_factory = getattr(state, "runner_factory", default_runner_factory)
-        state.episode_service = EpisodeService(runner_factory=runner_factory)
+        state.episode_service = EpisodeService(
+            runner_factory=runner_factory,
+            project_root=resolve_desktop_project_root(request.app),
+        )
     return state.episode_service
 
 

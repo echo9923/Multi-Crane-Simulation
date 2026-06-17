@@ -6,6 +6,7 @@ import platform
 import re
 import sys
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,14 @@ _SECRET_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 _VISIBLE_SECRET_REF_KEYS = frozenset({"api_key_env"})
+
+
+@dataclass(frozen=True)
+class DesktopExperimentDraft:
+    experiment_id: str
+    yaml_text: str
+    metadata: dict[str, Any]
+    updated_at: str | None = None
 
 
 def list_desktop_templates(
@@ -161,6 +170,37 @@ def list_recent_experiments(
             )
         )
     return sorted(items, key=lambda item: item.updated_at or "", reverse=True)
+
+
+def load_latest_experiment_draft(
+    project_root: Path | str,
+    draft_root: Path | str | None = None,
+) -> DesktopExperimentDraft | None:
+    """Load the most recently updated desktop draft, returning scrubbed YAML."""
+    recent = list_recent_experiments(project_root=project_root, draft_root=draft_root)
+    if not recent:
+        return None
+    item = recent[0]
+    root = _draft_root(project_root, draft_root).resolve()
+    yaml_path = Path(item.yaml_path).expanduser().resolve()
+    metadata_path = Path(item.metadata_path).expanduser().resolve()
+    _ensure_relative_to(yaml_path, root)
+    _ensure_relative_to(metadata_path, root)
+    if not yaml_path.is_file():
+        return None
+
+    data = _read_yaml_mapping(yaml_path)
+    metadata = _read_json_mapping(metadata_path)
+    scrubbed_yaml = _dump_yaml(scrub_secret_values(data))
+    scrubbed_metadata = scrub_secret_values(metadata)
+    if not isinstance(scrubbed_metadata, dict):
+        scrubbed_metadata = {}
+    return DesktopExperimentDraft(
+        experiment_id=item.experiment_id,
+        yaml_text=scrubbed_yaml,
+        metadata=scrubbed_metadata,
+        updated_at=item.updated_at,
+    )
 
 
 def list_runs(

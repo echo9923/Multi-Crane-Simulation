@@ -9,7 +9,13 @@ import type {
   DatasetListResponse,
   DesktopConfigTextResponse,
   DesktopEnvironmentResponse,
+  DesktopExperimentDraftLatestResponse,
   DesktopExperimentDraftResponse,
+  DesktopLLMConnectivityTestRequest,
+  DesktopLLMConnectivityTestResponse,
+  DesktopLLMProvidersResponse,
+  DesktopLLMProviderSummary,
+  DesktopLLMSecretSaveRequest,
   DesktopRecentExperimentsResponse,
   DesktopRunFilesResponse,
   DesktopRunsResponse,
@@ -30,7 +36,7 @@ function apiBase(): string {
 }
 
 async function request<T>(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   body?: unknown,
   init?: { signal?: AbortSignal },
@@ -124,6 +130,10 @@ export function listRecentExperiments(init?: { signal?: AbortSignal }) {
   return request<DesktopRecentExperimentsResponse>("GET", "/desktop/experiments/recent", undefined, init);
 }
 
+export function getLatestDesktopDraft(init?: { signal?: AbortSignal }) {
+  return request<DesktopExperimentDraftLatestResponse>("GET", "/desktop/experiments/draft/latest", undefined, init);
+}
+
 export function listDesktopRuns(init?: { signal?: AbortSignal }) {
   return request<DesktopRunsResponse>("GET", "/desktop/runs", undefined, init);
 }
@@ -134,6 +144,30 @@ export function listDesktopRunFiles(episodeId: string, init?: { signal?: AbortSi
 
 export function getDesktopEnvironment(init?: { signal?: AbortSignal }) {
   return request<DesktopEnvironmentResponse>("GET", "/desktop/environment", undefined, init);
+}
+
+export function listDesktopLLMProviders(init?: { signal?: AbortSignal }) {
+  return request<DesktopLLMProvidersResponse>("GET", "/desktop/llm/providers", undefined, init);
+}
+
+export function saveDesktopLLMProviderSecret(
+  provider: string,
+  payload: DesktopLLMSecretSaveRequest,
+  init?: { signal?: AbortSignal },
+) {
+  return request<DesktopLLMProviderSummary>("POST", `/desktop/llm/providers/${provider}/secret`, payload, init);
+}
+
+export function deleteDesktopLLMProviderSecret(provider: string, init?: { signal?: AbortSignal }) {
+  return request<DesktopLLMProviderSummary>("DELETE", `/desktop/llm/providers/${provider}/secret`, undefined, init);
+}
+
+export function testDesktopLLMProvider(
+  provider: string,
+  payload: DesktopLLMConnectivityTestRequest,
+  init?: { signal?: AbortSignal },
+) {
+  return request<DesktopLLMConnectivityTestResponse>("POST", `/desktop/llm/providers/${provider}/test`, payload, init);
 }
 
 export interface DownloadOpts {

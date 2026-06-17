@@ -60,6 +60,25 @@ def test_env_api_key_can_be_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resolved.persisted_summary.key_masked == "mk-e****3456"
 
 
+def test_local_settings_key_can_be_resolved_when_env_is_missing() -> None:
+    experiment = _experiment_with(
+        "siliconflow",
+        api_key=None,
+        api_key_env="SILICONFLOW_API_KEY",
+    )
+
+    resolved = resolve_provider_secrets(
+        experiment.llm,
+        env={},
+        local_api_key="sf-local-secret-123456",
+    )
+
+    assert resolved.runtime_secret.full_api_key == "sf-local-secret-123456"
+    assert resolved.persisted_summary.key_source == "local_settings"
+    assert resolved.persisted_summary.key_env_name is None
+    assert resolved.persisted_summary.key_masked == "sf-l****3456"
+
+
 @pytest.mark.parametrize("provider", [LLMProviderName.MOCK.value, LLMProviderName.REPLAY.value])
 def test_mock_and_replay_do_not_require_key(provider: str) -> None:
     experiment = _experiment_with(provider, api_key=None, api_key_env=None)
@@ -70,7 +89,14 @@ def test_mock_and_replay_do_not_require_key(provider: str) -> None:
     assert resolved.persisted_summary.key_source == "none"
 
 
-@pytest.mark.parametrize("provider", [LLMProviderName.DEEPSEEK.value, LLMProviderName.MINIMAX.value])
+@pytest.mark.parametrize(
+    "provider",
+    [
+        LLMProviderName.DEEPSEEK.value,
+        LLMProviderName.MINIMAX.value,
+        LLMProviderName.SILICONFLOW.value,
+    ],
+)
 def test_real_provider_missing_key_fails(provider: str) -> None:
     experiment = _experiment_with(provider, api_key=None, api_key_env=None)
 

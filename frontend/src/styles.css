@@ -595,6 +595,10 @@
     gap: 5px;
   }
 
+  .workbench-field-wide {
+    grid-column: 1 / -1;
+  }
+
   .workbench-field-heading {
     min-width: 0;
     display: flex;
@@ -612,6 +616,18 @@
   .workbench-field input,
   .workbench-field select {
     width: 100%;
+    min-width: 0;
+  }
+
+  .workbench-inline-secret {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) auto auto;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .workbench-inline-secret input {
     min-width: 0;
   }
 
@@ -790,6 +806,12 @@
     .workbench-yaml-panel {
       position: static;
       grid-template-rows: auto auto minmax(360px, 52vh);
+    }
+  }
+
+  @media (max-width: 720px) {
+    .workbench-inline-secret {
+      grid-template-columns: 1fr;
     }
   }
 

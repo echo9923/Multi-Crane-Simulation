@@ -138,7 +138,7 @@ def test_dataset_models_and_error_codes_are_stable() -> None:
         )
 
 
-def test_api_schema_does_not_define_secret_payload_fields() -> None:
+def test_api_response_schema_does_not_define_secret_payload_fields() -> None:
     from backend.app.api import schemas
 
     schema_text = json.dumps(
@@ -148,15 +148,35 @@ def test_api_schema_does_not_define_secret_payload_fields() -> None:
             if isinstance(model, type)
             and hasattr(model, "model_json_schema")
             and getattr(model, "__module__", "") == schemas.__name__
+            and name.endswith("Response")
         },
         sort_keys=True,
     ).lower()
 
     for forbidden in [
-        "api_key",
         "authorization",
         "provider_secret",
         "raw_api_key",
         "resolved_full_api_key",
     ]:
         assert forbidden not in schema_text
+    assert '"api_key"' not in schema_text
+
+
+def test_api_key_request_fields_are_limited_to_desktop_llm_settings() -> None:
+    from backend.app.api import schemas
+
+    request_models_with_api_key = {
+        name
+        for name, model in vars(schemas).items()
+        if isinstance(model, type)
+        and hasattr(model, "model_json_schema")
+        and getattr(model, "__module__", "") == schemas.__name__
+        and name.endswith("Request")
+        and "api_key" in json.dumps(model.model_json_schema(), sort_keys=True).lower()
+    }
+
+    assert request_models_with_api_key == {
+        "DesktopLLMConnectivityTestRequest",
+        "DesktopLLMSecretSaveRequest",
+    }

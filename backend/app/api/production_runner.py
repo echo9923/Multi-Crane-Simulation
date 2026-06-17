@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping, Optional, Sequence
 
+from backend.app.api.desktop_context import resolve_desktop_project_root
+from backend.app.api.desktop_llm_settings import resolve_local_api_key
 from backend.app.core.secret_resolver import resolve_provider_secrets
 from backend.app.schemas.command import ExecutedCommand, ParsedCommand
 from backend.app.schemas.config import (
@@ -75,6 +77,7 @@ def build_production_episode_runner(
     episode_id: str,
     resolved_config: Any,
     websocket: Any = None,
+    project_root: Any = None,
 ) -> "ProductionEpisodeRunner":
     scenario = _scenario_config_from_resolved(resolved_config)
     experiment = ExperimentConfig.model_validate(_mapping_section(resolved_config, "experiment"))
@@ -89,7 +92,7 @@ def build_production_episode_runner(
     weather_state, visibility_context = weather.update(0.0)
 
     llm_config = experiment.llm
-    provider = _provider_with_runtime_secret(llm_config)
+    provider = _provider_with_runtime_secret(llm_config, project_root=project_root)
     operator_profiles = _assign_operator_profiles(
         experiment=experiment,
         crane_ids=[config.crane_id for config in crane_configs],
@@ -589,11 +592,27 @@ class RuntimeSecretProvider:
         )
 
 
-def _provider_with_runtime_secret(llm_config: LLMConfig) -> LLMProvider:
+def _provider_with_runtime_secret(
+    llm_config: LLMConfig,
+    *,
+    project_root: Any = None,
+) -> LLMProvider:
     provider = create_llm_provider(llm_config)
-    if llm_config.provider not in {LLMProviderName.DEEPSEEK, LLMProviderName.MINIMAX}:
+    if llm_config.provider not in {
+        LLMProviderName.DEEPSEEK,
+        LLMProviderName.MINIMAX,
+        LLMProviderName.SILICONFLOW,
+    }:
         return provider
-    secret_resolution = resolve_provider_secrets(llm_config)
+    secret_resolution = resolve_provider_secrets(
+        llm_config,
+        local_api_key=resolve_local_api_key(
+            resolve_desktop_project_root(SimpleNamespace(project_root=project_root))
+            if project_root is not None
+            else resolve_desktop_project_root(SimpleNamespace()),
+            provider=llm_config.provider,
+        ),
+    )
     return RuntimeSecretProvider(provider, secret_resolution.runtime_secret)
 
 

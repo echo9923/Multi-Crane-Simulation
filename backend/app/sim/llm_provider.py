@@ -163,6 +163,22 @@ class MiniMaxProvider:
         )
 
 
+class SiliconFlowProvider:
+    provider_name = LLMProviderName.SILICONFLOW
+    default_base_url = "https://api.siliconflow.cn/v1"
+
+    def __init__(self, *, http_client: Optional[Any] = None) -> None:
+        self._http_client = http_client or UrllibHTTPClient()
+
+    def generate(self, request: ProviderRequest) -> ProviderResult:
+        return _generate_chat_completion(
+            provider_name=self.provider_name,
+            default_base_url=self.default_base_url,
+            http_client=self._http_client,
+            request=request,
+        )
+
+
 class UrllibHTTPResponse:
     def __init__(self, *, status_code: int, payload: Dict[str, Any]) -> None:
         self.status_code = status_code
@@ -218,6 +234,8 @@ def create_llm_provider(
         return DeepSeekProvider()
     if config.provider is LLMProviderName.MINIMAX:
         return MiniMaxProvider()
+    if config.provider is LLMProviderName.SILICONFLOW:
+        return SiliconFlowProvider()
     raise ProviderAPIError(f"unsupported LLM provider: {config.provider}")
 
 

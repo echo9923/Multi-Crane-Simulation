@@ -7,6 +7,8 @@ from typing import Any, Callable, Optional
 
 from backend.app.core.config_loader import apply_overrides, load_demo_config
 from backend.app.core.config_resolver import resolve_config
+from backend.app.core.secret_resolver import resolve_provider_secrets
+from backend.app.api.desktop_llm_settings import resolve_local_api_key
 from backend.app.schemas.config import DatasetConfig, ExperimentConfig, ScenarioConfig
 from backend.app.schemas.recorder import SimFrame
 from backend.app.schemas.scheduler import EpisodeStatus
@@ -38,8 +40,14 @@ class EpisodeHandle:
 
 
 class EpisodeService:
-    def __init__(self, *, runner_factory: RunnerFactory) -> None:
+    def __init__(
+        self,
+        *,
+        runner_factory: RunnerFactory,
+        project_root: Optional[Path] = None,
+    ) -> None:
         self.runner_factory = runner_factory
+        self.project_root = project_root
         self.handles: dict[str, EpisodeHandle] = {}
 
     def start_episode(self, request: EpisodeStartRequest) -> EpisodeStartResponse:
@@ -190,7 +198,15 @@ class EpisodeService:
                 scenario, experiment, dataset = _load_inline_start_config(request)
             if experiment is None:
                 raise ValueError("episode start config must include experiment section")
-            return resolve_config(scenario, experiment, dataset)
+            return resolve_config(
+                scenario,
+                experiment,
+                dataset,
+                provider_summary=_provider_summary_for_desktop(
+                    experiment,
+                    project_root=self.project_root,
+                ),
+            )
         except ApiException:
             raise
         except Exception as exc:
@@ -326,6 +342,18 @@ def default_runner_factory(*, episode_id: str, resolved_config: Any) -> Any:
         episode_id=episode_id,
         resolved_config=resolved_config,
     )
+
+
+def _provider_summary_for_desktop(
+    experiment: ExperimentConfig,
+    *,
+    project_root: Optional[Path],
+) -> Any:
+    if project_root is None:
+        return None
+    llm = experiment.llm
+    local_api_key = resolve_local_api_key(project_root, provider=llm.provider)
+    return resolve_provider_secrets(llm, local_api_key=local_api_key).persisted_summary
 
 
 def local_runner_factory(*, episode_id: str, resolved_config: Any) -> Any:

@@ -2,8 +2,15 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.venv/
+venv/
 runs/
 .worktrees/
 .desktop/
+.claude/
+.env
+.env.*
+!.env.example
+!.env.*.example
 .env.local
 .env.*.local

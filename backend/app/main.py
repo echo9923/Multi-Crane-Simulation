@@ -5,6 +5,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.app.api.desktop_context import resolve_desktop_project_root
 from backend.app.api.errors import register_exception_handlers
 from backend.app.api.routes_desktop import router as desktop_router
 from backend.app.api.routes_datasets import router as datasets_router
@@ -25,7 +26,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1):\d+$",
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["content-type"],
     )
     register_exception_handlers(app)
@@ -59,6 +60,7 @@ def _production_runner_factory(app: FastAPI):
             episode_id=episode_id,
             resolved_config=resolved_config,
             websocket=ApiWebSocketAdapter(app.state.websocket_manager),
+            project_root=resolve_desktop_project_root(app),
         )
 
     return factory

@@ -6,11 +6,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
 from backend.app.schemas.scheduler import EpisodeStatus, FrameStepResult
 from backend.app.tests.test_config_schema import FIXTURE_DIR, load_fixture
+
+
+@pytest.fixture(autouse=True)
+def _deepseek_env_for_demo_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-secret-123456")
 
 
 @dataclass
@@ -60,6 +66,7 @@ class FakeRunnerFactory:
         self.created.append(
             {
                 "episode_id": episode_id,
+                "resolved_config": resolved_config,
                 "resolved_config_hash": resolved_config.resolved_config_hash,
                 "runner": runner,
             }
@@ -67,9 +74,15 @@ class FakeRunnerFactory:
         return runner
 
 
-def _client_with_factory(factory: FakeRunnerFactory) -> TestClient:
+def _client_with_factory(
+    factory: FakeRunnerFactory,
+    *,
+    project_root: Path | None = None,
+) -> TestClient:
     app = create_app()
     app.state.runner_factory = factory
+    if project_root is not None:
+        app.state.project_root = project_root
     return TestClient(app)
 
 
@@ -128,6 +141,76 @@ def test_start_episode_accepts_inline_config_payload() -> None:
     assert payload["data"]["status"] == "running"
     assert payload["data"]["resolved_config_hash"]
     assert factory.created[0]["episode_id"] == "E-inline"
+
+
+def test_start_episode_uses_desktop_local_llm_secret_summary(tmp_path: Path) -> None:
+    from backend.app.api.desktop_llm_settings import save_provider_secret
+    from backend.app.schemas.enums import LLMProviderName
+
+    save_provider_secret(
+        tmp_path,
+        provider=LLMProviderName.SILICONFLOW,
+        api_key="sf-local-secret-123456",
+    )
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory, project_root=tmp_path)
+    payload = _inline_payload("E-local-secret")
+    payload["experiment"]["llm"].update(
+        {
+            "provider": "siliconflow",
+            "model": "deepseek-ai/DeepSeek-V4-Flash",
+            "api_key": None,
+            "api_key_env": "SILICONFLOW_API_KEY",
+            "base_url": "https://api.siliconflow.cn/v1",
+        }
+    )
+
+    response = client.post("/episodes/start", json=payload)
+
+    assert response.status_code == 200, response.text
+    provider = factory.created[0]["resolved_config"].provider
+    assert provider.provider == "siliconflow"
+    assert provider.key_source == "local_settings"
+    assert provider.key_env_name is None
+    assert provider.key_masked == "sf-l****3456"
+    assert "sf-local-secret-123456" not in json.dumps(
+        factory.created[0]["resolved_config"].model_dump(mode="json"),
+        sort_keys=True,
+    )
+
+
+def test_start_episode_uses_cwd_local_llm_secret_when_project_root_state_is_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from backend.app.api.desktop_llm_settings import save_provider_secret
+    from backend.app.schemas.enums import LLMProviderName
+
+    monkeypatch.chdir(tmp_path)
+    save_provider_secret(
+        tmp_path,
+        provider=LLMProviderName.SILICONFLOW,
+        api_key="sf-cwd-secret-123456",
+    )
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory)
+    payload = _inline_payload("E-cwd-secret")
+    payload["experiment"]["llm"].update(
+        {
+            "provider": "siliconflow",
+            "model": "deepseek-ai/DeepSeek-V4-Flash",
+            "api_key": None,
+            "api_key_env": "SILICONFLOW_API_KEY",
+            "base_url": "https://api.siliconflow.cn/v1",
+        }
+    )
+
+    response = client.post("/episodes/start", json=payload)
+
+    assert response.status_code == 200, response.text
+    provider = factory.created[0]["resolved_config"].provider
+    assert provider.key_source == "local_settings"
+    assert provider.key_masked == "sf-c****3456"
 
 
 def test_start_episode_rejects_ambiguous_config_sources() -> None:
