@@ -5,12 +5,19 @@ describe("scrubSecrets", () => {
   it("masks api_key / token / secret recursively, keeps the rest", () => {
     const out = scrubSecrets({
       experiment: { api_key: "sk-real", api_key_id: "id", model: "m" },
-      scenario: { token: "t", site: { name: "demo" } },
+      scenario: {
+        token: "t",
+        site: { name: "demo" },
+        context_over_tokens: 12000,
+        prompt_tokens: 12,
+      },
     }) as Record<string, Record<string, unknown>>;
     expect(out.experiment.api_key).toBe("***");
     expect(out.experiment.api_key_id).toBe("***");
     expect(out.experiment.model).toBe("m");
     expect(out.scenario.token).toBe("***");
+    expect(out.scenario.context_over_tokens).toBe(12000);
+    expect(out.scenario.prompt_tokens).toBe(12);
     expect((out.scenario.site as Record<string, unknown>).name).toBe("demo");
   });
 

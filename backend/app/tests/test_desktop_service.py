@@ -73,6 +73,39 @@ def test_render_template_yaml_applies_core_overrides(tmp_path: Path) -> None:
     assert parsed["experiment"]["llm"]["provider"] == "openai_compatible"
 
 
+def test_render_template_yaml_does_not_scrub_token_count_fields(tmp_path: Path) -> None:
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "demo.yaml").write_text(
+        "\n".join(
+            [
+                "experiment:",
+                "  llm:",
+                "    api_key: sk-real",
+                "    context:",
+                "      summarizer:",
+                "        trigger:",
+                "          context_over_tokens: 12000",
+                "    token_env: TOKEN_SECRET",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    text = render_template_yaml(
+        project_root=tmp_path,
+        template_id="demo",
+        core_overrides={},
+        template_dirs=[config_dir],
+    )
+    parsed = yaml.safe_load(text)
+    llm = parsed["experiment"]["llm"]
+
+    assert llm["api_key"] == "***"
+    assert llm["token_env"] == "***"
+    assert llm["context"]["summarizer"]["trigger"]["context_over_tokens"] == 12000
+
+
 def test_apply_config_patch_preserves_unmapped_yaml_fields() -> None:
     text = "scenario:\n  scenario_id: x\n  custom_field: keep\nexperiment:\n  sim:\n    duration_s: 10\n"
 
@@ -95,6 +128,8 @@ def test_scrub_secret_values_masks_nested_api_keys() -> None:
                     "password_env": "PASSWORD",
                     "secret_env": "SECRET",
                     "token_env": "TOKEN",
+                    "context_over_tokens": 12000,
+                    "prompt_tokens": 12,
                 }
             }
         }
@@ -108,6 +143,8 @@ def test_scrub_secret_values_masks_nested_api_keys() -> None:
     assert llm["password_env"] == "***"
     assert llm["secret_env"] == "***"
     assert llm["token_env"] == "***"
+    assert llm["context_over_tokens"] == 12000
+    assert llm["prompt_tokens"] == 12
 
 
 def test_save_experiment_draft_never_writes_raw_secret(tmp_path: Path) -> None:

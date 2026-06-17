@@ -27,7 +27,10 @@ EXPERIMENT_DRAFT_METADATA_FILENAME = "draft.meta.json"
 DEFAULT_RUN_ROOTS = ("runs",)
 KNOWN_ARTIFACT_DIRS = frozenset({"config", "metadata", "logs", "data", "visual", "replay"})
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
-_SECRET_KEY_RE = re.compile(r"(api[_-]?key|token|secret|authorization|password)", re.IGNORECASE)
+_SECRET_KEY_RE = re.compile(
+    r"(^|[_-])(api[_-]?key|apikey|token|secret|authorization|password)([_-]|$)",
+    re.IGNORECASE,
+)
 _VISIBLE_SECRET_REF_KEYS = frozenset({"api_key_env"})
 
 
