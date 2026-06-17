@@ -1,59 +1,38 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  findAvailablePort,
-  isPathInsideAllowedRoots,
-  rendererIndexUrl,
-  resolveProjectRoot,
-  resolvePythonPath,
-  resolveResourceRoot,
-  startBackend,
-  startRendererServer,
-  waitForHealth,
-  withRuntimeScript,
-} from "./backend.mjs";
+const { app, BrowserWindow, ipcMain, shell } = require("electron/main");
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 
-const electronRoot = path.dirname(fileURLToPath(import.meta.url));
+const electronRoot = __dirname;
 const frontendRoot = path.resolve(electronRoot, "..");
-const desktopRoots = {
-  electronRoot,
-  isPackaged: app.isPackaged,
-  resourcesPath: process.resourcesPath,
-};
-const resourceRoot = resolveResourceRoot(desktopRoots);
-const projectRoot = resolveProjectRoot(desktopRoots);
-const preloadPath = path.join(electronRoot, "preload.mjs");
+const preloadPath = path.join(electronRoot, "preload.cjs");
 const backendLogs = [];
 
+let backendHelpers;
 let backendChild;
 let backendPort;
 let desktopUserDataPath;
 let mainWindow;
+let projectRoot;
 let rendererServer;
+let resourceRoot;
 let isQuitting = false;
-
-ipcMain.handle("desktop:openPath", async (_event, targetPath) => {
-  if (typeof targetPath !== "string" || targetPath.trim().length === 0) {
-    return { ok: false, error: "Path must be a non-empty string." };
-  }
-
-  const allowedRoots = [projectRoot, desktopUserDataPath].filter(Boolean);
-  const resolvedTargetPath = path.resolve(targetPath);
-  if (!isPathInsideAllowedRoots(resolvedTargetPath, allowedRoots)) {
-    return { ok: false, error: "path is outside allowed roots" };
-  }
-
-  const error = await shell.openPath(resolvedTargetPath);
-  return error ? { ok: false, error } : { ok: true };
-});
 
 app.whenReady().then(async () => {
   try {
+    backendHelpers = await loadBackendHelpers();
+    const desktopRoots = {
+      electronRoot,
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+    };
+    resourceRoot = backendHelpers.resolveResourceRoot(desktopRoots);
+    projectRoot = backendHelpers.resolveProjectRoot(desktopRoots);
+    registerIpcHandlers();
+
     desktopUserDataPath = app.getPath("userData");
-    const port = await findAvailablePort();
-    const pythonPath = resolvePythonPath({
+    const port = await backendHelpers.findAvailablePort();
+    const pythonPath = backendHelpers.resolvePythonPath({
       fallbackProjectRoot: process.env.MULTI_CRANE_DEV_PROJECT_ROOT,
       projectRoot,
       resourceRoot,
@@ -62,7 +41,7 @@ app.whenReady().then(async () => {
     });
     backendPort = port;
 
-    backendChild = startBackend({
+    backendChild = backendHelpers.startBackend({
       projectRoot,
       pythonPath,
       port,
@@ -70,7 +49,7 @@ app.whenReady().then(async () => {
     });
     trackBackendExit(backendChild);
 
-    await waitForHealth({ port });
+    await backendHelpers.waitForHealth({ port });
     mainWindow = await createMainWindow(port);
   } catch (error) {
     await stopRendererServer();
@@ -99,6 +78,27 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+
+async function loadBackendHelpers() {
+  return import(pathToFileURL(path.join(electronRoot, "backend.mjs")).href);
+}
+
+function registerIpcHandlers() {
+  ipcMain.handle("desktop:openPath", async (_event, targetPath) => {
+    if (typeof targetPath !== "string" || targetPath.trim().length === 0) {
+      return { ok: false, error: "Path must be a non-empty string." };
+    }
+
+    const allowedRoots = [projectRoot, desktopUserDataPath].filter(Boolean);
+    const resolvedTargetPath = path.resolve(targetPath);
+    if (!backendHelpers.isPathInsideAllowedRoots(resolvedTargetPath, allowedRoots)) {
+      return { ok: false, error: "path is outside allowed roots" };
+    }
+
+    const error = await shell.openPath(resolvedTargetPath);
+    return error ? { ok: false, error } : { ok: true };
+  });
+}
 
 async function createMainWindow(port) {
   const window = new BrowserWindow({
@@ -149,12 +149,12 @@ async function loadBuiltIndex(window, port) {
   const distPath = path.join(frontendRoot, "dist");
   const indexPath = path.join(distPath, "index.html");
   const html = await fs.readFile(indexPath, "utf8");
-  const injectedHtml = withRuntimeScript(html, { port });
+  const injectedHtml = backendHelpers.withRuntimeScript(html, { port });
 
   if (!rendererServer) {
-    rendererServer = await startRendererServer({ distRoot: distPath, desktopIndexHtml: injectedHtml });
+    rendererServer = await backendHelpers.startRendererServer({ distRoot: distPath, desktopIndexHtml: injectedHtml });
   }
-  await window.loadURL(rendererIndexUrl(rendererServer.port));
+  await window.loadURL(backendHelpers.rendererIndexUrl(rendererServer.port));
 }
 
 function trackBackendExit(child) {

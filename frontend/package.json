@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "main": "electron/main.mjs",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -12,8 +12,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "e2e": "playwright test",
-    "desktop": "electron electron/main.mjs",
-    "desktop:dev": "electron electron/dev.mjs",
+    "desktop": "electron electron/main.cjs",
+    "desktop:dev": "electron electron/dev.cjs",
     "desktop:pack": "npm run build && electron-builder --mac --dir",
     "desktop:dist": "npm run build && electron-builder --mac"
   },
@@ -98,6 +98,11 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "extendInfo": {
+        "LSEnvironment": {
+          "ELECTRON_RUN_AS_NODE": ""
+        }
+      },
       "target": [
         "dir",
         "dmg"

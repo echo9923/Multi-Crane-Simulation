@@ -152,10 +152,28 @@ describe("electron backend helpers", () => {
     ).toBe("/repo/.venv/bin/python");
   });
 
+  it("uses CommonJS Electron entrypoints for reliable Electron API loading", async () => {
+    const entrypoints = ["main.cjs", "preload.cjs"];
+
+    for (const entrypoint of entrypoints) {
+      const source = await fs.readFile(path.resolve(process.cwd(), "electron", entrypoint), "utf8");
+
+      expect(source).not.toMatch(/import\s+\{[^}]+\}\s+from\s+["']electron["']/);
+    }
+    expect(await fs.readFile(path.resolve(process.cwd(), "electron", "main.cjs"), "utf8")).toContain(
+      'require("electron/main")',
+    );
+    expect(await fs.readFile(path.resolve(process.cwd(), "electron", "preload.cjs"), "utf8")).toContain(
+      'require("electron/renderer")',
+    );
+  });
+
   it("configures Electron Builder scripts and resource inclusion rules", () => {
     expect(packageJson.scripts["desktop:pack"]).toBe("npm run build && electron-builder --mac --dir");
     expect(packageJson.scripts["desktop:dist"]).toBe("npm run build && electron-builder --mac");
-    expect(packageJson.main).toBe("electron/main.mjs");
+    expect(packageJson.scripts.desktop).toBe("electron electron/main.cjs");
+    expect(packageJson.scripts["desktop:dev"]).toBe("electron electron/dev.cjs");
+    expect(packageJson.main).toBe("electron/main.cjs");
     expect(packageJson.devDependencies).toHaveProperty("electron-builder");
 
     expect(packageJson.build.files).toEqual(
@@ -202,6 +220,7 @@ describe("electron backend helpers", () => {
     )) {
       expect(projectResource.filter).toEqual(expect.arrayContaining(requiredProjectExclusions));
     }
+    expect(packageJson.build.mac.extendInfo.LSEnvironment.ELECTRON_RUN_AS_NODE).toBe("");
   });
 
   it("allows paths inside configured safe roots only", () => {
