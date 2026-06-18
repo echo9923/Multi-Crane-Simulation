@@ -6,6 +6,7 @@ import {
   escapeJsonForInlineScript,
   isPathInsideAllowedRoots,
   makeBackendLaunch,
+  resolveDataRoot,
   resolveProjectRoot,
   resolvePythonPath,
   resolveResourceRoot,
@@ -61,6 +62,23 @@ describe("electron backend helpers", () => {
         resourcesPath,
       }),
     ).toBe(path.posix.join(resourcesPath, "project"));
+  });
+
+  it("resolves packaged writable data root from Electron userData", () => {
+    expect(
+      resolveDataRoot({
+        isPackaged: true,
+        projectRoot: "/Applications/Multi Crane.app/Contents/Resources/project",
+        userDataPath: "/Users/alice/Library/Application Support/Multi Crane Workbench",
+      }),
+    ).toBe("/Users/alice/Library/Application Support/Multi Crane Workbench");
+    expect(
+      resolveDataRoot({
+        isPackaged: false,
+        projectRoot: "/repo",
+        userDataPath: "/Users/alice/Library/Application Support/Multi Crane Workbench",
+      }),
+    ).toBe("/repo");
   });
 
   it("resolves platform-specific venv python path", () => {
@@ -247,7 +265,27 @@ describe("electron backend helpers", () => {
       "--port",
       "8765",
     ]);
+    expect(launch.cwd).toBe("/repo");
     expect(launch.env.MULTI_CRANE_BACKEND_PORT).toBe("8765");
+    expect(launch.env.MULTI_CRANE_PROJECT_ROOT).toBe("/repo");
+    expect(launch.env.MULTI_CRANE_DATA_ROOT).toBe("/repo");
+  });
+
+  it("launches packaged backend from a writable data root while importing packaged project code", () => {
+    const launch = makeBackendLaunch({
+      projectRoot: "C:\\Program Files\\Multi Crane\\resources\\project",
+      dataRoot: "C:\\Users\\Alice\\AppData\\Roaming\\Multi Crane Workbench",
+      pythonPath: "C:\\Program Files\\Multi Crane\\resources\\.venv\\Scripts\\python.exe",
+      port: 8765,
+    });
+
+    expect(launch.cwd).toBe("C:\\Users\\Alice\\AppData\\Roaming\\Multi Crane Workbench");
+    expect(launch.env.MULTI_CRANE_PROJECT_ROOT).toBe("C:\\Program Files\\Multi Crane\\resources\\project");
+    expect(launch.env.MULTI_CRANE_DATA_ROOT).toBe("C:\\Users\\Alice\\AppData\\Roaming\\Multi Crane Workbench");
+    expect(launch.env.PYTHONPATH).toBeDefined();
+    expect(launch.env.PYTHONPATH!.split(path.delimiter)).toContain(
+      "C:\\Program Files\\Multi Crane\\resources\\project",
+    );
   });
 
   it("injects desktop runtime config into index html", () => {

@@ -42,6 +42,7 @@ from backend.app.sim.recorder import (
     build_sim_frame,
     init_run_directory,
     write_episode_summary,
+    _replace_file_with_fallback,
 )
 from backend.app.api.production_runner import ProductionRecorderAdapter
 from backend.app.tests.test_config_schema import load_fixture
@@ -1190,6 +1191,50 @@ def test_visual_frame_writer_roundtrips_frames_and_manifest(tmp_path: Path) -> N
     assert SimFrame.model_validate(frame_payload).episode_id == "episode-001"
     assert manifest_payload["episode_status"] == "completed"
     assert manifest_payload["frame_count"] == 1
+
+
+def test_replace_file_with_fallback_copies_when_replace_is_denied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path_file = tmp_path / ".trajectories.parquet.tmp"
+    output_path = tmp_path / "trajectories.parquet"
+    tmp_path_file.write_bytes(b"parquet bytes")
+
+    def deny_replace(self: Path, target: Path) -> Path:
+        raise PermissionError("replace denied by Windows file lock policy")
+
+    monkeypatch.setattr(Path, "replace", deny_replace)
+
+    _replace_file_with_fallback(tmp_path_file, output_path)
+
+    assert output_path.read_bytes() == b"parquet bytes"
+    assert not tmp_path_file.exists()
+
+
+def test_replace_file_with_fallback_succeeds_when_tmp_cleanup_is_denied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path_file = tmp_path / ".trajectories.parquet.tmp"
+    output_path = tmp_path / "trajectories.parquet"
+    tmp_path_file.write_bytes(b"parquet bytes")
+
+    def deny_replace(self: Path, target: Path) -> Path:
+        raise PermissionError("replace denied by Windows file lock policy")
+
+    def deny_unlink(self: Path, missing_ok: bool = False) -> None:
+        if self == tmp_path_file:
+            raise PermissionError("tmp cleanup denied by Windows file lock policy")
+        return None
+
+    monkeypatch.setattr(Path, "replace", deny_replace)
+    monkeypatch.setattr(Path, "unlink", deny_unlink)
+
+    _replace_file_with_fallback(tmp_path_file, output_path)
+
+    assert output_path.read_bytes() == b"parquet bytes"
+    assert tmp_path_file.exists()
 
 
 def test_build_episode_summary_computes_task_risk_llm_and_quality_metrics() -> None:

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pyarrow.parquet as pq
+import pytest
 
 from backend.app.core.config_loader import load_demo_config
 from backend.app.core.config_resolver import resolve_config
+from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.scheduler import EpisodeStatus
 from backend.app.tests.test_config_schema import FIXTURE_DIR
 
@@ -158,6 +161,20 @@ def test_production_runner_uses_tasks_observations_llm_safety_and_recorder(
     assert (run_dir / "visual" / "episode_manifest.json").is_file()
 
 
+def test_production_runner_exposes_episode_run_dir_before_first_frame(
+    tmp_path: Path,
+) -> None:
+    from backend.app.api.production_runner import build_production_episode_runner
+
+    runner = build_production_episode_runner(
+        episode_id="E-start-path",
+        resolved_config=_production_smoke_config(tmp_path),
+    )
+
+    assert runner.recorder.run_dir == tmp_path / "E-start-path"
+    assert runner.recorder.layout is None
+
+
 def test_production_runner_wraps_siliconflow_provider_with_runtime_secret(
     tmp_path: Path,
 ) -> None:
@@ -223,3 +240,206 @@ def test_production_runner_runtime_secret_falls_back_to_cwd_project_root(
 
     assert isinstance(provider, RuntimeSecretProvider)
     assert provider.runtime_secret.full_api_key == "sf-cwd-secret-123456"
+
+
+def test_production_runner_rejects_unreachable_manual_tasks_instead_of_empty_queues(
+    tmp_path: Path,
+) -> None:
+    from backend.app.api.production_runner import build_production_episode_runner
+    from backend.app.sim.task_generation import TaskGenerationError
+
+    scenario, experiment, dataset = load_demo_config(
+        FIXTURE_DIR / "demo_valid.yaml",
+        overrides={
+            "scenario": {
+                "layout": {"mode": "manual", "num_cranes": 1},
+                "cranes": [
+                    {
+                        "crane_id": "C1",
+                        "model_id": "generic_flat_top_55m",
+                        "base": [0, 0, 0],
+                        "mast_height_m": 40,
+                        "theta_init_deg": 0,
+                        "slew": {"mode": "continuous"},
+                    },
+                ],
+                "site": {
+                    "boundary": {
+                        "x_min": -100,
+                        "x_max": 100,
+                        "y_min": -100,
+                        "y_max": 100,
+                        "z_min": 0,
+                        "z_max": 80,
+                    },
+                    "forbidden_zones": [],
+                    "material_zones": [
+                        {
+                            "zone_id": "ground",
+                            "type": "box",
+                            "center": [12, 0, 0],
+                            "size": [6, 6, 0.4],
+                            "surface_z_m": 0,
+                            "load_types": ["rebar_bundle"],
+                        }
+                    ],
+                    "work_zones": [
+                        {
+                            "zone_id": "too_high_floor",
+                            "type": "box",
+                            "center": [18, 0, 39],
+                            "size": [6, 6, 0.4],
+                            "surface_z_m": 39,
+                            "accepted_load_types": ["rebar_bundle"],
+                        }
+                    ],
+                },
+                "tasks": {
+                    "generation_mode": "manual",
+                    "manual_tasks": [
+                        {
+                            "task_id": "T_TOO_HIGH",
+                            "crane_id": "C1",
+                            "task_type": "easy_task",
+                            "pickup_zone_id": "ground",
+                            "dropoff_zone_id": "too_high_floor",
+                            "load_type": "rebar_bundle",
+                            "priority": "medium",
+                        }
+                    ],
+                    "num_tasks_per_crane": 1,
+                },
+            },
+            "experiment": {
+                "llm": {
+                    "provider": "mock",
+                    "model": "mock-production",
+                    "api_key_env": None,
+                    "api_key": None,
+                },
+                "output": {"run_root": str(tmp_path)},
+            },
+        },
+    )
+    assert experiment is not None
+    resolved = resolve_config(scenario, experiment, dataset)
+
+    with pytest.raises(TaskGenerationError) as exc_info:
+        build_production_episode_runner(
+            episode_id="E-unreachable",
+            resolved_config=resolved,
+        )
+
+    assert exc_info.value.reason == "point_height_unreachable"
+    assert exc_info.value.details["task_id"] == "T_TOO_HIGH"
+
+
+def test_multifloor_construction_demo_generates_visible_reachable_tasks() -> None:
+    from backend.app.api.production_runner import scenario_config_from_resolved
+    from backend.app.sim.layout_geometry import horizontal_distance
+    from backend.app.sim.task_generation import generate_task_queues
+
+    scenario, experiment, dataset = load_demo_config(
+        Path("configs/multifloor_construction_demo.yaml")
+    )
+    assert experiment is not None
+    resolved = resolve_config(scenario, experiment, dataset)
+    resolved_scenario = scenario_config_from_resolved(resolved)
+    cranes = [
+        CraneConfig.model_validate(crane)
+        for crane in resolved.layout.resolved_cranes
+    ]
+
+    result = generate_task_queues(
+        resolved_scenario,
+        cranes,
+        seed=int(resolved.seeds.task),
+    )
+
+    assert len(result.tasks) >= 8
+    assert {queue.crane_id: len(queue.tasks) for queue in result.queues} == {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 2,
+    }
+    crane_by_id = {crane.crane_id: crane for crane in cranes}
+    assert {
+        task.dropoff.floor_id
+        for task in result.tasks
+        if task.dropoff.floor_id is not None
+    } >= {"floor_03", "floor_05", "roof"}
+    visible_slew_deltas: list[float] = []
+    for task in result.tasks:
+        crane = crane_by_id[task.crane_id]
+        for point in (task.pickup, task.dropoff):
+            radius = horizontal_distance(crane.base, point.as_xyz())
+            assert crane.trolley_r_min_m <= radius <= crane.trolley_r_max_m
+            assert crane.hook_h_min_world_m <= point.hook_target_z_m <= crane.hook_h_max_world_m
+        pickup_angle = math.atan2(
+            task.pickup.y - crane.base[1],
+            task.pickup.x - crane.base[0],
+        )
+        dropoff_angle = math.atan2(
+            task.dropoff.y - crane.base[1],
+            task.dropoff.x - crane.base[0],
+        )
+        visible_slew_deltas.append(
+            abs(math.atan2(math.sin(dropoff_angle - pickup_angle), math.cos(dropoff_angle - pickup_angle)))
+        )
+    assert max(visible_slew_deltas) >= math.radians(35)
+
+
+def test_production_runner_multifloor_demo_records_task_payloads(tmp_path: Path) -> None:
+    from backend.app.api.production_runner import build_production_episode_runner
+
+    scenario, experiment, dataset = load_demo_config(
+        Path("configs/multifloor_construction_demo.yaml"),
+        overrides={
+            "experiment": {
+                "sim": {
+                    "duration_s": 8.0,
+                    "min_duration_s": 0.0,
+                    "stop_when_all_tasks_done": False,
+                    "llm_decision_interval_s": 0.5,
+                },
+                "llm": {
+                    "provider": "mock",
+                    "model": "mock-multifloor",
+                    "api_key_env": None,
+                    "api_key": None,
+                    "timeout_s": 1,
+                    "max_retries": 0,
+                },
+                "output": {"run_root": str(tmp_path)},
+            },
+        },
+    )
+    assert experiment is not None
+    resolved = resolve_config(scenario, experiment, dataset)
+    runner = build_production_episode_runner(
+        episode_id="E-multifloor",
+        resolved_config=resolved,
+    )
+
+    for _ in range(3):
+        result = runner.run_one_frame()
+        assert result.status is EpisodeStatus.RUNNING
+
+    runner.stop("test complete")
+    runner.run_one_frame()
+
+    run_dir = tmp_path / "E-multifloor"
+    summary = json.loads((run_dir / "metadata" / "episode_summary.json").read_text(encoding="utf-8"))
+    assert summary["num_tasks_total"] >= 8
+    frames = [
+        json.loads(line)
+        for line in (run_dir / "visual" / "frames.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert frames
+    assert any(frame["tasks"] for frame in frames)
+    manifest = json.loads((run_dir / "visual" / "episode_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["site"]["buildings"]
+    assert len(manifest["material_zones"]) >= 2
+    assert len(manifest["work_zones"]) >= 3

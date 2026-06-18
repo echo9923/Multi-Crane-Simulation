@@ -282,8 +282,11 @@ export function ConfigurationPage() {
   const setValidation = useWorkbenchStore((s) => s.setValidation);
   const setBusy = useWorkbenchStore((s) => s.setBusy);
 
-  const applyYamlToWorkbench = (text: string) => {
-    setYamlText(text);
+  const applyYamlToWorkbench = (
+    text: string,
+    opts: { markEpisodeStale?: boolean } = {},
+  ) => {
+    setYamlText(text, opts);
     setFormPatch(yamlToCoreForm(text));
   };
 
@@ -359,7 +362,7 @@ export function ConfigurationPage() {
         if (cancelled) return;
         if (latest.yaml_text) {
           skipNextAutosaveRef.current = true;
-          applyYamlToWorkbench(latest.yaml_text);
+          applyYamlToWorkbench(latest.yaml_text, { markEpisodeStale: false });
           setDraftStatus(
             latest.updated_at ? `已恢复上次草稿：${latest.updated_at}` : "已恢复上次草稿。",
           );
@@ -645,6 +648,49 @@ export function ConfigurationPage() {
   };
 
   const applyMultifloorPreset = () => {
+    const craneModelId = "demo_flat_top_75m";
+    const craneModels = [
+      {
+        model_id: craneModelId,
+        jib_length_m: 75,
+        counter_jib_length_m: 12,
+        mast_height_range_m: [40, 50],
+        max_load_t: 6,
+        max_load_radius_m: 15,
+        tip_load_t: 1.5,
+        rated_moment_t_m: 110,
+        slew_speed_max_deg_s: 2,
+        slew_acc_max_deg_s2: 0.8,
+        trolley_r_min_m: 5,
+        trolley_r_max_m: 72,
+        trolley_speed_max_m_s: 0.9,
+        trolley_acc_max_m_s2: 0.7,
+        cable_length_min_m: 2,
+        cable_length_max_m: 60,
+        hoist_speed_max_m_s: 1.2,
+        hoist_acc_max_m_s2: 0.8,
+        min_clearance_below_jib_m: 2,
+      },
+    ];
+    const cranePositions = [
+      [-24, -24],
+      [24, -24],
+      [-24, 30],
+      [24, 30],
+    ] as const;
+    const craneMastHeights = [40, 44, 46, 48];
+    const cranes = cranePositions.map(([baseX, baseY], index) => {
+      return {
+        craneId: `C${index + 1}`,
+        modelId: craneModelId,
+        baseX,
+        baseY,
+        baseZ: 0,
+        mastHeightM: craneMastHeights[index],
+        thetaInitDeg: [-135, -45, 135, 45][index],
+        slewMode: "continuous",
+      };
+    });
     const materialZones: BoxZoneFormItem[] = [
       {
         ...makeZone("mat", 0),
@@ -686,13 +732,48 @@ export function ConfigurationPage() {
         zoneRole: level === 7 ? "roof" : "floor_slab",
       };
     });
-    const manualTasks = form.cranes.flatMap((crane, index) => [
+    const buildings = [
+      {
+        building_id: "tower_a",
+        name: "Tower A",
+        footprint: [
+          [-32, -20],
+          [40, -20],
+          [40, 34],
+          [-32, 34],
+        ],
+        floors: 7,
+        floor_height_m: 3.6,
+        base_z_m: 0,
+      },
+    ];
+    const loadTypes = {
+      rebar_bundle: {
+        display_name: "Rebar bundle",
+        weight_range_t: [1.0, 1.4],
+        size_m: [4.0, 0.8, 0.8],
+        shape: "box_long",
+      },
+    };
+    const firstDropoffByCrane = [
+      "floor_03_dropoff",
+      "floor_05_dropoff",
+      "roof_dropoff",
+      "floor_05_dropoff",
+    ];
+    const secondDropoffByCrane = [
+      "floor_05_dropoff",
+      "roof_dropoff",
+      "floor_03_dropoff",
+      "roof_dropoff",
+    ];
+    const manualTasks = cranes.flatMap((crane, index) => [
       {
         task_id: `T_${crane.craneId}_001`,
         crane_id: crane.craneId,
         task_type: "easy_task",
         pickup_zone_id: index % 2 === 0 ? "ground_yard_1" : "truck_bed_1",
-        dropoff_zone_id: workZones[index % workZones.length].zoneId,
+        dropoff_zone_id: firstDropoffByCrane[index],
         load_type: "rebar_bundle",
         priority: "medium",
       },
@@ -701,7 +782,7 @@ export function ConfigurationPage() {
         crane_id: crane.craneId,
         task_type: "easy_task",
         pickup_zone_id: index % 2 === 0 ? "truck_bed_1" : "ground_yard_1",
-        dropoff_zone_id: workZones[(index + 1) % workZones.length].zoneId,
+        dropoff_zone_id: secondDropoffByCrane[index],
         load_type: "rebar_bundle",
         priority: index % 2 === 0 ? "medium" : "high",
       },
@@ -709,12 +790,20 @@ export function ConfigurationPage() {
     updateFormAndYaml({
       scenarioId: "multifloor_construction_demo",
       experimentId: "multifloor_construction_demo",
+      boundary: { xMin: -90, xMax: 90, yMin: -90, yMax: 90, zMin: 0, zMax: 70 },
+      craneModelId,
+      cranes,
       materialZones,
       workZones,
-      tasksPerCrane: Math.max(form.tasksPerCrane, 2),
+      numCranes: 4,
+      tasksPerCrane: 2,
       taskGenerationMode: "manual",
     }, {
+      "scenario.crane_models": craneModels,
+      "scenario.load_types": loadTypes,
+      "scenario.site.buildings": buildings,
       "scenario.tasks.manual_tasks": manualTasks,
+      "scenario.tasks.state_machine.safe_transport_height_m": 28,
     });
   };
 

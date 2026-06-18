@@ -197,6 +197,32 @@ describe("workbench run controls", () => {
       sim: { duration_s: 7200 },
       llm: { provider: "deepseek" },
     });
+    expect(screen.queryByText(/Config changed after this Episode started/)).toBeNull();
+  });
+
+  it("shows completed episodes as terminal instead of stale config control errors", async () => {
+    vi.restoreAllMocks();
+    installFetchMock();
+    useWorkbenchStore.getState().setCurrentEpisode({
+      ...startedEpisode,
+      status: "completed",
+    });
+    useWorkbenchStore.getState().setEpisodeState({
+      ...runningState,
+      status: "completed",
+      frame_index: 11,
+      time_s: 2.2,
+      terminal_reason: "completed",
+    });
+    useWorkbenchStore.getState().setYamlText(
+      minimalYaml.replace("duration_s: 7200", "duration_s: 3600"),
+    );
+
+    renderRunPage();
+
+    expect(screen.queryByText(/Config changed after this Episode started/)).toBeNull();
+    expect(screen.getByText(/运行已完成/)).toBeTruthy();
+    expect(screen.getAllByText("completed").length).toBeGreaterThan(0);
   });
 
   it("scrubs secrets for validation but preserves local start secrets", async () => {

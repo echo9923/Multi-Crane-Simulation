@@ -312,14 +312,41 @@ function parsedYamlText() {
   return yaml.load(yamlTextarea().value) as {
     scenario?: {
       load_types?: Record<string, unknown>;
+      crane_models?: Array<{
+        model_id?: string;
+        jib_length_m?: number;
+        trolley_r_min_m?: number;
+        trolley_r_max_m?: number;
+        cable_length_min_m?: number;
+      }>;
+      layout?: {
+        num_cranes?: number;
+      };
+      cranes?: Array<{
+        crane_id?: string;
+        model_id?: string;
+        base?: number[];
+        mast_height_m?: number;
+      }>;
       site?: {
-        material_zones?: Array<{ zone_id?: string; load_types?: string[] }>;
-        work_zones?: Array<{ zone_id?: string; accepted_load_types?: string[] }>;
+        material_zones?: Array<{
+          zone_id?: string;
+          center?: number[];
+          load_types?: string[];
+        }>;
+        work_zones?: Array<{
+          zone_id?: string;
+          center?: number[];
+          accepted_load_types?: string[];
+          surface_z_m?: number;
+          hook_target_offset_m?: number;
+        }>;
       };
       tasks?: {
         manual_tasks?: Array<{
           pickup_zone_id?: string;
           dropoff_zone_id?: string;
+          crane_id?: string;
           load_type?: string;
         }>;
       };
@@ -401,8 +428,22 @@ describe("workbench configuration flow", () => {
     );
     const loadTypeIds = new Set(Object.keys(parsed.scenario?.load_types ?? {}));
     const manualTasks = parsed.scenario?.tasks?.manual_tasks ?? [];
+    const craneModels = new Map(
+      parsed.scenario?.crane_models
+        ?.filter((model) => model.model_id)
+        .map((model) => [model.model_id, model]) ?? [],
+    );
+    const cranes = new Map(
+      parsed.scenario?.cranes
+        ?.filter((crane) => crane.crane_id)
+        .map((crane) => [crane.crane_id, crane]) ?? [],
+    );
 
-    expect(manualTasks.length).toBeGreaterThan(0);
+    expect(parsed.scenario?.layout?.num_cranes).toBe(4);
+    expect(parsed.scenario?.cranes ?? []).toHaveLength(4);
+    expect(manualTasks).toHaveLength(8);
+    expect(craneModels.get("demo_flat_top_75m")?.jib_length_m).toBe(75);
+    expect(craneModels.get("demo_flat_top_75m")?.trolley_r_max_m).toBe(72);
     for (const task of manualTasks) {
       const materialZone = materialZones.get(task.pickup_zone_id);
       const workZone = workZones.get(task.dropoff_zone_id);
@@ -411,8 +452,42 @@ describe("workbench configuration flow", () => {
       expect(loadTypeIds.has(task.load_type ?? "")).toBe(true);
       expect(materialZone?.load_types ?? []).toContain(task.load_type);
       expect(workZone?.accepted_load_types ?? []).toContain(task.load_type);
+      const crane = cranes.get(task.crane_id);
+      const model = craneModels.get(crane?.model_id);
+      expect(crane).toBeTruthy();
+      expect(model).toBeTruthy();
+      const base = crane?.base ?? [];
+      const pickupCenter = materialZone?.center ?? [];
+      const dropoffCenter = workZone?.center ?? [];
+      for (const center of [pickupCenter, dropoffCenter]) {
+        const radius = Math.hypot((center[0] ?? 0) - (base[0] ?? 0), (center[1] ?? 0) - (base[1] ?? 0));
+        expect(radius).toBeGreaterThanOrEqual(model?.trolley_r_min_m ?? 0);
+        expect(radius).toBeLessThanOrEqual(model?.trolley_r_max_m ?? 0);
+      }
+      const pickupAngle = Math.atan2(
+        (pickupCenter[1] ?? 0) - (base[1] ?? 0),
+        (pickupCenter[0] ?? 0) - (base[0] ?? 0),
+      );
+      const dropoffAngle = Math.atan2(
+        (dropoffCenter[1] ?? 0) - (base[1] ?? 0),
+        (dropoffCenter[0] ?? 0) - (base[0] ?? 0),
+      );
+      const deltaDeg =
+        Math.abs((((dropoffAngle - pickupAngle) * 180) / Math.PI + 540) % 360 - 180);
+      expect(deltaDeg).toBeGreaterThanOrEqual(35);
     }
-  });
+    for (const crane of parsed.scenario?.cranes ?? []) {
+      const model = craneModels.get(crane.model_id);
+      expect(model).toBeTruthy();
+      const hookMax =
+        (crane.mast_height_m ?? 0) - (model?.cable_length_min_m ?? Number.POSITIVE_INFINITY);
+      for (const workZone of workZones.values()) {
+        const hookTarget =
+          (workZone.surface_z_m ?? 0) + 0.8 + (workZone.hook_target_offset_m ?? 0.5);
+        expect(hookMax).toBeGreaterThanOrEqual(hookTarget);
+      }
+    }
+  }, 10000);
 
   it("restores the latest draft when the configuration page opens", async () => {
     installFetchMock({ latestDraftYaml });
@@ -545,7 +620,7 @@ describe("workbench configuration flow", () => {
       ),
     );
     expect(screen.getByText(/连通性测试成功/)).toBeTruthy();
-  });
+  }, 10000);
 
   it("saves and tests LLM provider secrets from settings", async () => {
     const fetchMock = vi.mocked(fetch);

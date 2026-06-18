@@ -23,6 +23,16 @@ export function resolveProjectRoot({ electronRoot, isPackaged = false, resources
   return resourceRoot;
 }
 
+export function resolveDataRoot({ isPackaged = false, projectRoot, userDataPath } = {}) {
+  if (isPackaged && typeof userDataPath === "string" && userDataPath.trim().length > 0) {
+    return userDataPath;
+  }
+  if (typeof projectRoot !== "string" || projectRoot.trim().length === 0) {
+    throw new Error("projectRoot is required to resolve the desktop data root.");
+  }
+  return projectRoot;
+}
+
 export function resolvePythonPath(options, legacyPlatform = process.platform) {
   if (typeof options === "string") {
     return venvPythonPath(options, legacyPlatform);
@@ -104,8 +114,12 @@ export function isPathInsideAllowedRoots(targetPath, allowedRoots) {
   });
 }
 
-export function makeBackendLaunch({ projectRoot, pythonPath, port }) {
+export function makeBackendLaunch({ projectRoot, dataRoot = projectRoot, pythonPath, port }) {
   const portString = String(port);
+  const pythonPathEntries = [
+    projectRoot,
+    process.env.PYTHONPATH,
+  ].filter((entry) => typeof entry === "string" && entry.trim().length > 0);
   return {
     command: pythonPath,
     args: [
@@ -117,10 +131,13 @@ export function makeBackendLaunch({ projectRoot, pythonPath, port }) {
       "--port",
       portString,
     ],
-    cwd: projectRoot,
+    cwd: dataRoot,
     env: {
       ...process.env,
       MULTI_CRANE_BACKEND_PORT: portString,
+      MULTI_CRANE_PROJECT_ROOT: projectRoot,
+      MULTI_CRANE_DATA_ROOT: dataRoot,
+      PYTHONPATH: pythonPathEntries.join(path.delimiter),
     },
   };
 }
@@ -156,8 +173,8 @@ export async function waitForHealth({ port, timeoutMs = 15000, intervalMs = 250,
   throw new Error(`Backend health check timed out after ${timeoutMs}ms: ${lastError?.message ?? "no response"}`);
 }
 
-export function startBackend({ projectRoot, pythonPath, port, onLog }) {
-  const launch = makeBackendLaunch({ projectRoot, pythonPath, port });
+export function startBackend({ projectRoot, dataRoot = projectRoot, pythonPath, port, onLog }) {
+  const launch = makeBackendLaunch({ projectRoot, dataRoot, pythonPath, port });
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
     env: launch.env,

@@ -6,7 +6,7 @@ from typing import Callable, TypeVar
 import yaml
 from fastapi import APIRouter, Request
 
-from .desktop_context import resolve_desktop_project_root
+from .desktop_context import resolve_desktop_data_root, resolve_desktop_project_root
 from .desktop_service import (
     apply_config_patch,
     environment_report,
@@ -95,7 +95,7 @@ def save_desktop_experiment_draft(
 ) -> ApiResponse:
     response = _translate_config_errors(
         lambda: save_experiment_draft(
-            project_root=_project_root(request),
+            project_root=_data_root(request),
             experiment_id=payload.experiment_id,
             yaml_text=payload.yaml_text,
             metadata=payload.metadata,
@@ -106,7 +106,7 @@ def save_desktop_experiment_draft(
 
 @router.get("/experiments/recent", response_model=ApiResponse)
 def get_recent_desktop_experiments(request: Request) -> ApiResponse:
-    experiments = list_recent_experiments(project_root=_project_root(request))
+    experiments = list_recent_experiments(project_root=_data_root(request))
     response = DesktopRecentExperimentsResponse(items=experiments)
     return ApiResponse(data=response.model_dump(mode="json"))
 
@@ -114,7 +114,7 @@ def get_recent_desktop_experiments(request: Request) -> ApiResponse:
 @router.get("/experiments/draft/latest", response_model=ApiResponse)
 def get_latest_desktop_experiment_draft(request: Request) -> ApiResponse:
     draft = _translate_config_errors(
-        lambda: load_latest_experiment_draft(project_root=_project_root(request))
+        lambda: load_latest_experiment_draft(project_root=_data_root(request))
     )
     response = DesktopExperimentDraftLatestResponse(
         experiment_id=draft.experiment_id if draft is not None else None,
@@ -127,17 +127,17 @@ def get_latest_desktop_experiment_draft(request: Request) -> ApiResponse:
 
 @router.get("/runs", response_model=ApiResponse)
 def get_desktop_runs(request: Request) -> ApiResponse:
-    runs = list_runs(project_root=_project_root(request))
+    runs = list_runs(project_root=_data_root(request))
     response = DesktopRunsResponse(items=runs)
     return ApiResponse(data=response.model_dump(mode="json"))
 
 
 @router.get("/runs/{episode_id}/files", response_model=ApiResponse)
 def get_desktop_run_files(request: Request, episode_id: str) -> ApiResponse:
-    project_root = _project_root(request)
-    run = _find_run_dir(project_root, episode_id)
+    data_root = _data_root(request)
+    run = _find_run_dir(data_root, episode_id)
     try:
-        files = list_run_files(run, project_root=project_root)
+        files = list_run_files(run, project_root=data_root)
     except ValueError as exc:
         raise _run_not_found(episode_id) from exc
     response = DesktopRunFilesResponse(episode_id=episode_id, files=files)
@@ -148,6 +148,7 @@ def get_desktop_run_files(request: Request, episode_id: str) -> ApiResponse:
 def get_desktop_environment(request: Request) -> ApiResponse:
     response = environment_report(
         project_root=_project_root(request),
+        data_root=_data_root(request),
         backend_port=_backend_port(request),
     )
     return ApiResponse(data=response.model_dump(mode="json"))
@@ -155,7 +156,7 @@ def get_desktop_environment(request: Request) -> ApiResponse:
 
 @router.get("/llm/providers", response_model=ApiResponse)
 def get_desktop_llm_providers(request: Request) -> ApiResponse:
-    summaries = list_provider_summaries(project_root=_project_root(request))
+    summaries = list_provider_summaries(project_root=_data_root(request))
     response = DesktopLLMProvidersResponse(
         items=[DesktopLLMProviderSummary(**summary.__dict__) for summary in summaries]
     )
@@ -170,7 +171,7 @@ def save_desktop_llm_provider_secret(
 ) -> ApiResponse:
     summary = _translate_llm_settings_errors(
         lambda: save_provider_secret(
-            project_root=_project_root(request),
+            project_root=_data_root(request),
             provider=provider_from_path(provider),
             api_key=payload.api_key,
             base_url=payload.base_url,
@@ -185,7 +186,7 @@ def save_desktop_llm_provider_secret(
 def delete_desktop_llm_provider_secret(request: Request, provider: str) -> ApiResponse:
     summary = _translate_llm_settings_errors(
         lambda: delete_provider_secret(
-            project_root=_project_root(request),
+            project_root=_data_root(request),
             provider=provider_from_path(provider),
         )
     )
@@ -201,7 +202,7 @@ def test_desktop_llm_provider(
 ) -> ApiResponse:
     result = _translate_llm_settings_errors(
         lambda: test_provider_connectivity(
-            project_root=_project_root(request),
+            project_root=_data_root(request),
             provider=provider_from_path(provider),
             api_key=payload.api_key,
             base_url=payload.base_url,
@@ -214,6 +215,10 @@ def test_desktop_llm_provider(
 
 def _project_root(request: Request) -> Path:
     return resolve_desktop_project_root(request.app)
+
+
+def _data_root(request: Request) -> Path:
+    return resolve_desktop_data_root(request.app)
 
 
 def _backend_port(request: Request) -> int | None:

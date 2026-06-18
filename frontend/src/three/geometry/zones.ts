@@ -43,6 +43,92 @@ function makeOutline(mesh: THREE.Mesh, color: number): THREE.LineSegments {
   return edges;
 }
 
+function makeFootprintBox(dx: number, dy: number, color: number): THREE.Mesh {
+  const geo = new THREE.PlaneGeometry(dx, dy);
+  const mat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.28,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const footprint = new THREE.Mesh(geo, mat);
+  footprint.name = "zone-footprint";
+  footprint.rotation.x = -Math.PI / 2;
+  return footprint;
+}
+
+function makeHeightPost(height: number, color: number): THREE.LineSegments {
+  const h = Math.max(0.05, height);
+  const points = new Float32Array([
+    0, 0, 0,
+    0, h, 0,
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(points, 3));
+  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 });
+  const post = new THREE.LineSegments(geo, mat);
+  post.name = "zone-height-post";
+  return post;
+}
+
+function makeSurfaceBand(dx: number, dy: number, color: number): THREE.LineSegments {
+  const x = dx / 2;
+  const z = dy / 2;
+  const points = new Float32Array([
+    -x, 0, -z, x, 0, -z,
+    x, 0, -z, x, 0, z,
+    x, 0, z, -x, 0, z,
+    -x, 0, z, -x, 0, -z,
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(points, 3));
+  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1 });
+  const band = new THREE.LineSegments(geo, mat);
+  band.name = "zone-surface-band";
+  return band;
+}
+
+function makeFootprintPolygon(
+  pts: [number, number][],
+  color: number,
+): THREE.Mesh {
+  const shape = new THREE.Shape();
+  pts.forEach((p, i) => (i === 0 ? shape.moveTo(p[0], p[1]) : shape.lineTo(p[0], p[1])));
+  shape.closePath();
+  const geo = new THREE.ShapeGeometry(shape);
+  const mat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.28,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const footprint = new THREE.Mesh(geo, mat);
+  footprint.name = "zone-footprint";
+  footprint.rotation.x = -Math.PI / 2;
+  return footprint;
+}
+
+function makeSurfacePolygonBand(
+  pts: [number, number][],
+  color: number,
+): THREE.LineSegments {
+  const points: number[] = [];
+  for (let index = 0; index < pts.length; index += 1) {
+    const current = pts[index];
+    const next = pts[(index + 1) % pts.length];
+    points.push(current[0], 0, -current[1]);
+    points.push(next[0], 0, -next[1]);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(points), 3));
+  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1 });
+  const band = new THREE.LineSegments(geo, mat);
+  band.name = "zone-surface-band";
+  return band;
+}
+
 export function buildZone(zone: ZoneConfig, kind: ZoneKind): THREE.Object3D {
   const group = new THREE.Group();
   group.name = `zone:${kind}:${zone.zone_id}`;
@@ -66,10 +152,20 @@ export function buildZone(zone: ZoneConfig, kind: ZoneKind): THREE.Object3D {
     // Three box dims: x=east(dx), y=up(height), z=north(dy).
     const geo = new THREE.BoxGeometry(dx, height, dy);
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = "zone-volume";
     const midZ = (zmin + zmax) / 2;
     mesh.position.set(...worldToThree([cx, cy, midZ]));
     group.add(mesh);
     group.add(makeOutline(mesh, color));
+    const footprint = makeFootprintBox(dx, dy, color);
+    footprint.position.set(...worldToThree([cx, cy, 0.02]));
+    group.add(footprint);
+    const band = makeSurfaceBand(dx, dy, color);
+    band.position.set(...worldToThree([cx, cy, zmin]));
+    group.add(band);
+    const post = makeHeightPost(zmax, color);
+    post.position.set(...worldToThree([cx, cy, 0]));
+    group.add(post);
     return group;
   }
 
@@ -90,6 +186,19 @@ export function buildZone(zone: ZoneConfig, kind: ZoneKind): THREE.Object3D {
     mesh.position.set(0, zmin, 0);
     group.add(mesh);
     group.add(makeOutline(mesh, color));
+    const footprint = makeFootprintPolygon(pts, color);
+    footprint.position.y = 0.02;
+    group.add(footprint);
+    const band = makeSurfacePolygonBand(pts, color);
+    band.position.y = zmin;
+    group.add(band);
+    const centroid = pts.reduce(
+      (acc, point) => [acc[0] + point[0] / pts.length, acc[1] + point[1] / pts.length],
+      [0, 0],
+    );
+    const post = makeHeightPost(zmax, color);
+    post.position.set(centroid[0], 0, -centroid[1]);
+    group.add(post);
     return group;
   }
 

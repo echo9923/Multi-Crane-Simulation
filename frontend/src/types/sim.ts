@@ -98,6 +98,15 @@ export interface SimFrame {
   weather: SimFrameWeather;
   events: Record<string, unknown>[];
   offline_labels: OfflineFrameLabels | null; // ALWAYS null on the realtime websocket
+  site?: {
+    boundary?: Record<string, unknown>;
+    buildings?: Record<string, unknown>[];
+    material_zones?: ZoneManifest[];
+    work_zones?: ZoneManifest[];
+    forbidden_zones?: ZoneManifest[];
+    overlap_zones?: Record<string, unknown>[];
+    [key: string]: unknown;
+  };
 }
 
 // Subset of EpisodeManifest (recorder.py) consumed by the frontend.

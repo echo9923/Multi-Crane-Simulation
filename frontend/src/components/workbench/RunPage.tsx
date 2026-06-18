@@ -115,6 +115,7 @@ export function RunPage() {
   const canPause = canControlEpisode && status === "running";
   const canResume = canControlEpisode && status === "paused";
   const canStop = canControlEpisode && !isTerminal;
+  const showStaleControlNotice = currentEpisodeStale && !isTerminal;
   const refreshState = async (id = episodeId) => {
     if (!id) return;
     const state = await getEpisodeState(id);
@@ -256,9 +257,15 @@ export function RunPage() {
         </div>
       ) : null}
 
-      {currentEpisodeStale ? (
+      {showStaleControlNotice ? (
         <div className="workbench-notice" role="status">
-          Config changed after this Episode started. Start a new Episode before sending controls.
+          当前配置已在此 Episode 启动后发生变化。请启动新的 Episode 后再发送暂停、继续或停止控制。
+        </div>
+      ) : null}
+
+      {isTerminal ? (
+        <div className="workbench-notice" role="status">
+          运行已完成，当前 Episode 处于终态：{displayValue(status)}。
         </div>
       ) : null}
 

@@ -7,8 +7,16 @@ from fastapi import APIRouter
 from backend.app.core.config_loader import load_demo_config
 from backend.app.core.config_resolver import resolve_config
 from backend.app.schemas.config import DatasetConfig, ExperimentConfig, ScenarioConfig
+from backend.app.schemas.crane import CraneConfig
+from backend.app.schemas.errors import ConfigError
+from backend.app.api.production_runner import scenario_config_from_resolved
+from backend.app.sim.task_generation import TaskGenerationError, generate_task_queues
 
-from .errors import ConfigValidationApiError, config_api_error_from_exception
+from .errors import (
+    ConfigValidationApiError,
+    config_api_error_from_config_error,
+    config_api_error_from_exception,
+)
 from .schemas import (
     API_SCHEMA_VERSION,
     ApiResponse,
@@ -38,6 +46,7 @@ def health() -> ApiResponse:
 @router.post("/scenarios/validate", response_model=ApiResponse)
 def validate_scenario(request: ScenarioValidateRequest) -> ApiResponse:
     resolved = _resolve_request_config(request)
+    _validate_task_generation(resolved)
     result = ScenarioValidateResult(
         valid=True,
         resolved_config_hash=resolved.resolved_config_hash,
@@ -116,6 +125,44 @@ def _inline_secret_values(experiment: Optional[dict[str, Any]]) -> list[str]:
         return []
     value = llm.get("api_key")
     return [value] if isinstance(value, str) and value else []
+
+
+def _validate_task_generation(resolved_config: Any) -> None:
+    try:
+        scenario = scenario_config_from_resolved(resolved_config)
+        if scenario.tasks.generation_mode.value != "manual":
+            return
+        crane_configs = [
+            CraneConfig.model_validate(crane)
+            for crane in resolved_config.layout.resolved_cranes
+        ]
+        result = generate_task_queues(
+            scenario,
+            crane_configs,
+            seed=int(resolved_config.seeds.task),
+        )
+        if not result.tasks:
+            raise TaskGenerationError(
+                "task generation produced zero tasks",
+                error_code="TASK_E_001",
+                reason="no_tasks_generated",
+                details={"num_cranes": len(crane_configs)},
+            )
+    except TaskGenerationError as exc:
+        raise config_api_error_from_config_error(
+            ConfigError(
+                error_code=exc.error_code,
+                message=str(exc),
+                field_path="scenario.tasks",
+                source_file=None,
+                hint="Fix task zones, load types, crane reach, or manual_tasks before startup.",
+                details={
+                    "config_kind": "scenario",
+                    "reason": exc.reason,
+                    **exc.details,
+                },
+            )
+        ) from exc
 
 
 __all__ = ["router"]

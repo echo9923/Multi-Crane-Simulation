@@ -288,14 +288,17 @@ def list_run_files(
 
 def environment_report(
     project_root: Path | str,
+    data_root: Path | str | None = None,
     backend_port: int | None = None,
     run_roots: list[Path | str] | None = None,
 ) -> DesktopEnvironmentResponse:
     """Return local backend environment details for the desktop workbench."""
     root = Path(project_root).expanduser().resolve()
-    roots = _run_roots(root, run_roots)
+    writable_root = Path(data_root).expanduser().resolve() if data_root is not None else root
+    roots = _run_roots(writable_root, run_roots)
     return DesktopEnvironmentResponse(
         project_root=str(root),
+        data_root=str(writable_root),
         python_path=sys.executable,
         python_version=f"{platform.python_implementation()} {platform.python_version()}",
         run_roots=[str(path) for path in roots],

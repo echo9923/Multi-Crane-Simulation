@@ -169,3 +169,69 @@ def test_validate_scenario_returns_manual_layout_error_details() -> None:
     assert payload["details"]["crane_id_a"] == "C1"
     assert payload["details"]["crane_id_b"] == "C2"
     assert payload["details"]["min_base_distance_m"] == 8.0
+
+
+def test_validate_scenario_rejects_unreachable_manual_task_height() -> None:
+    client = _client()
+    scenario = load_fixture("scenario_valid.yaml")
+    experiment = load_fixture("experiment_valid.yaml")
+    experiment["llm"]["provider"] = "mock"
+    experiment["llm"]["api_key_env"] = None
+    scenario["layout"]["mode"] = "manual"
+    scenario["layout"]["num_cranes"] = 1
+    scenario["cranes"] = [
+        {
+            "crane_id": "C1",
+            "model_id": "generic_flat_top_55m",
+            "base": [0.0, 0.0, 0.0],
+            "mast_height_m": 40.0,
+            "theta_init_deg": 0.0,
+            "slew": {"mode": "continuous"},
+        }
+    ]
+    scenario["site"]["forbidden_zones"] = []
+    scenario["site"]["material_zones"] = [
+        {
+            "zone_id": "ground",
+            "type": "box",
+            "center": [12.0, 0.0, 0.0],
+            "size": [6.0, 6.0, 0.4],
+            "surface_z_m": 0.0,
+            "load_types": ["rebar_bundle"],
+        }
+    ]
+    scenario["site"]["work_zones"] = [
+        {
+            "zone_id": "too_high_floor",
+            "type": "box",
+            "center": [18.0, 0.0, 39.0],
+            "size": [6.0, 6.0, 0.4],
+            "surface_z_m": 39.0,
+            "accepted_load_types": ["rebar_bundle"],
+        }
+    ]
+    scenario["tasks"]["generation_mode"] = "manual"
+    scenario["tasks"]["manual_tasks"] = [
+        {
+            "task_id": "T_TOO_HIGH",
+            "crane_id": "C1",
+            "task_type": "easy_task",
+            "pickup_zone_id": "ground",
+            "dropoff_zone_id": "too_high_floor",
+            "load_type": "rebar_bundle",
+            "priority": "medium",
+        }
+    ]
+
+    response = client.post(
+        "/scenarios/validate",
+        json={"scenario": scenario, "experiment": experiment},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "M_E_CONFIG_INVALID"
+    assert payload["message"] == "task point hook target height is unreachable"
+    assert payload["details"]["config_error_code"] == "TASK_E_001"
+    assert payload["details"]["reason"] == "point_height_unreachable"
+    assert payload["details"]["task_id"] == "T_TOO_HIGH"

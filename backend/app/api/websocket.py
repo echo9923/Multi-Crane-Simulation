@@ -189,6 +189,7 @@ class ApiWebSocketAdapter:
             pairs=[],
             tasks=[],
             task_queues=kwargs.get("task_queues", []),
+            site=kwargs.get("site"),
             events=kwargs.get("events", []),
             for_realtime=True,
         )

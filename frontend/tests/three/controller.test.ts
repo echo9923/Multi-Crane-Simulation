@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { clearCraneAssets } from "@/three/geometry/crane";
+import { manifestFromFrame } from "@/three/model/liveManifest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const manifest = JSON.parse(
@@ -64,6 +65,9 @@ describe("ThreeSceneController.buildStatic", () => {
       manifest.material_zones.length + manifest.work_zones.length + manifest.forbidden_zones.length;
     expect(stats.zones).toBe(expectedZones);
     expect(stats.unknownZoneTypes).toBe(0);
+    const materialZone = ctrl.getObjectByName(`zone:material:${manifest.material_zones[0].zone_id}`) as THREE.Group;
+    expect(materialZone.children.length).toBeGreaterThanOrEqual(4);
+    expect(materialZone.getObjectByName("zone-footprint")).toBeTruthy();
     ctrl.dispose();
   });
 
@@ -73,6 +77,51 @@ describe("ThreeSceneController.buildStatic", () => {
     expect(ctrl.getObjectByName("C1")).toBeTruthy();
     expect(ctrl.getObjectByName("zone:forbidden:power_corridor")).toBeTruthy();
     expect(ctrl.getObjectByName("site:boundary:box")).toBeTruthy();
+    ctrl.dispose();
+  });
+
+  it("preserves live frame site buildings and zones when synthesizing a manifest", () => {
+    const frame = {
+      ...frames[0],
+      site: {
+        boundary: { x_min: -80, x_max: 80, y_min: -80, y_max: 80, z_min: 0, z_max: 60 },
+        buildings: [
+          {
+            building_id: "tower_a",
+            name: "Tower A",
+            footprint: [[-32, -20], [40, -20], [40, 34], [-32, 34]],
+            floors: 7,
+            floor_height_m: 3.6,
+            base_z_m: 0,
+          },
+        ],
+        material_zones: [
+          { zone_id: "ground_yard_1", type: "box", center: [-24, -18, 0], size: [14, 10, 0.4], surface_z_m: 0 },
+        ],
+        work_zones: [
+          {
+            zone_id: "roof_dropoff",
+            type: "box",
+            center: [34, 22, 25.2],
+            size: [12, 10, 0.4],
+            surface_z_m: 25.2,
+            floor_id: "roof",
+            building_id: "tower_a",
+            zone_role: "roof",
+          },
+        ],
+        forbidden_zones: [],
+      },
+    } as SimFrame & { site: Record<string, unknown> };
+    const liveManifest = manifestFromFrame(frame);
+    const ctrl = makeController();
+
+    const stats = ctrl.buildStatic(null, liveManifest);
+
+    expect(stats.zones).toBe(2);
+    expect(ctrl.getObjectByName("floor:tower_a:level_7")).toBeTruthy();
+    expect(ctrl.getObjectByName("zone:material:ground_yard_1")).toBeTruthy();
+    expect(ctrl.getObjectByName("zone:work:roof_dropoff")).toBeTruthy();
     ctrl.dispose();
   });
 

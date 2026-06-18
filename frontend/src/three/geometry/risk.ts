@@ -14,12 +14,12 @@ export interface RiskStyle {
 }
 
 export const RISK_STYLE: Record<RiskLevel, RiskStyle> = {
-  safe: { color: 0x94a3b8, opacity: 0.3, lineWidth: 1, pulse: false },
-  low: { color: 0x10b981, opacity: 0.55, lineWidth: 1, pulse: false },
-  medium: { color: 0xfbbf24, opacity: 0.6, lineWidth: 1.5, pulse: false },
-  high: { color: 0xfb923c, opacity: 0.78, lineWidth: 2, pulse: false },
-  near_miss: { color: 0xef4444, opacity: 0.9, lineWidth: 2.5, pulse: true },
-  collision: { color: 0xb91c1c, opacity: 1.0, lineWidth: 3, pulse: true },
+  safe: { color: 0x64748b, opacity: 0.42, lineWidth: 1, pulse: false },
+  low: { color: 0x059669, opacity: 0.68, lineWidth: 1.4, pulse: false },
+  medium: { color: 0xf59e0b, opacity: 0.82, lineWidth: 2, pulse: false },
+  high: { color: 0xea580c, opacity: 0.92, lineWidth: 2.6, pulse: false },
+  near_miss: { color: 0xdc2626, opacity: 1.0, lineWidth: 3.2, pulse: true },
+  collision: { color: 0x991b1b, opacity: 1.0, lineWidth: 3.8, pulse: true },
 };
 
 export function riskLevelStyle(level: RiskLevel): RiskStyle {

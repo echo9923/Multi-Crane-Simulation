@@ -12,6 +12,7 @@ from backend.app.core.config_loader import apply_overrides, load_demo_config
 from backend.app.core.config_resolver import resolve_config
 from backend.app.core.secret_resolver import resolve_provider_secrets
 from backend.app.api.desktop_llm_settings import resolve_local_api_key
+from backend.app.sim.task_generation import TaskGenerationError
 from backend.app.schemas.config import DatasetConfig, ExperimentConfig, ScenarioConfig
 from backend.app.schemas.recorder import SimFrame
 from backend.app.schemas.scheduler import EpisodeStatus
@@ -62,9 +63,11 @@ class EpisodeService:
         *,
         runner_factory: RunnerFactory,
         project_root: Optional[Path] = None,
+        data_root: Optional[Path] = None,
     ) -> None:
         self.runner_factory = runner_factory
         self.project_root = project_root
+        self.data_root = data_root or project_root
         self.handles: dict[str, EpisodeHandle] = {}
         self._handles_lock = threading.RLock()
 
@@ -80,12 +83,26 @@ class EpisodeService:
                 )
 
         resolved_config = self._resolve_start_config(request)
+        resolved_config = _with_data_root_run_root(resolved_config, self.data_root)
         try:
             factory = _runner_factory_for_request(request, self.runner_factory)
             runner = factory(
                 episode_id=episode_id,
                 resolved_config=resolved_config,
             )
+        except TaskGenerationError as exc:
+            raise ApiException(
+                status_code=422,
+                code=M_E_EPISODE_START_FAILED,
+                message=str(exc),
+                details={
+                    "episode_id": episode_id,
+                    "exception_type": type(exc).__name__,
+                    "config_error_code": exc.error_code,
+                    "reason": exc.reason,
+                    **exc.details,
+                },
+            ) from exc
         except Exception as exc:
             raise ApiException(
                 status_code=500,
@@ -319,7 +336,7 @@ class EpisodeService:
                 dataset,
                 provider_summary=_provider_summary_for_desktop(
                     experiment,
-                    project_root=self.project_root,
+                    project_root=self.data_root or self.project_root,
                 ),
             )
         except ApiException:
@@ -470,6 +487,37 @@ def _resolved_run_dir(resolved_config: Any) -> Optional[Path]:
     if run_root is None and isinstance(output, dict):
         run_root = output.get("run_root")
     return Path(run_root) if run_root else None
+
+
+def _with_data_root_run_root(resolved_config: Any, data_root: Optional[Path]) -> Any:
+    if data_root is None:
+        return resolved_config
+    output = getattr(resolved_config, "output", None)
+    if output is None:
+        return resolved_config
+    run_root = getattr(output, "run_root", None)
+    if run_root is None and isinstance(output, dict):
+        run_root = output.get("run_root")
+    if run_root in (None, ""):
+        run_root = "runs"
+    path = Path(run_root)
+    if path.is_absolute():
+        return resolved_config
+    resolved_run_root = (Path(data_root).expanduser().resolve() / path).resolve()
+    next_output = (
+        output.model_copy(update={"run_root": str(resolved_run_root)})
+        if hasattr(output, "model_copy")
+        else {**dict(output), "run_root": str(resolved_run_root)}
+        if isinstance(output, dict)
+        else output
+    )
+    if next_output is output:
+        return resolved_config
+    return (
+        resolved_config.model_copy(update={"output": next_output})
+        if hasattr(resolved_config, "model_copy")
+        else resolved_config
+    )
 
 
 def _runner_run_dir(runner: Any) -> Optional[Path]:

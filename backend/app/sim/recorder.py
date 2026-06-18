@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Type, Union, get_args, get_origin
+from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -372,6 +374,7 @@ class Recorder:
             commands=commands,
             pairs=_online_risk_pairs(online_risk),
             task_queues=task_queues,
+            site=_resolved_site_payload(self.resolved_config),
             events=[row.model_dump(mode="json") for row in event_rows],
             for_realtime=False,
         )
@@ -496,7 +499,9 @@ class ParquetTableWriter:
             self._rows.append(validated.model_dump(mode="json"))
 
     def flush(self) -> None:
-        tmp_path = self.output_path.with_name(f".{self.output_path.name}.tmp")
+        tmp_path = self.output_path.with_name(
+            f".{self.output_path.name}.{uuid4().hex}.tmp"
+        )
         try:
             table = (
                 pa.Table.from_pylist(self._rows)
@@ -504,7 +509,7 @@ class ParquetTableWriter:
                 else pa.Table.from_pylist([], schema=_arrow_schema_for_model(self.row_model))
             )
             pq.write_table(table, tmp_path)
-            tmp_path.replace(self.output_path)
+            _replace_file_with_fallback(tmp_path, self.output_path)
         except Exception as exc:
             try:
                 tmp_path.unlink()
@@ -519,6 +524,17 @@ class ParquetTableWriter:
 
     def close(self) -> None:
         self.flush()
+
+
+def _replace_file_with_fallback(tmp_path: Path, output_path: Path) -> None:
+    try:
+        tmp_path.replace(output_path)
+    except PermissionError:
+        shutil.copyfile(tmp_path, output_path)
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
 
 
 class RecorderParquetWriters:
@@ -747,6 +763,7 @@ def build_sim_frame(
     pairs: Sequence[Any] = (),
     tasks: Sequence[Any] = (),
     task_queues: Sequence[Any] = (),
+    site: Optional[Mapping[str, Any]] = None,
     events: Sequence[Any] = (),
     offline_labels: Sequence[OfflineRiskLabel] = (),
     for_realtime: bool = False,
@@ -772,6 +789,7 @@ def build_sim_frame(
         ],
         pairs=[_sim_frame_pair_from_any(pair) for pair in pairs],
         tasks=[_dump_for_json(task) for task in [*tasks, *task_queues]],
+        site=_dump_for_json(site) if site is not None else None,
         weather=_sim_frame_weather_from_state(weather_state),
         events=[_dump_for_json(event) for event in events],
         offline_labels=(
@@ -1057,6 +1075,17 @@ def _coerce_resolved_config(config: object) -> ResolvedConfig:
         error_code="RECORDER_E_INVALID_CONFIG",
         field_path="config",
     )
+
+
+def _resolved_site_payload(resolved_config: object) -> Dict[str, Any]:
+    payload = _dump_for_json(resolved_config)
+    if not isinstance(payload, dict):
+        return {}
+    scenario = payload.get("scenario")
+    if not isinstance(scenario, dict):
+        return {}
+    site = scenario.get("site")
+    return site if isinstance(site, dict) else {}
 
 
 def _build_layout(

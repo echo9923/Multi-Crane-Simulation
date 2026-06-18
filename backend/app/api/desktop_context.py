@@ -10,3 +10,11 @@ def resolve_desktop_project_root(app_or_state: Any) -> Path:
     if root is None:
         return Path.cwd().resolve()
     return Path(root).expanduser().resolve()
+
+
+def resolve_desktop_data_root(app_or_state: Any) -> Path:
+    state = getattr(app_or_state, "state", app_or_state)
+    root = getattr(state, "data_root", None)
+    if root is None:
+        return resolve_desktop_project_root(state)
+    return Path(root).expanduser().resolve()

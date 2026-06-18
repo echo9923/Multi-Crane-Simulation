@@ -17,28 +17,28 @@ scenario:
         name: "Tower A"
         footprint:
           - [-32, -20]
-          - [32, -20]
-          - [32, 28]
-          - [-32, 28]
+          - [40, -20]
+          - [40, 34]
+          - [-32, 34]
         floors: 7
         floor_height_m: 3.6
         base_z_m: 0
     forbidden_zones: []
     material_zones:
-      - zone_id: "ground_yard_west"
+      - zone_id: "ground_yard_1"
         type: "box"
-        center: [-8, -6, 0.2]
-        size: [8, 8, 0.4]
+        center: [-24, -18, 0]
+        size: [14, 10, 0.4]
         z_range_m: [0, 0.4]
         surface_z_m: 0
         zone_role: "ground_yard"
         hook_target_offset_m: 0.5
         approach_clearance_m: 3
-        load_types: ["rebar_bundle", "formwork"]
-      - zone_id: "truck_bed_south"
+        load_types: ["rebar_bundle"]
+      - zone_id: "truck_bed_1"
         type: "box"
-        center: [8, -6, 1.4]
-        size: [8, 6, 0.4]
+        center: [-8, -24, 1.2]
+        size: [14, 10, 0.4]
         z_range_m: [1.2, 1.6]
         surface_z_m: 1.2
         zone_role: "truck_bed"
@@ -46,10 +46,10 @@ scenario:
         approach_clearance_m: 3
         load_types: ["rebar_bundle"]
     work_zones:
-      - zone_id: "floor_03_east"
+      - zone_id: "floor_03_dropoff"
         type: "box"
-        center: [8, 8, 10.8]
-        size: [8, 8, 0.4]
+        center: [18, 10, 10.8]
+        size: [12, 10, 0.4]
         z_range_m: [10.8, 11.2]
         surface_z_m: 10.8
         floor_id: "floor_03"
@@ -59,10 +59,10 @@ scenario:
         hook_target_offset_m: 0.5
         approach_clearance_m: 4
         accepted_load_types: ["rebar_bundle", "formwork"]
-      - zone_id: "floor_05_core"
+      - zone_id: "floor_05_dropoff"
         type: "box"
-        center: [0, 10, 18.0]
-        size: [8, 8, 0.4]
+        center: [26, 16, 18.0]
+        size: [12, 10, 0.4]
         z_range_m: [18.0, 18.4]
         surface_z_m: 18.0
         floor_id: "floor_05"
@@ -72,10 +72,10 @@ scenario:
         hook_target_offset_m: 0.5
         approach_clearance_m: 4
         accepted_load_types: ["rebar_bundle"]
-      - zone_id: "roof_north"
+      - zone_id: "roof_dropoff"
         type: "box"
-        center: [-8, 12, 25.2]
-        size: [8, 8, 0.4]
+        center: [34, 22, 25.2]
+        size: [12, 10, 0.4]
         z_range_m: [25.2, 25.6]
         surface_z_m: 25.2
         floor_id: "roof"
@@ -95,25 +95,19 @@ scenario:
       weight_range_t: [1.0, 1.4]
       size_m: [4.0, 0.8, 0.8]
       shape: "box_long"
-    formwork:
-      display_name: "Formwork panel"
-      weight_range_t: [0.6, 1.0]
-      size_m: [3.0, 1.2, 0.3]
-      shape: "flat_box"
-
   crane_models:
-    - model_id: "demo_flat_top_55m"
-      jib_length_m: 55
+    - model_id: "demo_flat_top_75m"
+      jib_length_m: 75
       counter_jib_length_m: 12
-      mast_height_range_m: [30, 44]
+      mast_height_range_m: [40, 50]
       max_load_t: 6
       max_load_radius_m: 15
-      tip_load_t: 1.8
-      rated_moment_t_m: 95
+      tip_load_t: 1.5
+      rated_moment_t_m: 110
       slew_speed_max_deg_s: 2.0
       slew_acc_max_deg_s2: 0.8
       trolley_r_min_m: 5
-      trolley_r_max_m: 50
+      trolley_r_max_m: 72
       trolley_speed_max_m_s: 0.9
       trolley_acc_max_m_s2: 0.7
       cable_length_min_m: 2
@@ -133,30 +127,30 @@ scenario:
 
   cranes:
     - crane_id: "C1"
-      model_id: "demo_flat_top_55m"
+      model_id: "demo_flat_top_75m"
       base: [-24, -24, 0]
-      mast_height_m: 34
+      mast_height_m: 40
       theta_init_deg: -135
       slew:
         mode: "continuous"
     - crane_id: "C2"
-      model_id: "demo_flat_top_55m"
+      model_id: "demo_flat_top_75m"
       base: [24, -24, 0]
-      mast_height_m: 38
+      mast_height_m: 44
       theta_init_deg: -45
       slew:
         mode: "continuous"
     - crane_id: "C3"
-      model_id: "demo_flat_top_55m"
+      model_id: "demo_flat_top_75m"
       base: [-24, 30, 0]
-      mast_height_m: 40
+      mast_height_m: 46
       theta_init_deg: 135
       slew:
         mode: "continuous"
     - crane_id: "C4"
-      model_id: "demo_flat_top_55m"
+      model_id: "demo_flat_top_75m"
       base: [24, 30, 0]
-      mast_height_m: 42
+      mast_height_m: 48
       theta_init_deg: 45
       slew:
         mode: "continuous"
@@ -169,58 +163,58 @@ scenario:
       - task_id: "T_C1_001"
         crane_id: "C1"
         task_type: "easy_task"
-        pickup_zone_id: "ground_yard_west"
-        dropoff_zone_id: "floor_03_east"
-        load_type: "formwork"
+        pickup_zone_id: "ground_yard_1"
+        dropoff_zone_id: "floor_03_dropoff"
+        load_type: "rebar_bundle"
         priority: "medium"
       - task_id: "T_C1_002"
         crane_id: "C1"
         task_type: "easy_task"
-        pickup_zone_id: "truck_bed_south"
-        dropoff_zone_id: "floor_05_core"
+        pickup_zone_id: "truck_bed_1"
+        dropoff_zone_id: "floor_05_dropoff"
         load_type: "rebar_bundle"
         priority: "medium"
       - task_id: "T_C2_001"
         crane_id: "C2"
         task_type: "easy_task"
-        pickup_zone_id: "truck_bed_south"
-        dropoff_zone_id: "floor_03_east"
+        pickup_zone_id: "truck_bed_1"
+        dropoff_zone_id: "floor_05_dropoff"
         load_type: "rebar_bundle"
         priority: "medium"
       - task_id: "T_C2_002"
         crane_id: "C2"
         task_type: "easy_task"
-        pickup_zone_id: "ground_yard_west"
-        dropoff_zone_id: "roof_north"
-        load_type: "formwork"
+        pickup_zone_id: "ground_yard_1"
+        dropoff_zone_id: "roof_dropoff"
+        load_type: "rebar_bundle"
         priority: "high"
       - task_id: "T_C3_001"
         crane_id: "C3"
         task_type: "easy_task"
-        pickup_zone_id: "ground_yard_west"
-        dropoff_zone_id: "floor_05_core"
+        pickup_zone_id: "ground_yard_1"
+        dropoff_zone_id: "roof_dropoff"
         load_type: "rebar_bundle"
         priority: "medium"
       - task_id: "T_C3_002"
         crane_id: "C3"
         task_type: "easy_task"
-        pickup_zone_id: "truck_bed_south"
-        dropoff_zone_id: "roof_north"
+        pickup_zone_id: "truck_bed_1"
+        dropoff_zone_id: "floor_03_dropoff"
         load_type: "rebar_bundle"
         priority: "high"
       - task_id: "T_C4_001"
         crane_id: "C4"
         task_type: "easy_task"
-        pickup_zone_id: "truck_bed_south"
-        dropoff_zone_id: "floor_05_core"
+        pickup_zone_id: "truck_bed_1"
+        dropoff_zone_id: "floor_05_dropoff"
         load_type: "rebar_bundle"
         priority: "medium"
       - task_id: "T_C4_002"
         crane_id: "C4"
         task_type: "easy_task"
-        pickup_zone_id: "ground_yard_west"
-        dropoff_zone_id: "roof_north"
-        load_type: "formwork"
+        pickup_zone_id: "ground_yard_1"
+        dropoff_zone_id: "roof_dropoff"
+        load_type: "rebar_bundle"
         priority: "high"
     queue_policy:
       start_mode: "simultaneous"

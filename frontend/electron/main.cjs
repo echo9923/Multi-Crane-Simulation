@@ -28,9 +28,15 @@ app.whenReady().then(async () => {
     };
     resourceRoot = backendHelpers.resolveResourceRoot(desktopRoots);
     projectRoot = backendHelpers.resolveProjectRoot(desktopRoots);
+    desktopUserDataPath = app.getPath("userData");
+    const dataRoot = backendHelpers.resolveDataRoot({
+      isPackaged: app.isPackaged,
+      projectRoot,
+      userDataPath: desktopUserDataPath,
+    });
+    await fs.mkdir(dataRoot, { recursive: true });
     registerIpcHandlers();
 
-    desktopUserDataPath = app.getPath("userData");
     const port = await backendHelpers.findAvailablePort();
     const pythonPath = backendHelpers.resolvePythonPath({
       fallbackProjectRoot: process.env.MULTI_CRANE_DEV_PROJECT_ROOT,
@@ -43,6 +49,7 @@ app.whenReady().then(async () => {
 
     backendChild = backendHelpers.startBackend({
       projectRoot,
+      dataRoot,
       pythonPath,
       port,
       onLog: (message, stream) => appendBackendLog(stream, message),

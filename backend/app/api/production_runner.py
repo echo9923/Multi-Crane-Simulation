@@ -79,7 +79,7 @@ def build_production_episode_runner(
     websocket: Any = None,
     project_root: Any = None,
 ) -> "ProductionEpisodeRunner":
-    scenario = _scenario_config_from_resolved(resolved_config)
+    scenario = scenario_config_from_resolved(resolved_config)
     experiment = ExperimentConfig.model_validate(_mapping_section(resolved_config, "experiment"))
     crane_configs = _crane_configs_from_resolved_config(resolved_config)
     crane_states = [initialize_crane_state(config) for config in crane_configs]
@@ -102,6 +102,7 @@ def build_production_episode_runner(
 
     recorder = ProductionRecorderAdapter(
         Recorder.from_config(resolved_config),
+        episode_id=episode_id,
         risk_config=scenario.risk,
         crane_configs=crane_configs,
     )
@@ -528,10 +529,12 @@ class ProductionRecorderAdapter:
         self,
         recorder: Recorder,
         *,
+        episode_id: str | None = None,
         risk_config: RiskConfig | None = None,
         crane_configs: Sequence[CraneConfig] = (),
     ) -> None:
         self.recorder = recorder
+        self.episode_id = episode_id
         self.risk_config = risk_config
         self.crane_configs = [copy.deepcopy(config) for config in crane_configs]
         self._finalized = False
@@ -544,7 +547,13 @@ class ProductionRecorderAdapter:
     @property
     def run_dir(self) -> Optional[Path]:
         layout = self.recorder.layout
-        return layout.run_root if layout is not None else None
+        if layout is not None:
+            return layout.run_root
+        if self.episode_id is None:
+            return None
+        output = getattr(self.recorder.resolved_config, "output", None)
+        run_root = getattr(output, "run_root", None)
+        return Path(run_root) / self.episode_id if run_root else None
 
     def record_initial_frame(self, **kwargs: Any) -> Any:
         if "online_risk" not in kwargs and self.risk_config is not None:
@@ -614,30 +623,15 @@ def _generate_task_queues_for_production(
     *,
     seed: int,
 ) -> Any:
-    try:
-        return generate_task_queues(scenario, crane_configs, seed=seed)
-    except TaskGenerationError as exc:
-        if getattr(exc, "reason", None) not in {
-            "point_outside_radius",
-            "point_height_unreachable",
-            "over_capacity",
-        }:
-            raise
-        empty_queues = [TaskQueue(crane_id=config.crane_id) for config in crane_configs]
-        return SimpleNamespace(
-            queues=empty_queues,
-            tasks=[],
-            report=SimpleNamespace(
-                warnings=[
-                    {
-                        "reason": "production_task_generation_fallback_empty_queues",
-                        "error_code": exc.error_code,
-                        "task_generation_reason": exc.reason,
-                        "details": exc.details,
-                    }
-                ]
-            ),
+    result = generate_task_queues(scenario, crane_configs, seed=seed)
+    if not result.tasks:
+        raise TaskGenerationError(
+            "task generation produced zero tasks",
+            error_code="TASK_E_001",
+            reason="no_tasks_generated",
+            details={"num_cranes": len(crane_configs)},
         )
+    return result
 
 
 def _assign_operator_profiles(
@@ -826,7 +820,7 @@ def _mapping_section(resolved_config: Any, name: str) -> dict[str, Any]:
     return dict(section)
 
 
-def _scenario_config_from_resolved(resolved_config: Any) -> ScenarioConfig:
+def scenario_config_from_resolved(resolved_config: Any) -> ScenarioConfig:
     payload = copy.deepcopy(_mapping_section(resolved_config, "scenario"))
     visibility = payload.get("weather", {}).get("visibility")
     if isinstance(visibility, dict) and isinstance(visibility.get("levels"), dict):
@@ -842,4 +836,5 @@ __all__ = [
     "ProductionSafetyAdapter",
     "ProductionTaskSystem",
     "build_production_episode_runner",
+    "scenario_config_from_resolved",
 ]

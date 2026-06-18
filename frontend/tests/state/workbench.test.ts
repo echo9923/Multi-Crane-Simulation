@@ -33,4 +33,30 @@ describe("workbench store", () => {
 
     expect(useWorkbenchStore.getState().summary).toBeNull();
   });
+
+  it("marks an active episode stale only for user-authored config edits", () => {
+    const store = useWorkbenchStore.getState();
+    store.setYamlText(validYaml);
+    store.setCurrentEpisode({
+      episode_id: "E1",
+      run_id: "R1",
+      run_dir: "runs/E1",
+      status: "running",
+      resolved_config_hash: "hash",
+      websocket_url: "/ws/episodes/E1",
+    });
+
+    useWorkbenchStore.getState().setYamlText(
+      validYaml.replace("duration_s: 7200", "duration_s: 3600"),
+      { markEpisodeStale: false },
+    );
+
+    expect(useWorkbenchStore.getState().currentEpisodeStale).toBe(false);
+
+    useWorkbenchStore.getState().setYamlText(
+      validYaml.replace("duration_s: 7200", "duration_s: 1800"),
+    );
+
+    expect(useWorkbenchStore.getState().currentEpisodeStale).toBe(true);
+  });
 });

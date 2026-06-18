@@ -5,7 +5,10 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.app.api.desktop_context import resolve_desktop_project_root
+from backend.app.api.desktop_context import (
+    resolve_desktop_data_root,
+    resolve_desktop_project_root,
+)
 from backend.app.api.errors import register_exception_handlers
 from backend.app.api.routes_desktop import router as desktop_router
 from backend.app.api.routes_datasets import router as datasets_router
@@ -30,6 +33,8 @@ def create_app() -> FastAPI:
         allow_headers=["content-type"],
     )
     register_exception_handlers(app)
+    app.state.project_root = _path_from_env("MULTI_CRANE_PROJECT_ROOT")
+    app.state.data_root = _path_from_env("MULTI_CRANE_DATA_ROOT")
     app.state.backend_port = _backend_port_from_env()
     app.state.websocket_manager = WebSocketConnectionManager()
     app.state.runner_factory = _production_runner_factory(app)
@@ -52,6 +57,11 @@ def _backend_port_from_env() -> int | None:
     return parsed if 1 <= parsed <= 65535 else None
 
 
+def _path_from_env(name: str):
+    value = os.environ.get(name)
+    return value if value else None
+
+
 def _production_runner_factory(app: FastAPI):
     def factory(*, episode_id: str, resolved_config):
         from backend.app.api.production_runner import build_production_episode_runner
@@ -60,7 +70,7 @@ def _production_runner_factory(app: FastAPI):
             episode_id=episode_id,
             resolved_config=resolved_config,
             websocket=ApiWebSocketAdapter(app.state.websocket_manager),
-            project_root=resolve_desktop_project_root(app),
+            project_root=resolve_desktop_data_root(app),
         )
 
     return factory

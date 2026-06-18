@@ -271,6 +271,7 @@ export class ThreeSceneController {
             color: style.color,
             transparent: true,
             opacity: style.opacity,
+            linewidth: style.lineWidth,
           });
           line = new THREE.Line(geo, mat);
           line.name = `risk:${key}`;
@@ -288,10 +289,12 @@ export class ThreeSceneController {
         const mat = line.material as THREE.LineBasicMaterial;
         mat.color.setHex(style.color);
         mat.opacity = style.opacity;
+        mat.linewidth = style.lineWidth;
         line.visible = this.showRisk;
         line.userData.pulse = style.pulse;
         line.userData.baseOpacity = style.opacity;
         line.userData.level = link.level;
+        line.userData.lineWidth = style.lineWidth;
       }
     }
     // Drop lines whose pair is no longer present this frame.

@@ -15,6 +15,14 @@ def _client(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
+def _client_with_roots(project_root: Path, data_root: Path) -> TestClient:
+    app = create_app()
+    app.state.project_root = project_root
+    app.state.data_root = data_root
+    app.state.backend_port = 8765
+    return TestClient(app)
+
+
 def _non_raising_client(tmp_path: Path) -> TestClient:
     app = create_app()
     app.state.project_root = tmp_path
@@ -110,6 +118,35 @@ def test_draft_route_scrubs_secret_and_lists_recent(tmp_path: Path) -> None:
     recent = client.get("/desktop/experiments/recent")
     assert recent.status_code == 200
     assert recent.json()["data"]["items"][0]["experiment_id"] == "exp1"
+
+
+def test_desktop_routes_use_project_root_for_templates_and_data_root_for_writes(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    data_root = tmp_path / "data"
+    configs = project_root / "configs"
+    configs.mkdir(parents=True)
+    (configs / "multifloor.yaml").write_text(
+        "scenario:\n  scenario_id: multifloor\nexperiment:\n  experiment_id: exp\n",
+        encoding="utf-8",
+    )
+    client = _client_with_roots(project_root, data_root)
+
+    templates = client.get("/desktop/templates")
+    saved = client.post(
+        "/desktop/experiments/draft",
+        json={
+            "experiment_id": "exp",
+            "yaml_text": "experiment:\n  experiment_id: exp\n",
+            "metadata": {"template_id": "multifloor"},
+        },
+    )
+
+    assert templates.status_code == 200
+    assert templates.json()["data"]["items"][0]["template_id"] == "multifloor"
+    assert saved.status_code == 200
+    yaml_path = Path(saved.json()["data"]["yaml_path"])
+    assert yaml_path.is_relative_to(data_root)
+    assert not (project_root / ".desktop").exists()
 
 
 def test_latest_draft_route_returns_scrubbed_latest_draft(tmp_path: Path) -> None:
@@ -212,6 +249,27 @@ def test_runs_and_files_routes(tmp_path: Path) -> None:
     assert files.json()["data"]["files"][0]["relative_path"] == "metadata/episode_summary.json"
 
 
+def test_runs_routes_read_from_data_root_when_project_root_is_packaged(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    data_root = tmp_path / "data"
+    project_root.mkdir()
+    run = data_root / "runs" / "episode-1"
+    (run / "metadata").mkdir(parents=True)
+    (run / "metadata" / "episode_summary.json").write_text(
+        json.dumps({"episode_id": "episode-1", "status": "completed"}),
+        encoding="utf-8",
+    )
+    client = _client_with_roots(project_root, data_root)
+
+    runs = client.get("/desktop/runs")
+    files = client.get("/desktop/runs/episode-1/files")
+
+    assert runs.status_code == 200
+    assert runs.json()["data"]["items"][0]["path"] == str(run)
+    assert files.status_code == 200
+    assert files.json()["data"]["files"][0]["relative_path"] == "metadata/episode_summary.json"
+
+
 def test_runs_route_lists_metadata_only_running_runs(tmp_path: Path) -> None:
     run = tmp_path / "runs" / "episode-live"
     (run / "metadata").mkdir(parents=True)
@@ -270,6 +328,20 @@ def test_environment_route_reports_project_root(tmp_path: Path) -> None:
     data = res.json()["data"]
     assert data["project_root"] == str(tmp_path.resolve())
     assert data["backend_port"] == 8765
+
+
+def test_environment_route_reports_separate_data_root(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    data_root = tmp_path / "data"
+    project_root.mkdir()
+
+    res = _client_with_roots(project_root, data_root).get("/desktop/environment")
+
+    assert res.status_code == 200
+    data = res.json()["data"]
+    assert data["project_root"] == str(project_root.resolve())
+    assert data["data_root"] == str(data_root.resolve())
+    assert data["run_roots"] == [str((data_root / "runs").resolve())]
 
 
 def test_llm_provider_routes_save_test_and_delete_secret(tmp_path: Path) -> None:

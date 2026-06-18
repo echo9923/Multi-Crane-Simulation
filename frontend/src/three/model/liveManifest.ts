@@ -47,6 +47,7 @@ export function manifestFromFrame(frame: SimFrame): EpisodeManifest {
   const cranes = frame.cranes.map((c, i) =>
     craneConfigFromFrame(c.crane_id, c.base, c.root, c.tip, i),
   );
+  const site = frame.site ?? {};
   return {
     schema_version: frame.schema_version,
     episode_id: frame.episode_id,
@@ -56,11 +57,11 @@ export function manifestFromFrame(frame: SimFrame): EpisodeManifest {
     dt: 0.1,
     coordinate_system: "ENU",
     cranes,
-    site: {},
-    material_zones: [],
-    work_zones: [],
-    forbidden_zones: [],
-    overlap_zones: [],
+    site,
+    material_zones: site.material_zones ?? [],
+    work_zones: site.work_zones ?? [],
+    forbidden_zones: site.forbidden_zones ?? [],
+    overlap_zones: site.overlap_zones ?? [],
     offline_labels_available: false,
   };
 }

@@ -256,6 +256,7 @@ class DesktopRunFilesResponse(ApiBaseModel):
 
 class DesktopEnvironmentResponse(ApiBaseModel):
     project_root: str
+    data_root: Optional[str] = None
     python_path: Optional[str] = None
     python_version: Optional[str] = None
     run_roots: list[str] = Field(default_factory=list)

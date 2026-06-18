@@ -24,7 +24,7 @@ export interface WorkbenchState {
   busy: boolean;
   setTemplates(items: DesktopTemplate[]): void;
   setTemplate(id: string | null): void;
-  setYamlText(text: string): void;
+  setYamlText(text: string, opts?: { markEpisodeStale?: boolean }): void;
   setFormPatch(patch: Partial<CoreExperimentForm>): void;
   setValidation(result: ScenarioValidateResult | null, error?: string | null): void;
   setCurrentEpisode(result: EpisodeStartResponse | null): void;
@@ -51,7 +51,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   busy: false,
   setTemplates: (items) => set({ templates: items }),
   setTemplate: (id) => set({ selectedTemplateId: id }),
-  setYamlText: (text) => {
+  setYamlText: (text, opts = {}) => {
     let summary: ExperimentSummary | null = null;
     try {
       summary = extractExperimentSummary(text);
@@ -60,11 +60,12 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     }
     set((state) => {
       const configRevision = state.configRevision + 1;
+      const markEpisodeStale = opts.markEpisodeStale ?? true;
       return {
         yamlText: text,
         summary,
         configRevision,
-        currentEpisodeStale: state.currentEpisode !== null,
+        currentEpisodeStale: state.currentEpisode !== null && markEpisodeStale,
       };
     });
   },

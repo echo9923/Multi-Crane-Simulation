@@ -293,7 +293,18 @@ def _generate_manual_task(
                     "unknown_load_type",
                     "unknown_zone",
                 }:
-                    blocking_errors.append(exc)
+                    details = dict(exc.details)
+                    details.setdefault("task_id", template.task_id)
+                    if requested_crane_id is not None:
+                        details.setdefault("requested_crane_id", requested_crane_id)
+                    blocking_errors.append(
+                        TaskGenerationError(
+                            str(exc),
+                            error_code=exc.error_code,
+                            reason=exc.reason,
+                            details=details,
+                        )
+                    )
                     break
                 continue
             feasible.append(task)

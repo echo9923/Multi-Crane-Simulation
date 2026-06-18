@@ -119,6 +119,7 @@ class SimFrame(RecorderBaseModel):
     cranes: List[SimFrameCrane]
     pairs: List[SimFramePair] = Field(default_factory=list)
     tasks: List[Dict[str, Any]] = Field(default_factory=list)
+    site: Optional[Dict[str, Any]] = None
     weather: SimFrameWeather
     events: List[Dict[str, Any]] = Field(default_factory=list)
     offline_labels: Optional[OfflineFrameLabels] = None

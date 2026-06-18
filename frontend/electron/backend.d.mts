@@ -10,6 +10,7 @@ export interface BackendLaunch {
 
 export interface BackendLaunchOptions {
   projectRoot: string;
+  dataRoot?: string;
   pythonPath: string;
   port: number;
 }
@@ -59,6 +60,11 @@ export interface RendererServer {
 
 export function resolveResourceRoot(options: DesktopRootResolutionOptions): string;
 export function resolveProjectRoot(options: DesktopRootResolutionOptions): string;
+export function resolveDataRoot(options: {
+  isPackaged?: boolean;
+  projectRoot?: string;
+  userDataPath?: string;
+}): string;
 export function resolvePythonPath(options: PythonResolutionOptions): string;
 export function resolvePythonPath(projectRoot: string, platform?: NodeJS.Platform): string;
 export function isPathInsideAllowedRoots(targetPath: string, allowedRoots: string[]): boolean;

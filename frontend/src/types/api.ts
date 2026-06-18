@@ -150,6 +150,7 @@ export interface DesktopRunFilesResponse {
 
 export interface DesktopEnvironmentResponse {
   project_root: string;
+  data_root: string | null;
   python_path: string | null;
   python_version: string | null;
   run_roots: string[];

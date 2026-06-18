@@ -512,3 +512,28 @@ def test_runner_factory_failure_does_not_register_episode() -> None:
     assert response.status_code == 500
     assert response.json()["code"] == "M_E_EPISODE_START_FAILED"
     assert "E-life" not in client.app.state.episode_service.handles
+
+
+def test_task_generation_failure_returns_config_start_error_without_registering_episode() -> None:
+    from backend.app.sim.task_generation import TaskGenerationError
+
+    class TaskGenerationFailureFactory(FakeRunnerFactory):
+        def __call__(self, *, episode_id: str, resolved_config: Any) -> FakeRunner:
+            raise TaskGenerationError(
+                "task point hook target height is unreachable",
+                error_code="TASK_E_001",
+                reason="point_height_unreachable",
+                details={"task_id": "T_TOO_HIGH", "zone_id": "roof_dropoff"},
+            )
+
+    client = _client_with_factory(TaskGenerationFailureFactory())
+
+    response = client.post("/episodes/start", json=_start_payload())
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "M_E_EPISODE_START_FAILED"
+    assert payload["details"]["config_error_code"] == "TASK_E_001"
+    assert payload["details"]["reason"] == "point_height_unreachable"
+    assert payload["details"]["task_id"] == "T_TOO_HIGH"
+    assert "E-life" not in client.app.state.episode_service.handles
