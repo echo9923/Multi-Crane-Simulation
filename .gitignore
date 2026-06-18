@@ -14,3 +14,7 @@ runs/
 !.env.*.example
 .env.local
 .env.*.local
+
+# pytest transient basetemp/probe leaks
+tmp_pytest_probe/
+pytest-cache-files-*
