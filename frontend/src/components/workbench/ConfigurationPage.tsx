@@ -693,7 +693,7 @@ export function ConfigurationPage() {
         task_type: "easy_task",
         pickup_zone_id: index % 2 === 0 ? "ground_yard_1" : "truck_bed_1",
         dropoff_zone_id: workZones[index % workZones.length].zoneId,
-        load_type: index % 2 === 0 ? "formwork" : "rebar_bundle",
+        load_type: "rebar_bundle",
         priority: "medium",
       },
       {

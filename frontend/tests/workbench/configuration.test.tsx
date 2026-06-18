@@ -67,6 +67,12 @@ const renderYaml = [
   "        zone_role: floor_slab",
   "        accepted_load_types: [rebar_bundle]",
   "    forbidden_zones: []",
+  "  load_types:",
+  "    rebar_bundle:",
+  "      display_name: Rebar bundle",
+  "      weight_range_t: [1.0, 1.4]",
+  "      size_m: [4.0, 0.8, 0.8]",
+  "      shape: box_long",
   "  layout:",
   "    num_cranes: 4",
   "    mode: manual",
@@ -305,14 +311,16 @@ function toolbarButtons() {
 function parsedYamlText() {
   return yaml.load(yamlTextarea().value) as {
     scenario?: {
+      load_types?: Record<string, unknown>;
       site?: {
-        material_zones?: Array<{ zone_id?: string }>;
-        work_zones?: Array<{ zone_id?: string }>;
+        material_zones?: Array<{ zone_id?: string; load_types?: string[] }>;
+        work_zones?: Array<{ zone_id?: string; accepted_load_types?: string[] }>;
       };
       tasks?: {
         manual_tasks?: Array<{
           pickup_zone_id?: string;
           dropoff_zone_id?: string;
+          load_type?: string;
         }>;
       };
     };
@@ -381,18 +389,28 @@ describe("workbench configuration flow", () => {
     fireEvent.click(toolbarButtons()[3]);
 
     const parsed = parsedYamlText();
-    const materialZoneIds = new Set(
-      parsed.scenario?.site?.material_zones?.map((zone) => zone.zone_id).filter(Boolean),
+    const materialZones = new Map(
+      parsed.scenario?.site?.material_zones
+        ?.filter((zone) => zone.zone_id)
+        .map((zone) => [zone.zone_id, zone]) ?? [],
     );
-    const workZoneIds = new Set(
-      parsed.scenario?.site?.work_zones?.map((zone) => zone.zone_id).filter(Boolean),
+    const workZones = new Map(
+      parsed.scenario?.site?.work_zones
+        ?.filter((zone) => zone.zone_id)
+        .map((zone) => [zone.zone_id, zone]) ?? [],
     );
+    const loadTypeIds = new Set(Object.keys(parsed.scenario?.load_types ?? {}));
     const manualTasks = parsed.scenario?.tasks?.manual_tasks ?? [];
 
     expect(manualTasks.length).toBeGreaterThan(0);
     for (const task of manualTasks) {
-      expect(materialZoneIds.has(task.pickup_zone_id)).toBe(true);
-      expect(workZoneIds.has(task.dropoff_zone_id)).toBe(true);
+      const materialZone = materialZones.get(task.pickup_zone_id);
+      const workZone = workZones.get(task.dropoff_zone_id);
+      expect(materialZone).toBeTruthy();
+      expect(workZone).toBeTruthy();
+      expect(loadTypeIds.has(task.load_type ?? "")).toBe(true);
+      expect(materialZone?.load_types ?? []).toContain(task.load_type);
+      expect(workZone?.accepted_load_types ?? []).toContain(task.load_type);
     }
   });
 
