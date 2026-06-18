@@ -132,7 +132,7 @@ def test_production_runner_uses_tasks_observations_llm_safety_and_recorder(
 
     observations = [
         json.loads(line)
-        for line in (run_dir / "logs" / "llm_observations.jsonl").read_text().splitlines()
+        for line in (run_dir / "logs" / "llm_observations.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     assert observations

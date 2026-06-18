@@ -77,7 +77,7 @@ function installFetchMock() {
           {
             provider: "deepseek",
             display_name: "deepseek",
-            default_base_url: "https://api.deepseek.com",
+            default_base_url: "https://api.deepseek.com/v1",
             default_model: "deepseek-chat",
             api_key_env: "DEEPSEEK_API_KEY",
             has_saved_key: false,

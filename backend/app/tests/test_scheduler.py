@@ -29,6 +29,7 @@ from backend.app.schemas.scheduler import (
     TerminalStatusCandidate,
     WorldSnapshot,
 )
+from backend.app.schemas.recorder import SimFrame, SimFrameWeather
 from backend.app.schemas.task import Task, TaskPoint, TaskQueue
 from backend.app.schemas.weather import WeatherState, WeatherVisibilityContext
 from backend.app.sim.observation import build_observations_for_snapshot
@@ -36,6 +37,8 @@ from backend.app.sim.crane_model import build_crane_model_library
 from backend.app.sim.layout import build_crane_configs
 from backend.app.sim.physics import initialize_crane_state
 from backend.app.sim.scheduler import (
+    EpisodeRunner,
+    SchedulerDependencies,
     CommandStore,
     DecisionClock,
     freeze_world_snapshot,
@@ -286,6 +289,155 @@ def _task_contexts(time_s: float = 1.0) -> dict:
             ground_signal_hint="当前无任务，请保持塔吊安全静止并观察现场。",
         ),
     }
+
+
+class _StaticWeather:
+    def update(self, time_s: float):
+        return _weather_state(time_s), _visibility_context(time_s)
+
+
+class _NoopTaskSystem:
+    def activate_due_tasks(self, **kwargs):
+        return type("TaskResult", (), {"events": []})()
+
+    def update_after_physics(self, **kwargs):
+        return type("TaskResult", (), {"events": []})()
+
+
+class _NoopOperator:
+    def decide(self, observations, *, llm_decision_interval_s: float):
+        return []
+
+
+class _NoopObservationBuilder:
+    def build_batch(self, **kwargs):
+        return []
+
+
+class _NoopSafety:
+    def apply_pipeline(self, parsed_commands, *, snapshot):
+        return []
+
+
+class _NoopController:
+    def compute_batch(self, *, commands, states, models, dt_s, now_s):
+        return [], []
+
+
+class _NoopPhysics:
+    def step_world(self, *, crane_configs, previous_states, control_targets, dt):
+        return list(previous_states)
+
+
+class _Risk:
+    def evaluate_predecision(self, *, snapshot, commands):
+        return type("RiskResult", (), {"hints": {}})()
+
+    def evaluate_after_physics(self, *, states, commands, time_s):
+        return type("RiskNow", (), {"source_snapshot_id": f"RISK_{time_s:.3f}"})()
+
+
+class _NoopCollision:
+    def detect(self, *, states, risk, time_s):
+        return []
+
+
+class _RecordingRecorder:
+    def __init__(self):
+        self.initial_frames: list[SimFrame] = []
+        self.step_frames: list[SimFrame] = []
+
+    def record_initial_frame(self, **kwargs):
+        frame = SimFrame(
+            episode_id=kwargs["episode_id"],
+            scenario_id="scenario-full",
+            frame=kwargs["frame_index"],
+            time_s=kwargs["time_s"],
+            episode_status="running",
+            cranes=[],
+            pairs=[],
+            tasks=[{"task_id": "T-initial"}],
+            weather=SimFrameWeather(wind_speed_m_s=1.0, visibility="good"),
+            events=[],
+        )
+        self.initial_frames.append(frame)
+        return frame
+
+    def record_step(self, **kwargs):
+        frame = SimFrame(
+            episode_id=kwargs["episode_id"],
+            scenario_id="scenario-full",
+            frame=kwargs["frame_index"],
+            time_s=kwargs["time_s"],
+            episode_status="running",
+            cranes=[],
+            pairs=[
+                {
+                    "crane_i": "C1",
+                    "crane_j": "C2",
+                    "distance_min_raw_now_m": 12.5,
+                    "risk_level_now": "low",
+                }
+            ],
+            tasks=[{"task_id": "T-live", "status": "active"}],
+            weather=SimFrameWeather(wind_speed_m_s=1.0, visibility="good"),
+            events=[{"event_type": "task_started"}],
+        )
+        self.step_frames.append(frame)
+        return frame
+
+
+class _RecordingWebSocket:
+    def __init__(self):
+        self.frames: list[SimFrame] = []
+
+    def broadcast_sim_frame_if_enabled(self, *, episode_id: str, frame: SimFrame | None = None, **kwargs):
+        assert frame is not None
+        self.frames.append(frame)
+
+
+def test_interactive_runner_broadcasts_full_recorder_frame() -> None:
+    configs = _crane_configs(2)
+    recorder = _RecordingRecorder()
+    websocket = _RecordingWebSocket()
+    runner = EpisodeRunner(
+        config=SchedulerConfig(
+            dt_s=0.1,
+            duration_s=1.0,
+            controller_hz=10.0,
+            llm_decision_interval_s=10.0,
+            run_mode=RuntimeMode.INTERACTIVE_SERVER,
+            stop_when_all_tasks_done=False,
+        ),
+        dependencies=SchedulerDependencies(
+            weather=_StaticWeather(),
+            task_system=_NoopTaskSystem(),
+            observation_builder=_NoopObservationBuilder(),
+            operator=_NoopOperator(),
+            safety=_NoopSafety(),
+            controller=_NoopController(),
+            physics=_NoopPhysics(),
+            risk=_Risk(),
+            collision=_NoopCollision(),
+            recorder=recorder,
+            websocket=websocket,
+        ),
+        episode_id="E-live",
+        crane_configs=configs,
+        crane_states=[initialize_crane_state(config) for config in configs],
+        weather_state=_weather_state(),
+        visibility_context=_visibility_context(),
+    )
+    runner.decision_clock.mark_decided([config.crane_id for config in configs], decision_time_s=0.0)
+
+    runner.run_one_frame()
+
+    assert websocket.frames == [recorder.initial_frames[0], recorder.step_frames[0]]
+    assert websocket.frames[0].scenario_id == "scenario-full"
+    assert websocket.frames[0].tasks == [{"task_id": "T-initial"}]
+    assert websocket.frames[1].scenario_id == "scenario-full"
+    assert websocket.frames[1].tasks == [{"task_id": "T-live", "status": "active"}]
+    assert websocket.frames[1].pairs[0].crane_i == "C1"
 
 
 def test_scheduler_config_from_dict_extracts_runtime_and_llm_scheduling() -> None:

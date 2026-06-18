@@ -35,7 +35,7 @@ llm:
   enabled: true
   provider: "deepseek"
   model: "deepseek-chat"
-  base_url: "https://api.deepseek.com"
+  base_url: "https://api.deepseek.com/v1"
   api_key_env: "DEEPSEEK_API_KEY"
   api_key: null
   temperature: 0.4

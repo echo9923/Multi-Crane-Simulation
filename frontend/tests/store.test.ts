@@ -69,6 +69,53 @@ describe("store loadEpisode / setFrame", () => {
     expect(s.latestFrame).toBe(older);
     expect(s.currentIndex).toBe(0);
   });
+
+  it("startLiveEpisode clears stale replay state before live frames arrive", () => {
+    useStore.getState().loadEpisode(frames, {
+      schema_version: "1.0",
+      episode_id: "E-replay",
+      scenario_id: "scenario-replay",
+      episode_status: "completed",
+      frame_count: frames.length,
+      dt: 0.1,
+      coordinate_system: "ENU",
+      cranes: [],
+      site: {},
+      material_zones: [],
+      work_zones: [],
+      forbidden_zones: [],
+      overlap_zones: [],
+      offline_labels_available: false,
+    });
+
+    useStore.getState().startLiveEpisode("E-live");
+    const s = useStore.getState();
+
+    expect(s.mode).toBe("live");
+    expect(s.episodeId).toBe("E-live");
+    expect(s.config).toBeNull();
+    expect(s.manifest).toBeNull();
+    expect(s.summary).toBeNull();
+    expect(s.commandLog).toEqual([]);
+    expect(s.frames).toEqual([]);
+    expect(s.latestFrame).toBeNull();
+    expect(s.currentIndex).toBe(0);
+  });
+
+  it("pushRealtimeFrame resets the live buffer when the episode id changes", () => {
+    const first = { ...frames[0], episode_id: "E-live-1", frame: 3 };
+    const nextEpisode = { ...frames[1], episode_id: "E-live-2", frame: 0 };
+
+    useStore.getState().startLiveEpisode("E-live-1");
+    useStore.getState().pushRealtimeFrame(first);
+    useStore.getState().pushRealtimeFrame(nextEpisode);
+    const s = useStore.getState();
+
+    expect(s.episodeId).toBe("E-live-2");
+    expect(s.frames).toEqual([nextEpisode]);
+    expect(s.latestFrame).toBe(nextEpisode);
+    expect(s.currentIndex).toBe(0);
+  });
 });
 
 describe("seekIndexByTime binary search", () => {

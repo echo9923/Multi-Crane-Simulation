@@ -31,5 +31,11 @@ def test_production_task_system_activates_tasks_and_builds_context(
 
     run_dir = runner.recorder.run_dir
     assert run_dir is not None
+    assert runner.recorder.last_frame is not None
+    assert any(
+        event.get("event_type") == "task_started"
+        for event in runner.recorder.last_frame.events
+    )
+    runner.recorder.finalize(episode_status=runner.episode_status)
     events = (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8")
     assert "task_started" in events

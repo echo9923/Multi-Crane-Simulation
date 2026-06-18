@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
+from backend.app.schemas.scheduler import EpisodeStatus
 from backend.app.tests.test_config_schema import FIXTURE_DIR
 
 
@@ -70,6 +71,10 @@ def test_start_episode_defaults_to_production_runner_and_downloads_full_archive(
     data = response.json()["data"]
     run_dir = Path(data["run_dir"])
     assert run_dir.name == "E-api-default"
+    service = client.app.state.episode_service
+    handle = service.get_handle("E-api-default")
+    while handle.status is EpisodeStatus.RUNNING:
+        service._advance_handle_once(handle)
     assert (run_dir / "data" / "trajectories.parquet").is_file()
     assert (run_dir / "logs" / "commands.jsonl").is_file()
     assert (run_dir / "metadata" / "episode_metadata.json").is_file()

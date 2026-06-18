@@ -1,6 +1,6 @@
 // Scenario config upload. Parsing + secret scrub happen in the browser; the
 // actual validation authority is the backend POST /scenarios/validate. The
-// frontend only displays valid/warnings/errors and never starts a run from here.
+// frontend only displays successful validation metadata and never starts a run from here.
 
 import { useRef, useState } from "react";
 import { validateScenario } from "@/api/rest";
@@ -56,28 +56,12 @@ export function ConfigPage() {
       )}
       {result && (
         <div className="panel" data-testid="config-result">
-          <h3>校验结果：{result.valid ? "✓ 通过" : "✗ 未通过"}</h3>
+          <h3>校验结果：✓ 通过</h3>
           <div className="panel-body">
             {result.resolved_config_hash && (
               <div className="muted">hash: {result.resolved_config_hash}</div>
             )}
-            {result.warnings.length > 0 && (
-              <>
-                <div className="section-label">warnings</div>
-                <pre className="blob">{JSON.stringify(result.warnings, null, 2)}</pre>
-              </>
-            )}
-            {result.errors.length > 0 && (
-              <>
-                <div className="section-label">errors</div>
-                <pre className="blob" style={{ color: "#ef4444" }}>
-                  {JSON.stringify(result.errors, null, 2)}
-                </pre>
-              </>
-            )}
-            {result.valid && result.warnings.length === 0 && result.errors.length === 0 && (
-              <span className="muted">无警告或错误。</span>
-            )}
+            <span className="muted">无配置错误。</span>
           </div>
         </div>
       )}

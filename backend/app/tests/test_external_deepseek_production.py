@@ -108,7 +108,7 @@ def _deepseek_config(tmp_path: Path):
                 "llm": {
                     "provider": "deepseek",
                     "model": "deepseek-v4-flash",
-                    "base_url": "https://api.deepseek.com",
+                    "base_url": "https://api.deepseek.com/v1",
                     "api_key_env": "DEEPSEEK_API_KEY",
                     "api_key": None,
                     "timeout_s": 20,

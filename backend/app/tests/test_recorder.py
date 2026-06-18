@@ -42,6 +42,7 @@ from backend.app.sim.recorder import (
     init_run_directory,
     write_episode_summary,
 )
+from backend.app.api.production_runner import ProductionRecorderAdapter
 from backend.app.tests.test_config_schema import load_fixture
 
 
@@ -1325,6 +1326,71 @@ def test_recorder_orchestrates_initial_step_offline_labels_and_finalize(
     assert frames[1]["frame"] == 1
     assert events[0]["event_type"] == "near_miss"
     assert summary_payload["near_miss_count"] == 1
+
+
+def test_production_recorder_adapter_does_not_flush_full_writers_per_frame() -> None:
+    class CountingWriters:
+        def __init__(self) -> None:
+            self.flush_count = 0
+
+        def flush_all(self) -> None:
+            self.flush_count += 1
+
+    class CountingVisualWriter:
+        def __init__(self) -> None:
+            self.flush_count = 0
+
+        def flush(self) -> None:
+            self.flush_count += 1
+
+    class StubRecorder:
+        def __init__(self) -> None:
+            self.layout = None
+            self.parquet_writers = CountingWriters()
+            self.jsonl_writers = CountingWriters()
+            self.visual_writer = CountingVisualWriter()
+            self.finalize_count = 0
+
+        def record_initial_frame(self, **kwargs):
+            return SimFrame(
+                episode_id=kwargs["episode_id"],
+                scenario_id="scenario-001",
+                frame=kwargs["frame_index"],
+                time_s=kwargs["time_s"],
+                episode_status="running",
+                cranes=[],
+                pairs=[],
+                tasks=[],
+                weather=SimFrameWeather(wind_speed_m_s=1.0, visibility="good"),
+                events=[],
+            )
+
+        def record_step(self, **kwargs):
+            return self.record_initial_frame(**kwargs)
+
+        def finalize(self, *, episode_status):
+            self.finalize_count += 1
+            return {"episode_status": episode_status}
+
+    recorder = StubRecorder()
+    adapter = ProductionRecorderAdapter(recorder)
+    kwargs = {
+        "episode_id": "episode-001",
+        "frame_index": 0,
+        "time_s": 0.0,
+        "states": [],
+        "weather_state": _weather_state(),
+        "status": "running",
+    }
+
+    adapter.record_initial_frame(**kwargs)
+    adapter.record_step(**{**kwargs, "frame_index": 1, "time_s": 0.5})
+    adapter.finalize(episode_status="completed")
+
+    assert recorder.parquet_writers.flush_count == 0
+    assert recorder.jsonl_writers.flush_count == 0
+    assert recorder.visual_writer.flush_count == 0
+    assert recorder.finalize_count == 1
 
 
 def test_record_initial_frame_requires_zero_time_and_frame(tmp_path: Path) -> None:

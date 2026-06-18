@@ -8,6 +8,7 @@ import pytest
 from backend.app.schemas.command import ExecutedCommand, ParsedCommand
 from backend.app.schemas.config import ScenarioConfig
 from backend.app.schemas.control import ControlTarget
+from backend.app.schemas.recorder import SimFrame, SimFrameWeather
 from backend.app.schemas.risk import CollisionEvent
 from backend.app.schemas.scheduler import EpisodeStatus, SchedulerConfig
 from backend.app.schemas.weather import WeatherState, WeatherVisibilityContext
@@ -309,13 +310,29 @@ class FakeRecorder:
         self.initial_calls: list[dict] = []
         self.step_calls: list[dict] = []
 
-    def record_initial_frame(self, **kwargs) -> None:
+    def _frame(self, **kwargs) -> SimFrame:
+        return SimFrame(
+            episode_id=kwargs["episode_id"],
+            scenario_id="scenario-test",
+            frame=kwargs["frame_index"],
+            time_s=kwargs["time_s"],
+            episode_status=str(kwargs.get("status", "running")),
+            cranes=[],
+            pairs=[],
+            tasks=[],
+            weather=SimFrameWeather(wind_speed_m_s=1.0, visibility="good"),
+            events=list(kwargs.get("events", [])),
+        )
+
+    def record_initial_frame(self, **kwargs) -> SimFrame:
         self.initial_calls.append(kwargs)
         self.log.append(f"recorder.initial:{kwargs['time_s']:.1f}")
+        return self._frame(**kwargs)
 
-    def record_step(self, **kwargs) -> None:
+    def record_step(self, **kwargs) -> SimFrame:
         self.step_calls.append(kwargs)
         self.log.append(f"recorder.step:{kwargs['time_s']:.1f}")
+        return self._frame(**kwargs)
 
 
 class FakeWebSocket:
@@ -325,7 +342,8 @@ class FakeWebSocket:
 
     def broadcast_sim_frame_if_enabled(self, **kwargs) -> None:
         self.calls.append(kwargs)
-        self.log.append(f"websocket.broadcast:{kwargs['time_s']:.1f}")
+        frame = kwargs.get("frame")
+        self.log.append(f"websocket.broadcast:{frame.time_s:.1f}")
 
 
 class FakeReplaySource:
@@ -490,8 +508,9 @@ def test_interactive_runner_broadcasts_frame_when_websocket_present() -> None:
     result = runner.run_one_frame()
 
     assert result.status is EpisodeStatus.RUNNING
-    assert len(websocket.calls) == 1
-    assert websocket.calls[0]["frame_index"] == 1
+    assert len(websocket.calls) == 2
+    assert websocket.calls[0]["frame"].frame == 0
+    assert websocket.calls[1]["frame"].frame == 1
     assert "websocket.broadcast:0.5" in log
 
 

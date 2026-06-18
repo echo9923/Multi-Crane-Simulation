@@ -16,12 +16,19 @@ export function SceneView() {
     if (!canvas) return;
     const ctrl = new ThreeSceneController({ canvas, controls: true });
     controllerRef.current = ctrl;
+    let staticKey: string | null = null;
 
-    // Build the static scene from config/manifest if available; in live mode
-    // (neither present) defer to the first frame via ensureStatic().
-    const ensureStatic = () => {
+    const keyForState = () => {
       const s = useStore.getState();
-      if (ctrl.hasStatic()) return;
+      if (s.config || s.manifest) return `offline:${s.episodeId ?? ""}:${Boolean(s.config)}:${s.manifest?.episode_id ?? ""}`;
+      if (s.latestFrame) {
+        return `live:${s.latestFrame.episode_id}:${s.latestFrame.cranes.map((crane) => crane.crane_id).join(",")}`;
+      }
+      return "empty";
+    };
+
+    const buildStaticForState = () => {
+      const s = useStore.getState();
       if (s.config || s.manifest) {
         ctrl.buildStatic(s.config, s.manifest);
       } else if (s.latestFrame) {
@@ -29,6 +36,15 @@ export function SceneView() {
       } else {
         ctrl.buildStatic(null, null);
       }
+      staticKey = keyForState();
+    };
+
+    // Build the static scene from config/manifest if available; in live mode
+    // (neither present) defer to the first frame via ensureStatic().
+    const ensureStatic = () => {
+      const nextKey = keyForState();
+      if (ctrl.hasStatic() && staticKey === nextKey) return;
+      buildStaticForState();
     };
 
     ensureStatic();
@@ -63,7 +79,7 @@ export function SceneView() {
       }
       if (s.config !== prev.config || s.manifest !== prev.manifest) {
         // Explicit episode reload: rebuild the static scene.
-        ctrl.buildStatic(s.config, s.manifest);
+        buildStaticForState();
         if (s.latestFrame) ctrl.applyFrame(s.latestFrame);
       }
       if (s.ui.showRisk !== prev.ui.showRisk) {

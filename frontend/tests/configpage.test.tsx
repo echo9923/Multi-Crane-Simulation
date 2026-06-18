@@ -26,7 +26,7 @@ describe("ConfigPage validate flow", () => {
   it("shows a passing result when the backend returns valid=true", async () => {
     setFetch({
       code: 0,
-      data: { valid: true, resolved_config_hash: "abc123", warnings: [], errors: [] },
+      data: { valid: true, resolved_config_hash: "abc123" },
       message: "ok",
     });
     render(<ConfigPage />);
@@ -37,24 +37,23 @@ describe("ConfigPage validate flow", () => {
     expect(screen.getByTestId("config-result").textContent).toContain("abc123");
   });
 
-  it("shows errors when the backend returns valid=false", async () => {
-    setFetch({
-      code: 0,
-      data: {
-        valid: false,
-        resolved_config_hash: null,
-        warnings: [],
-        errors: [{ schema_version: "1.0", code: "CFG_E_BOUNDARY", message: "bad boundary", details: {} }],
+  it("shows backend validation errors from the error envelope", async () => {
+    setFetch(
+      {
+        code: "M_E_CONFIG_INVALID",
+        data: null,
+        message: "bad boundary",
+        details: { field_path: "scenario.site.boundary" },
       },
-      message: "ok",
-    });
+      422,
+    );
     render(<ConfigPage />);
     fireEvent.change(screen.getByTestId("config-file-input"), {
       target: { files: [pickFile("scenario:\n  site: {}\n")] },
     });
-    await waitFor(() => expect(screen.getByTestId("config-result")).toBeTruthy());
-    expect(screen.getByTestId("config-result").textContent).toContain("未通过");
-    expect(screen.getByTestId("config-result").textContent).toContain("CFG_E_BOUNDARY");
+    await waitFor(() => expect(screen.getByTestId("config-error")).toBeTruthy());
+    expect(screen.getByTestId("config-error").textContent).toContain("M_E_CONFIG_INVALID");
+    expect(screen.getByTestId("config-error").textContent).toContain("bad boundary");
   });
 
   it("surfaces a backend M_E_* error code on failure", async () => {

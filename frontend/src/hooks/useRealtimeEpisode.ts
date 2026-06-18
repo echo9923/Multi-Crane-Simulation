@@ -11,8 +11,7 @@ export function useRealtimeEpisode(episodeId: string | undefined): void {
 
   useEffect(() => {
     if (!episodeId) return;
-    useStore.getState().setMode("live");
-    useStore.getState().setEpisodeId(episodeId);
+    useStore.getState().startLiveEpisode(episodeId);
     useStore.getState().setConnection({ status: "connecting", error: null });
 
     const client = new EpisodeWebSocketClient({

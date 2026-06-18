@@ -57,6 +57,10 @@ describe("workbench config model", () => {
     expect(patches["experiment.llm.provider"]).toBe("mock");
   });
 
+  it("defaults DeepSeek base URL to the v1 chat API root", () => {
+    expect(defaultCoreForm().llmBaseUrl).toBe("https://api.deepseek.com/v1");
+  });
+
   it("default manual cranes have distinct safe base positions", () => {
     const form = defaultCoreForm();
     const bases = form.cranes.map((crane) => [crane.baseX, crane.baseY, crane.baseZ]);
@@ -174,7 +178,7 @@ describe("workbench config model", () => {
       "    enabled: true",
       "    provider: deepseek",
       "    model: deepseek-v4-flash",
-      "    base_url: https://api.deepseek.com",
+      "    base_url: https://api.deepseek.com/v1",
       "    api_key_env: DEEPSEEK_API_KEY",
       "    temperature: 0.2",
       "    timeout_s: 30",

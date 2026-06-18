@@ -36,7 +36,7 @@ beforeEach(() => {
 describe("validateScenario", () => {
   it("unwraps data on success", async () => {
     setFetch(async () =>
-      jsonRes({ code: 0, data: { valid: true, resolved_config_hash: "h", warnings: [], errors: [] }, message: "ok" }),
+      jsonRes({ code: 0, data: { valid: true, resolved_config_hash: "h" }, message: "ok" }),
     );
     const r = await validateScenario({ scenario: {} });
     expect(r.valid).toBe(true);

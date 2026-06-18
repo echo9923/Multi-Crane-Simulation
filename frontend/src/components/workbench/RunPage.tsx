@@ -26,6 +26,10 @@ const terminalStatuses = new Set([
   "stopped_by_user",
 ]);
 
+function isTerminalStatus(status: string | null | undefined): boolean {
+  return terminalStatuses.has(status ?? "");
+}
+
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const code =
@@ -38,16 +42,6 @@ function errorMessage(error: unknown): string {
 function displayValue(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === "") return "-";
   return String(value);
-}
-
-function issueField(issue: unknown, key: "code" | "message" | "text"): string | null {
-  if (!issue || typeof issue !== "object") return null;
-  const value = (issue as Record<string, unknown>)[key];
-  return typeof value === "string" && value ? value : null;
-}
-
-function issueMessage(issue: unknown): string {
-  return issueField(issue, "message") ?? issueField(issue, "text") ?? String(issue);
 }
 
 function moduleEvidence(
@@ -107,6 +101,7 @@ export function RunPage() {
   const setCurrentEpisode = useWorkbenchStore((s) => s.setCurrentEpisode);
   const setEpisodeState = useWorkbenchStore((s) => s.setEpisodeState);
   const setBusy = useWorkbenchStore((s) => s.setBusy);
+  const startLiveEpisode = useStore((s) => s.startLiveEpisode);
   const setLegacyEpisodeId = useStore((s) => s.setEpisodeId);
   const setLegacyMode = useStore((s) => s.setMode);
 
@@ -114,18 +109,12 @@ export function RunPage() {
   const status = episodeState?.status ?? currentEpisode?.status ?? null;
   const frameIndex = episodeState?.frame_index ?? null;
   const runDir = episodeState?.run_dir ?? currentEpisode?.run_dir ?? null;
-  const isTerminal = terminalStatuses.has(status ?? "");
+  const isTerminal = isTerminalStatus(status);
   const canRefreshEpisode = Boolean(episodeId);
   const canControlEpisode = Boolean(episodeId && !currentEpisodeStale);
   const canPause = canControlEpisode && status === "running";
   const canResume = canControlEpisode && status === "paused";
   const canStop = canControlEpisode && !isTerminal;
-  const validationErrors = validation?.errors ?? [];
-  const validationWarnings = validation?.warnings ?? [];
-  const hasValidationDetails =
-    Boolean(validation && !validation.valid) &&
-    (validationErrors.length > 0 || validationWarnings.length > 0);
-
   const refreshState = async (id = episodeId) => {
     if (!id) return;
     const state = await getEpisodeState(id);
@@ -179,8 +168,7 @@ export function RunPage() {
         autostart: true,
       });
       setCurrentEpisode(started);
-      setLegacyEpisodeId(started.episode_id);
-      setLegacyMode("live");
+      startLiveEpisode(started.episode_id);
       await refreshState(started.episode_id);
     });
 
@@ -201,10 +189,29 @@ export function RunPage() {
   const stopRun = () =>
     runAction(async () => {
       if (!episodeId) return;
-      await stopEpisode(episodeId);
-      await refreshState(episodeId);
-      setLegacyMode("idle");
-      setLegacyEpisodeId(null);
+      let clearLegacy = false;
+      let stopError: unknown = null;
+      try {
+        const response = await stopEpisode(episodeId);
+        clearLegacy = response.accepted || response.reason === "already_terminal";
+      } catch (error) {
+        stopError = error;
+      }
+      try {
+        await refreshState(episodeId);
+        clearLegacy =
+          clearLegacy ||
+          isTerminalStatus(useWorkbenchStore.getState().episodeState?.status);
+      } catch {
+        // Preserve live state when transport failed and terminal state is unknown.
+      }
+      if (clearLegacy) {
+        setLegacyMode("idle");
+        setLegacyEpisodeId(null);
+      }
+      if (stopError && !clearLegacy) {
+        throw stopError;
+      }
     });
 
   const refreshRun = () =>
@@ -240,9 +247,6 @@ export function RunPage() {
           刷新状态
         </button>
         {validation?.valid ? <span className="chip chip-ok">校验通过</span> : null}
-        {validation && !validation.valid ? (
-          <span className="chip chip-warn">校验未通过</span>
-        ) : null}
         {busy ? <span className="chip">处理中</span> : null}
       </div>
 
@@ -255,45 +259,6 @@ export function RunPage() {
       {currentEpisodeStale ? (
         <div className="workbench-notice" role="status">
           Config changed after this Episode started. Start a new Episode before sending controls.
-        </div>
-      ) : null}
-
-      {hasValidationDetails ? (
-        <div className="workbench-validation-details" aria-label="校验详情">
-          {validationErrors.length > 0 ? (
-            <div>
-              <h3>错误</h3>
-              <ul>
-                {validationErrors.map((issue, index) => (
-                  <li key={`error-${index}`}>
-                    {issueField(issue, "code") ? (
-                      <span className="workbench-validation-code">
-                        {issueField(issue, "code")}
-                      </span>
-                    ) : null}
-                    <span>{issueMessage(issue)}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          {validationWarnings.length > 0 ? (
-            <div>
-              <h3>警告</h3>
-              <ul>
-                {validationWarnings.map((issue, index) => (
-                  <li key={`warning-${index}`}>
-                    {issueField(issue, "code") ? (
-                      <span className="workbench-validation-code">
-                        {issueField(issue, "code")}
-                      </span>
-                    ) : null}
-                    <span>{issueMessage(issue)}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
         </div>
       ) : null}
 

@@ -282,7 +282,7 @@ export function defaultCoreForm(): CoreExperimentForm {
     llmEnabled: true,
     llmProvider: "deepseek",
     llmModel: "deepseek-v4-flash",
-    llmBaseUrl: "https://api.deepseek.com",
+    llmBaseUrl: "https://api.deepseek.com/v1",
     llmApiKeyEnv: "DEEPSEEK_API_KEY",
     llmTemperature: 0.2,
     timeoutS: 30,

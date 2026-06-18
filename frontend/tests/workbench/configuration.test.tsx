@@ -90,7 +90,7 @@ const renderYaml = [
   "    enabled: true",
   "    provider: deepseek",
   "    model: deepseek-v4-flash",
-  "    base_url: https://api.deepseek.com",
+  "    base_url: https://api.deepseek.com/v1",
   "    api_key_env: DEEPSEEK_API_KEY",
   "    temperature: 0.2",
   "    timeout_s: 30",
@@ -112,7 +112,7 @@ const patchedYaml = renderYaml.replace("num_cranes: 4", "num_cranes: 6");
 const latestDraftYaml = renderYaml
   .replace("provider: deepseek", "provider: siliconflow")
   .replace("model: deepseek-v4-flash", "model: deepseek-ai/DeepSeek-V4-Flash")
-  .replace("base_url: https://api.deepseek.com", "base_url: https://api.siliconflow.cn/v1")
+  .replace("base_url: https://api.deepseek.com/v1", "base_url: https://api.siliconflow.cn/v1")
   .replace("api_key_env: DEEPSEEK_API_KEY", "api_key_env: SILICONFLOW_API_KEY");
 
 function installFetchMock(opts: { latestDraftYaml?: string | null } = {}) {
@@ -246,8 +246,6 @@ function installFetchMock(opts: { latestDraftYaml?: string | null } = {}) {
       return ok({
         valid: true,
         resolved_config_hash: "hash",
-        warnings: [],
-        errors: [],
       });
     }
     throw new Error(`unexpected URL ${url}`);
@@ -685,8 +683,6 @@ describe("workbench configuration flow", () => {
       return ok({
         valid: true,
         resolved_config_hash: "hash",
-        warnings: [],
-        errors: [],
       });
     });
 

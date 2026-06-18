@@ -180,20 +180,6 @@ function resizeCranes(
   return next;
 }
 
-function validationText(item: unknown): string {
-  const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
-  if (typeof record.message === "string") return record.message;
-  if (typeof record.msg === "string") return record.msg;
-  return JSON.stringify(item);
-}
-
-function validationCode(item: unknown): string {
-  const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
-  if (typeof record.code === "string") return record.code;
-  if (typeof record.type === "string") return record.type;
-  return "CONFIG";
-}
-
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -812,49 +798,11 @@ export function ConfigurationPage() {
         ) : null}
         <span className="chip">{draftStatus}</span>
         {validation?.valid ? <span className="chip chip-ok">校验通过</span> : null}
-        {validation && !validation.valid ? (
-          <span className="chip chip-warn">校验未通过</span>
-        ) : null}
       </div>
 
       {validationError ? (
         <div className="workbench-notice" role="alert">
           {validationError}
-        </div>
-      ) : null}
-
-      {validation && (validation.errors.length > 0 || validation.warnings.length > 0) ? (
-        <div className="workbench-validation-details">
-          {validation.errors.length > 0 ? (
-            <div>
-              <h3>错误</h3>
-              <ul>
-                {validation.errors.map((item, index) => (
-                  <li key={`error-${index}`}>
-                    <span className="workbench-validation-code">
-                      {validationCode(item)}
-                    </span>
-                    <span>{validationText(item)}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          {validation.warnings.length > 0 ? (
-            <div>
-              <h3>警告</h3>
-              <ul>
-                {validation.warnings.map((item, index) => (
-                  <li key={`warning-${index}`}>
-                    <span className="workbench-validation-code">
-                      {validationCode(item)}
-                    </span>
-                    <span>{validationText(item)}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
         </div>
       ) : null}
 

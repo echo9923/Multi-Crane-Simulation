@@ -74,18 +74,23 @@ const startedEpisode = {
 };
 
 function installFetchMock(
-  options: { startResponse?: Promise<Response>; validateData?: unknown } = {},
+  options: {
+    startResponse?: Promise<Response>;
+    validateData?: unknown;
+    validateResponse?: Promise<Response>;
+    stopResponse?: Promise<Response> | (() => Promise<Response>);
+    stateAfterStop?: EpisodeStateResponse;
+  } = {},
 ) {
   let currentState: EpisodeStateResponse = { ...runningState };
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/scenarios/validate")) {
+      if (options.validateResponse) return options.validateResponse;
       return ok(
         options.validateData ?? {
           valid: true,
           resolved_config_hash: "hash",
-          warnings: [],
-          errors: [],
         },
       );
     }
@@ -117,7 +122,9 @@ function installFetchMock(
       });
     }
     if (url.includes("/episodes/E1/stop")) {
-      currentState = { ...currentState, status: "stopped_by_user", terminal_reason: "stopped_by_user" };
+      if (typeof options.stopResponse === "function") return options.stopResponse();
+      if (options.stopResponse) return options.stopResponse;
+      currentState = options.stateAfterStop ?? { ...currentState, status: "stopped_by_user", terminal_reason: "stopped_by_user" };
       return ok({
         episode_id: "E1",
         previous_status: "running",
@@ -318,6 +325,52 @@ describe("workbench run controls", () => {
     expect(screen.getByText("E1")).toBeTruthy();
   });
 
+  it("clears legacy live runtime state when stop reports an already terminal episode", async () => {
+    vi.restoreAllMocks();
+    installFetchMock({
+      stopResponse: ok({
+        episode_id: "E1",
+        previous_status: "completed",
+        status: "completed",
+        accepted: false,
+        reason: "already_terminal",
+      }),
+      stateAfterStop: { ...runningState, status: "completed", terminal_reason: "completed" },
+    });
+    renderRunPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    await screen.findByText("frame 3");
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+
+    await waitFor(() => {
+      expect(useStore.getState().mode).toBe("idle");
+      expect(useStore.getState().episodeId).toBeNull();
+    });
+  });
+
+  it("keeps legacy live runtime state when stop transport fails and state cannot confirm terminal", async () => {
+    vi.restoreAllMocks();
+    const fetchMock = installFetchMock({
+      stopResponse: () => Promise.reject(new Error("network down")),
+    });
+    renderRunPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    await screen.findByText("frame 3");
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/episodes/E1/stop"),
+        expect.anything(),
+      );
+      expect(screen.getByRole("alert").textContent).toContain("network");
+    });
+    expect(useStore.getState().mode).toBe("live");
+    expect(useStore.getState().episodeId).toBe("E1");
+  });
+
   it("shows an alert and does not start when YAML parsing fails", async () => {
     const fetchMock = vi.mocked(fetch);
     useWorkbenchStore.getState().setYamlText("scenario:\n  - broken: [");
@@ -365,19 +418,7 @@ describe("workbench run controls", () => {
   it("shows validation error details when backend validation fails", async () => {
     vi.restoreAllMocks();
     const fetchMock = installFetchMock({
-      validateData: {
-        valid: false,
-        resolved_config_hash: null,
-        warnings: [{ message: "wind uses default" }],
-        errors: [
-          {
-            schema_version: "1.0",
-            code: "CFG_E_BOUNDARY",
-            message: "bad boundary",
-            details: {},
-          },
-        ],
-      },
+      validateResponse: errorEnvelope("M_E_CONFIG_INVALID", "bad boundary"),
     });
     renderRunPage();
 
@@ -389,9 +430,8 @@ describe("workbench run controls", () => {
         expect.anything(),
       );
     });
-    expect(screen.getByText("校验未通过")).toBeTruthy();
-    expect(screen.getByText("CFG_E_BOUNDARY")).toBeTruthy();
-    expect(screen.getByText("bad boundary")).toBeTruthy();
-    expect(screen.getByText("wind uses default")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "M_E_CONFIG_INVALID: bad boundary",
+    );
   });
 });

@@ -65,6 +65,7 @@ export interface AppState {
   ) => void;
   setEpisodeId: (id: string | null) => void;
   setMode: (mode: AppMode) => void;
+  startLiveEpisode: (episodeId: string) => void;
   setFrame: (index: number) => void;
   stepFrame: (delta: number) => void;
   pushRealtimeFrame: (frame: SimFrame) => void;
@@ -142,6 +143,20 @@ export const useStore = create<AppState>((set, get) => ({
   setEpisodeId: (id) => set({ episodeId: id }),
   setMode: (mode) => set({ mode }),
 
+  startLiveEpisode: (episodeId) =>
+    set({
+      mode: "live",
+      episodeId,
+      config: null,
+      manifest: null,
+      summary: null,
+      frames: [],
+      currentIndex: 0,
+      latestFrame: null,
+      commandLog: [],
+      playback: { ...initialPlayback },
+    }),
+
   setFrame: (index) => {
     const { frames } = get();
     const clamped = frames.length === 0 ? 0 : Math.max(0, Math.min(index, frames.length - 1));
@@ -155,6 +170,20 @@ export const useStore = create<AppState>((set, get) => ({
 
   pushRealtimeFrame: (frame) =>
     set((state) => {
+      if (state.episodeId && state.episodeId !== frame.episode_id) {
+        return {
+          mode: "live",
+          episodeId: frame.episode_id,
+          config: null,
+          manifest: null,
+          summary: null,
+          frames: [frame],
+          latestFrame: frame,
+          currentIndex: 0,
+          commandLog: [],
+          playback: { ...initialPlayback },
+        };
+      }
       const last = state.frames[state.frames.length - 1];
       if (last && frame.frame <= last.frame) {
         return { latestFrame: frame, episodeId: frame.episode_id };

@@ -37,10 +37,8 @@ export interface ScenarioValidateRequest {
 }
 
 export interface ScenarioValidateResult {
-  valid: boolean;
+  valid: true;
   resolved_config_hash: string | null;
-  warnings: Record<string, unknown>[];
-  errors: ApiError[];
 }
 
 export interface EpisodeStateResponse {

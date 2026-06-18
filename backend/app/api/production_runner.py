@@ -559,13 +559,11 @@ class ProductionRecorderAdapter:
             )
         frame = self.recorder.record_initial_frame(**kwargs)
         self.last_frame = frame
-        self._flush_open_writers()
         return frame
 
     def record_step(self, **kwargs: Any) -> Any:
         frame = self.recorder.record_step(**kwargs)
         self.last_frame = frame
-        self._flush_open_writers()
         return frame
 
     def finalize(self, *, episode_status: Any) -> Any:
@@ -573,15 +571,6 @@ class ProductionRecorderAdapter:
             return None
         self._finalized = True
         return self.recorder.finalize(episode_status=episode_status)
-
-    def _flush_open_writers(self) -> None:
-        if self.recorder.parquet_writers is not None:
-            self.recorder.parquet_writers.flush_all()
-        if self.recorder.jsonl_writers is not None:
-            self.recorder.jsonl_writers.flush_all()
-        if self.recorder.visual_writer is not None:
-            self.recorder.visual_writer.flush()
-
 
 class RuntimeSecretProvider:
     def __init__(self, provider: LLMProvider, runtime_secret: Any) -> None:

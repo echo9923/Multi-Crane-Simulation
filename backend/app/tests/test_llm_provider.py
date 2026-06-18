@@ -55,6 +55,18 @@ def _llm_config(provider: str, *, structured_output: str = "json_object"):
     return ExperimentConfig.model_validate(raw).llm
 
 
+def _llm_config_without_base_url(provider: str, *, structured_output: str = "json_object"):
+    raw = load_fixture("experiment_valid.yaml")
+    raw["llm"]["enabled"] = True
+    raw["llm"]["provider"] = provider
+    raw["llm"]["model"] = f"{provider}-model"
+    raw["llm"]["base_url"] = None
+    raw["llm"]["api_key"] = None
+    raw["llm"]["api_key_env"] = None
+    raw["llm"]["structured_output"]["mode"] = structured_output
+    return ExperimentConfig.model_validate(raw).llm
+
+
 def _observation(*, active: bool = True) -> Observation:
     return Observation(
         observation_id="obs-active" if active else "obs-idle",
@@ -278,6 +290,20 @@ def test_real_provider_distinguishes_json_object_structured_output() -> None:
     provider.generate(_request(_llm_config("deepseek", structured_output="json_object")))
 
     assert http_client.calls[0]["json"]["response_format"]["type"] == "json_object"
+
+
+def test_deepseek_provider_default_base_url_includes_v1_path() -> None:
+    http_client = FakeHTTPClient(
+        FakeHTTPResponse(
+            200,
+            {"id": "chatcmpl-003", "choices": [{"message": {"content": "{}"}}]},
+        )
+    )
+    provider = DeepSeekProvider(http_client=http_client)
+
+    provider.generate(_request(_llm_config_without_base_url("deepseek")))
+
+    assert http_client.calls[0]["url"] == "https://api.deepseek.com/v1/chat/completions"
 
 
 def test_real_provider_maps_timeout_and_api_errors() -> None:

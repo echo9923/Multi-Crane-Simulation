@@ -311,7 +311,7 @@ class EpisodeRunner:
         if self._terminal_candidate is not None:
             frame_events.append(self._terminal_candidate.model_dump(mode="json"))
 
-        self.dependencies.recorder.record_step(
+        frame = self.dependencies.recorder.record_step(
             episode_id=self.episode_id,
             frame_index=frame_index + 1,
             time_s=next_time_s,
@@ -335,13 +335,7 @@ class EpisodeRunner:
         ):
             self.dependencies.websocket.broadcast_sim_frame_if_enabled(
                 episode_id=self.episode_id,
-                frame_index=frame_index + 1,
-                time_s=next_time_s,
-                states=copy.deepcopy(next_states),
-                weather_state=copy.deepcopy(weather_state),
-                commands=copy.deepcopy(current_commands),
-                events=copy.deepcopy(frame_events),
-                status=self.episode_status,
+                frame=copy.deepcopy(frame),
             )
 
         self.frame_index = frame_index + 1
@@ -359,7 +353,7 @@ class EpisodeRunner:
         weather_state, visibility_context = self._update_weather(0.0)
         self.weather_state = weather_state
         self.visibility_context = visibility_context
-        self.dependencies.recorder.record_initial_frame(
+        frame = self.dependencies.recorder.record_initial_frame(
             episode_id=self.episode_id,
             frame_index=0,
             time_s=0.0,
@@ -370,6 +364,14 @@ class EpisodeRunner:
             commands=copy.deepcopy(self.command_store.get_current_commands()),
             status=self.episode_status,
         )
+        if (
+            self.config.run_mode is RuntimeMode.INTERACTIVE_SERVER
+            and self.dependencies.websocket is not None
+        ):
+            self.dependencies.websocket.broadcast_sim_frame_if_enabled(
+                episode_id=self.episode_id,
+                frame=copy.deepcopy(frame),
+            )
         self._initial_recorded = True
 
     def _update_weather(
