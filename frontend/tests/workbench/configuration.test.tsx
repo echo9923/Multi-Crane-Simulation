@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import yaml from "js-yaml";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -44,6 +45,28 @@ const renderYaml = [
   "      y_max: 80",
   "      z_min: 0",
   "      z_max: 60",
+  "    material_zones:",
+  "      - zone_id: mat_c1",
+  "        type: box",
+  "        center: [-20, -20, 0]",
+  "        size: [12, 10, 0.4]",
+  "        z_range_m: [0, 0.4]",
+  "        surface_z_m: 0",
+  "        zone_role: ground_yard",
+  "        load_types: [rebar_bundle]",
+  "    work_zones:",
+  "      - zone_id: work_c1",
+  "        type: box",
+  "        center: [20, 20, 12]",
+  "        size: [12, 10, 0.4]",
+  "        z_range_m: [12, 12.4]",
+  "        surface_z_m: 12",
+  "        floor_id: floor_03",
+  "        building_id: tower_a",
+  "        level_index: 3",
+  "        zone_role: floor_slab",
+  "        accepted_load_types: [rebar_bundle]",
+  "    forbidden_zones: []",
   "  layout:",
   "    num_cranes: 4",
   "    mode: manual",
@@ -63,6 +86,13 @@ const renderYaml = [
   "  tasks:",
   "    generation_mode: manual",
   "    num_tasks_per_crane: 2",
+  "    manual_tasks:",
+  "      - task_id: T_C1_001",
+  "        task_type: easy_task",
+  "        pickup_zone_id: mat_c1",
+  "        dropoff_zone_id: work_c1",
+  "        load_type: rebar_bundle",
+  "        priority: medium",
   "  weather:",
   "    mode: constant",
   "    wind:",
@@ -115,7 +145,7 @@ const latestDraftYaml = renderYaml
   .replace("base_url: https://api.deepseek.com/v1", "base_url: https://api.siliconflow.cn/v1")
   .replace("api_key_env: DEEPSEEK_API_KEY", "api_key_env: SILICONFLOW_API_KEY");
 
-function installFetchMock(opts: { latestDraftYaml?: string | null } = {}) {
+function installFetchMock(opts: { latestDraftYaml?: string | null; renderYamlText?: string } = {}) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/desktop/experiments/draft/latest")) {
@@ -157,7 +187,7 @@ function installFetchMock(opts: { latestDraftYaml?: string | null } = {}) {
       });
     }
     if (url.includes("/desktop/config/render")) {
-      return ok({ yaml_text: renderYaml });
+      return ok({ yaml_text: opts.renderYamlText ?? renderYaml });
     }
     if (url.includes("/desktop/config/patch")) {
       return ok({ yaml_text: patchedYaml });
@@ -266,6 +296,29 @@ function yamlTextarea() {
   return screen.getByLabelText("高级 YAML") as HTMLTextAreaElement;
 }
 
+function toolbarButtons() {
+  return Array.from(
+    document.querySelectorAll<HTMLButtonElement>(".workbench-config-toolbar button"),
+  );
+}
+
+function parsedYamlText() {
+  return yaml.load(yamlTextarea().value) as {
+    scenario?: {
+      site?: {
+        material_zones?: Array<{ zone_id?: string }>;
+        work_zones?: Array<{ zone_id?: string }>;
+      };
+      tasks?: {
+        manual_tasks?: Array<{
+          pickup_zone_id?: string;
+          dropoff_zone_id?: string;
+        }>;
+      };
+    };
+  };
+}
+
 function requestBodyFor(fetchMock: ReturnType<typeof vi.mocked<typeof fetch>>, path: string) {
   const call = fetchMock.mock.calls.find(([url]) => String(url).includes(path));
   expect(call).toBeTruthy();
@@ -317,6 +370,30 @@ describe("workbench configuration flow", () => {
     expect(useWorkbenchStore.getState().selectedTemplateId).toBe("demo");
     const body = requestBodyFor(fetchMock, "/desktop/config/render");
     expect(body.core_overrides).toEqual({});
+  });
+
+  it("keeps manual task zone references valid after applying the multifloor preset", async () => {
+    renderWorkbench();
+
+    fireEvent.click(toolbarButtons()[0]);
+    await waitFor(() => expect(yamlTextarea().value).toContain("pickup_zone_id: mat_c1"));
+
+    fireEvent.click(toolbarButtons()[3]);
+
+    const parsed = parsedYamlText();
+    const materialZoneIds = new Set(
+      parsed.scenario?.site?.material_zones?.map((zone) => zone.zone_id).filter(Boolean),
+    );
+    const workZoneIds = new Set(
+      parsed.scenario?.site?.work_zones?.map((zone) => zone.zone_id).filter(Boolean),
+    );
+    const manualTasks = parsed.scenario?.tasks?.manual_tasks ?? [];
+
+    expect(manualTasks.length).toBeGreaterThan(0);
+    for (const task of manualTasks) {
+      expect(materialZoneIds.has(task.pickup_zone_id)).toBe(true);
+      expect(workZoneIds.has(task.dropoff_zone_id)).toBe(true);
+    }
   });
 
   it("restores the latest draft when the configuration page opens", async () => {

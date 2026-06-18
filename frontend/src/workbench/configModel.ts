@@ -762,10 +762,14 @@ export function coreFormToPatches(form: CoreExperimentForm): Record<string, unkn
   };
 }
 
-export function applyCoreFormToYaml(text: string, form: CoreExperimentForm): string {
+export function applyCoreFormToYaml(
+  text: string,
+  form: CoreExperimentForm,
+  extraPatches: Record<string, unknown> = {},
+): string {
   const parsed = yaml.load(text);
   const root = asRecord(parsed);
-  const patches = coreFormToPatches(form);
+  const patches = { ...coreFormToPatches(form), ...extraPatches };
   for (const [path, value] of Object.entries(patches)) {
     setPatchPath(root, path, value);
   }

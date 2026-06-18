@@ -326,6 +326,21 @@ export function ConfigurationPage() {
     }
   };
 
+  const updateFormAndYaml = (
+    patch: Partial<CoreExperimentForm>,
+    extraPatches: Record<string, unknown>,
+  ) => {
+    const nextForm = { ...form, ...patch };
+    setFormPatch(patch);
+    if (!yamlText) return;
+    try {
+      setYamlText(applyCoreFormToYaml(yamlText, nextForm, extraPatches));
+      setValidation(null);
+    } catch (error) {
+      setValidation(null, `YAML 棰勮鏇存柊澶辫触: ${formatConfigError(error)}`);
+    }
+  };
+
   const handleAdvancedYamlChange = (text: string) => {
     setYamlText(text);
     try {
@@ -671,12 +686,35 @@ export function ConfigurationPage() {
         zoneRole: level === 7 ? "roof" : "floor_slab",
       };
     });
-    updateForm({
+    const manualTasks = form.cranes.flatMap((crane, index) => [
+      {
+        task_id: `T_${crane.craneId}_001`,
+        crane_id: crane.craneId,
+        task_type: "easy_task",
+        pickup_zone_id: index % 2 === 0 ? "ground_yard_1" : "truck_bed_1",
+        dropoff_zone_id: workZones[index % workZones.length].zoneId,
+        load_type: index % 2 === 0 ? "formwork" : "rebar_bundle",
+        priority: "medium",
+      },
+      {
+        task_id: `T_${crane.craneId}_002`,
+        crane_id: crane.craneId,
+        task_type: "easy_task",
+        pickup_zone_id: index % 2 === 0 ? "truck_bed_1" : "ground_yard_1",
+        dropoff_zone_id: workZones[(index + 1) % workZones.length].zoneId,
+        load_type: "rebar_bundle",
+        priority: index % 2 === 0 ? "medium" : "high",
+      },
+    ]);
+    updateFormAndYaml({
       scenarioId: "multifloor_construction_demo",
       experimentId: "multifloor_construction_demo",
       materialZones,
       workZones,
       tasksPerCrane: Math.max(form.tasksPerCrane, 2),
+      taskGenerationMode: "manual",
+    }, {
+      "scenario.tasks.manual_tasks": manualTasks,
     });
   };
 
