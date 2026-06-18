@@ -9,6 +9,9 @@ from backend.app.api.episode_service import EpisodeHandle, EpisodeService
 from backend.app.main import create_app
 from backend.app.schemas.recorder import OfflineFrameLabels, SimFrame, SimFrameWeather
 from backend.app.schemas.scheduler import EpisodeStatus
+from backend.app.schemas.task import Task, TaskPoint, TaskQueue
+from backend.app.schemas.state import CraneState
+from backend.app.schemas.weather import WeatherState
 
 
 class NoopRunner:
@@ -49,6 +52,71 @@ def _frame() -> SimFrame:
         tasks=[],
         weather=SimFrameWeather(wind_speed_m_s=1.0, visibility="good"),
         events=[],
+    )
+
+
+def _crane_state(crane_id: str = "C1") -> CraneState:
+    return CraneState(
+        crane_id=crane_id,
+        theta_rad=0.0,
+        theta_sin=0.0,
+        theta_cos=1.0,
+        trolley_r_m=20.0,
+        hook_h_m=12.0,
+        root_position=[0.0, 0.0, 45.0],
+        tip_position=[55.0, 0.0, 45.0],
+        hook_position=[20.0, 0.0, 12.0],
+        cable_length_m=33.0,
+        load_attached=False,
+        load_type="rebar_bundle",
+        load_weight_t=1.0,
+        load_size_m=[6.0, 1.0, 1.0],
+        task_id="T_C1_001",
+        task_stage="move_to_pickup",
+    )
+
+
+def _weather_state() -> WeatherState:
+    return WeatherState(
+        time_s=1.0,
+        mode="constant",
+        wind_speed_m_s=1.0,
+        wind_gust_m_s=2.0,
+        wind_direction_deg=90.0,
+        visibility_level="good",
+        rain_level="none",
+        fog_level="none",
+        source_segment_id="constant",
+        generation_seed=1,
+        generation_step=0,
+    )
+
+
+def _task_queue() -> TaskQueue:
+    pickup = TaskPoint(x=10.0, y=0.0, z=1.0, zone_id="material_zone", zone_type="material")
+    dropoff = TaskPoint(x=30.0, y=10.0, z=20.0, zone_id="work_zone", zone_type="work")
+    task = Task(
+        task_id="T_C1_001",
+        crane_id="C1",
+        task_type="easy_task",
+        pickup=pickup,
+        dropoff=dropoff,
+        pickup_zone_id=pickup.zone_id,
+        dropoff_zone_id=dropoff.zone_id,
+        planned_start_s=0.0,
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+        load_size_m=[6.0, 1.0, 1.0],
+        priority="medium",
+        deadline_s=180.0,
+        generation_seed=1,
+        generation_attempt=0,
+    )
+    return TaskQueue(
+        crane_id="C1",
+        tasks=[task],
+        active_task_id="T_C1_001",
+        next_task_index=1,
     )
 
 
@@ -213,6 +281,35 @@ def test_manager_sends_last_frame_to_new_connection() -> None:
     assert websocket.sent[0]["type"] == "sim_frame"
     assert websocket.sent[0]["data"]["episode_id"] == "E-ws"
     assert websocket.sent[0]["data"]["frame"] == 1
+
+
+def test_adapter_includes_task_queues_when_building_realtime_frame() -> None:
+    from backend.app.api.websocket import ApiWebSocketAdapter, WebSocketConnectionManager
+
+    manager = WebSocketConnectionManager()
+    websocket = FakeWebSocket()
+    adapter = ApiWebSocketAdapter(manager)
+
+    async def scenario() -> None:
+        await manager.connect("E-ws", websocket)
+        adapter.broadcast_sim_frame_if_enabled(
+            episode_id="E-ws",
+            frame_index=2,
+            time_s=1.0,
+            states=[_crane_state("C1")],
+            weather_state=_weather_state(),
+            task_queues=[_task_queue()],
+            status="running",
+        )
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+
+    assert websocket.sent[0]["type"] == "sim_frame"
+    payload = websocket.sent[0]["data"]
+    assert payload["offline_labels"] is None
+    assert payload["tasks"][0]["active_task_id"] == "T_C1_001"
+    assert payload["tasks"][0]["tasks"][0]["task_id"] == "T_C1_001"
 
 
 def test_websocket_module_does_not_define_duplicate_simframe_schema() -> None:

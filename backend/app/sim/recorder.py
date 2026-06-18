@@ -371,6 +371,7 @@ class Recorder:
             weather_state=weather_state,
             commands=commands,
             pairs=_online_risk_pairs(online_risk),
+            task_queues=task_queues,
             events=[row.model_dump(mode="json") for row in event_rows],
             for_realtime=False,
         )

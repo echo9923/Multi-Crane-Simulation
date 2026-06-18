@@ -29,6 +29,7 @@ from backend.app.schemas.recorder import (
     WeatherParquetRow,
 )
 from backend.app.schemas.state import CraneState
+from backend.app.schemas.task import Task, TaskPoint, TaskQueue
 from backend.app.schemas.weather import WeatherState
 from backend.app.sim.recorder import (
     DataExportError,
@@ -245,6 +246,40 @@ def _weather_state() -> WeatherState:
         source_segment_id="constant",
         generation_seed=303,
         generation_step=0,
+    )
+
+
+def _task(crane_id: str = "C1") -> Task:
+    pickup = TaskPoint(
+        x=10.0,
+        y=0.0,
+        z=1.0,
+        zone_id="material_zone",
+        zone_type="material",
+    )
+    dropoff = TaskPoint(
+        x=30.0,
+        y=10.0,
+        z=20.0,
+        zone_id="work_zone",
+        zone_type="work",
+    )
+    return Task(
+        task_id=f"T_{crane_id}_001",
+        crane_id=crane_id,
+        task_type="easy_task",
+        pickup=pickup,
+        dropoff=dropoff,
+        pickup_zone_id=pickup.zone_id,
+        dropoff_zone_id=dropoff.zone_id,
+        planned_start_s=0.0,
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+        load_size_m=[6.0, 1.0, 1.0],
+        priority="medium",
+        deadline_s=180.0,
+        generation_seed=1,
+        generation_attempt=0,
     )
 
 
@@ -990,6 +1025,32 @@ def test_build_sim_frame_maps_state_weather_pairs_and_events() -> None:
     assert dumped["events"][0]["event_type"] == "near_miss"
 
 
+def test_build_sim_frame_includes_task_queues_for_panel_contract() -> None:
+    queue = TaskQueue(
+        crane_id="C1",
+        tasks=[_task("C1")],
+        active_task_id="T_C1_001",
+        next_task_index=1,
+    )
+
+    frame = build_sim_frame(
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+        frame_index=2,
+        time_s=1.0,
+        episode_status="running",
+        states=[_crane_state("C1")],
+        weather_state=_weather_state(),
+        task_queues=[queue],
+    )
+
+    dumped = frame.model_dump(mode="json")
+    assert dumped["tasks"][0]["crane_id"] == "C1"
+    assert dumped["tasks"][0]["active_task_id"] == "T_C1_001"
+    assert dumped["tasks"][0]["tasks"][0]["task_id"] == "T_C1_001"
+    assert dumped["tasks"][0]["tasks"][0]["priority"] == "medium"
+
+
 def test_build_sim_frame_enforces_offline_label_isolation() -> None:
     offline_label = _offline_label()
 
@@ -1326,6 +1387,39 @@ def test_recorder_orchestrates_initial_step_offline_labels_and_finalize(
     assert frames[1]["frame"] == 1
     assert events[0]["event_type"] == "near_miss"
     assert summary_payload["near_miss_count"] == 1
+
+
+def test_recorder_step_writes_task_queues_into_visual_frames(tmp_path: Path) -> None:
+    config = _resolved_config(tmp_path)
+    recorder = Recorder.from_config(config)
+    queue = TaskQueue(
+        crane_id="C1",
+        tasks=[_task("C1")],
+        active_task_id="T_C1_001",
+        next_task_index=1,
+    )
+
+    frame = recorder.record_step(
+        episode_id="episode-001",
+        frame_index=1,
+        time_s=0.5,
+        states=[_crane_state("C1")],
+        weather_state=_weather_state(),
+        task_queues=[queue],
+        status="running",
+    )
+
+    assert frame.tasks[0]["active_task_id"] == "T_C1_001"
+
+    assert recorder.layout is not None
+    assert recorder.visual_writer is not None
+    recorder.visual_writer.flush()
+    frames = [
+        json.loads(line)
+        for line in recorder.layout.frames_jsonl_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert frames[0]["tasks"][0]["active_task_id"] == "T_C1_001"
+    assert frames[0]["tasks"][0]["tasks"][0]["task_id"] == "T_C1_001"
 
 
 def test_production_recorder_adapter_does_not_flush_full_writers_per_frame() -> None:

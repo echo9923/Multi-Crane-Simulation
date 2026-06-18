@@ -24,6 +24,11 @@ function loadStore() {
   useStore.getState().loadEpisode(frames, manifest, null, null, commands);
 }
 
+function loadSingleFrame(frame: typeof frames[number]) {
+  useStore.getState().reset();
+  useStore.getState().loadEpisode([frame], manifest, null, null, commands);
+}
+
 describe("CraneStatusPanel", () => {
   beforeEach(loadStore);
 
@@ -49,8 +54,69 @@ describe("CraneStatusPanel", () => {
 describe("TaskStatusPanel", () => {
   beforeEach(loadStore);
 
-  it("shows the empty hint when the frame has no tasks", () => {
+  it("derives task rows from crane task state when frame tasks are missing", () => {
+    loadSingleFrame({ ...frames[0], tasks: [] });
+
     render(<TaskStatusPanel />);
+
+    const panel = screen.getByTestId("task-status");
+    expect(panel.textContent).toContain("T-C1");
+    expect(panel.textContent).toContain("lift_load");
+    expect(panel.textContent).toContain("T-C3");
+    expect(panel.textContent).toContain("move_to_dropoff");
+    expect(panel.textContent).not.toContain("无任务");
+    expect(panel.querySelectorAll("tbody tr").length).toBe(2);
+  });
+
+  it("expands task queue payloads from backend frames", () => {
+    loadSingleFrame({
+      ...frames[0],
+      tasks: [
+        {
+          crane_id: "C1",
+          active_task_id: "T_C1_001",
+          tasks: [
+            {
+              task_id: "T_C1_001",
+              crane_id: "C1",
+              task_type: "easy_task",
+              status: "active",
+              priority: "high",
+              deadline_s: 120,
+            },
+          ],
+        },
+      ],
+    });
+
+    render(<TaskStatusPanel />);
+
+    const panel = screen.getByTestId("task-status");
+    expect(panel.textContent).toContain("T_C1_001");
+    expect(panel.textContent).toContain("C1");
+    expect(panel.textContent).toContain("easy_task");
+    expect(panel.textContent).toContain("active");
+    expect(panel.textContent).toContain("high");
+    expect(panel.textContent).toContain("120");
+    expect(panel.querySelectorAll("tbody tr").length).toBe(1);
+  });
+
+  it("shows the empty hint only when the frame has no task rows", () => {
+    loadSingleFrame({
+      ...frames[0],
+      tasks: [],
+      cranes: frames[0].cranes.map((crane) => ({
+        ...crane,
+        task_id: null,
+        task_stage: "idle",
+        load_type: null,
+        pickup_zone_id: null,
+        dropoff_zone_id: null,
+      })),
+    });
+
+    render(<TaskStatusPanel />);
+
     expect(screen.getByTestId("task-status").textContent).toContain("无任务");
   });
 });
