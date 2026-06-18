@@ -6,6 +6,7 @@ import { Layout } from "@/components/Layout";
 import { LeftControls } from "@/components/LeftControls";
 import { Panels } from "@/components/panels/Panels";
 import { SceneView } from "@/components/SceneView";
+import { SceneOverlays } from "@/components/SceneOverlays";
 import { Timeline } from "@/components/Timeline";
 import { useRealtimeEpisode } from "@/hooks/useRealtimeEpisode";
 import { useWorkbenchStore } from "@/state/workbench";
@@ -32,7 +33,12 @@ export function VisualizationPage() {
       <div className="workbench-visualization-embed">
         <Layout
           left={<LeftControls />}
-          center={<SceneView />}
+          center={
+            <>
+              <SceneView />
+              <SceneOverlays />
+            </>
+          }
           right={<Panels />}
           bottom={<Timeline />}
         />

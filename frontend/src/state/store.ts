@@ -33,6 +33,7 @@ export interface UIState {
   followCraneId: string | null;
   showRisk: boolean;
   showZones: boolean;
+  showPaths: boolean;
 }
 
 export interface AppState {
@@ -91,6 +92,7 @@ const initialUI: UIState = {
   followCraneId: null,
   showRisk: true,
   showZones: true,
+  showPaths: true,
 };
 const LIVE_FRAME_LIMIT = 5000;
 

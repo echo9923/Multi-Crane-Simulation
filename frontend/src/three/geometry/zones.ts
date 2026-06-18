@@ -5,6 +5,21 @@
 import * as THREE from "three";
 import type { ZoneConfig } from "@/types/config";
 import { worldToThree } from "@/coord";
+import { makeTextSprite } from "./labels";
+
+// Floating zone-id label above a zone. Returns null in headless/jsdom (no 2D
+// canvas backend); callers skip it, so it never affects the named scene graph.
+function makeZoneLabel(text: string, x: number, y: number, z: number): THREE.Sprite | null {
+  const sprite = makeTextSprite(text, {
+    color: "#1e293b",
+    background: "rgba(255,255,255,0.82)",
+    worldHeight: 2.4,
+  });
+  if (!sprite) return null;
+  sprite.position.set(...worldToThree([x, y, z]));
+  sprite.name = "zone-label";
+  return sprite;
+}
 
 export type ZoneKind = "material" | "work" | "forbidden" | "overlap";
 
@@ -166,6 +181,8 @@ export function buildZone(zone: ZoneConfig, kind: ZoneKind): THREE.Object3D {
     const post = makeHeightPost(zmax, color);
     post.position.set(...worldToThree([cx, cy, 0]));
     group.add(post);
+    const label = makeZoneLabel(zone.zone_id, cx, cy, zmax + 1.2);
+    if (label) group.add(label);
     return group;
   }
 
@@ -199,6 +216,8 @@ export function buildZone(zone: ZoneConfig, kind: ZoneKind): THREE.Object3D {
     const post = makeHeightPost(zmax, color);
     post.position.set(centroid[0], 0, -centroid[1]);
     group.add(post);
+    const label = makeZoneLabel(zone.zone_id, centroid[0], centroid[1], zmax + 1.2);
+    if (label) group.add(label);
     return group;
   }
 

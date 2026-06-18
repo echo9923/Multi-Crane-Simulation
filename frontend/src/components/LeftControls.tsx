@@ -34,6 +34,14 @@ export function LeftControls() {
             />
             区域
           </label>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={ui.showPaths}
+              onChange={(e) => setUI({ showPaths: e.target.checked })}
+            />
+            任务路径
+          </label>
         </div>
       </section>
 

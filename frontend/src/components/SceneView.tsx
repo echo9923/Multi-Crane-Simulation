@@ -88,6 +88,9 @@ export function SceneView() {
       if (s.ui.showZones !== prev.ui.showZones) {
         ctrl.setShowZones(s.ui.showZones);
       }
+      if (s.ui.showPaths !== prev.ui.showPaths) {
+        ctrl.setShowPaths(s.ui.showPaths);
+      }
       if (s.ui.followCraneId !== prev.ui.followCraneId) {
         ctrl.followCrane(s.ui.followCraneId);
       }

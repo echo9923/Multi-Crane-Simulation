@@ -1,10 +1,32 @@
 import * as THREE from "three";
 import type { BuildingConfig, ZoneConfig } from "@/types/config";
+import { makeTextSprite } from "./labels";
 
 type FootprintPoint = [number, number] | [number, number, number];
 
 const FLOOR_COLOR = 0x9aa6b2;
+const FLOOR_COLOR_ALT = 0xb0bac6; // alternate tint so adjacent slabs read apart
 const OUTLINE_COLOR = 0x475569;
+const FLOOR_LABEL_COLOR = "#334155";
+
+// Billboarded floor-number label at a footprint corner. Returns null in
+// headless/jsdom environments (no 2D canvas backend); callers skip it.
+function makeFloorLabel(
+  text: string,
+  anchor: FootprintPoint,
+  z: number,
+): THREE.Sprite | null {
+  const sprite = makeTextSprite(text, {
+    color: FLOOR_LABEL_COLOR,
+    background: "rgba(255,255,255,0.82)",
+    worldHeight: 2.6,
+  });
+  if (!sprite) return null;
+  // ENU (x east, y north, z up) → Three (x, z, -y).
+  sprite.position.set(anchor[0], z + 1.4, -anchor[1]);
+  sprite.name = `floorlabel:${text}`;
+  return sprite;
+}
 
 function footprintShape(points: FootprintPoint[]): THREE.Shape | null {
   if (points.length < 3) return null;
@@ -95,12 +117,17 @@ export function buildBuildingFloors(buildings: BuildingConfig[] = []): THREE.Gro
     const footprint = building.footprint as FootprintPoint[];
     for (let level = 1; level <= building.floors; level += 1) {
       const surfaceZ = building.base_z_m + level * building.floor_height_m;
+      const tint = level % 2 === 0 ? FLOOR_COLOR_ALT : FLOOR_COLOR;
       const plate = makeFloorPlate(
         `floor:${building.building_id}:level_${level}`,
         footprint,
         surfaceZ,
+        tint,
       );
       if (plate) group.add(plate);
+      const text = level === building.floors ? "屋面" : `${level}层`;
+      const label = makeFloorLabel(text, footprint[0], surfaceZ);
+      if (label) group.add(label);
     }
     const envelope = makeBuildingEnvelope(
       building.building_id,
@@ -147,6 +174,12 @@ export function buildInferredZoneFloors(zones: ZoneConfig[] = []): THREE.Group {
       zone.zone_role === "roof" ? 0xb9c2cc : FLOOR_COLOR,
     );
     if (plate) group.add(plate);
+    const label = makeFloorLabel(
+      zone.zone_role === "roof" ? "屋面" : String(floorId),
+      footprint[0],
+      zone.surface_z_m,
+    );
+    if (label) group.add(label);
   }
   return group;
 }

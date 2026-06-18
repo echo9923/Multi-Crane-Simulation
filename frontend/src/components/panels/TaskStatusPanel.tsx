@@ -1,6 +1,8 @@
 // Task status from frame task payloads, with compatibility fallback for older
-// visual frames that only carry crane-level task fields.
+// visual frames that only carry crane-level task fields. Zone ids are enriched
+// with floor info from the manifest/config so a dropoff reads "roof_dropoff（屋面）".
 
+import { useMemo } from "react";
 import { useStore } from "@/state/store";
 import type { SimFrame, SimFrameCrane } from "@/types/sim";
 
@@ -11,15 +13,40 @@ interface TaskRow {
   id: unknown;
   craneId: unknown;
   type: unknown;
+  loadType: unknown;
   stage: unknown;
   priority: unknown;
   deadlineS: unknown;
+  pickupZoneId: unknown;
+  dropoffZoneId: unknown;
   pickupFloorId: unknown;
   dropoffFloorId: unknown;
   pickupSurfaceZ: unknown;
   dropoffSurfaceZ: unknown;
   pickupHookTargetZ: unknown;
   dropoffHookTargetZ: unknown;
+}
+
+// Backend task_stage values → readable Chinese. The raw value is also rendered
+// (faint) so it stays greppable and panel tests keep matching it.
+const STAGE_LABEL: Record<string, string> = {
+  idle: "空闲",
+  move_to_pickup: "去取货",
+  align_pickup: "取货对位",
+  lower_for_attach: "下放挂钩",
+  attach_pending: "挂钩中",
+  lift_load: "起吊",
+  move_to_dropoff: "去卸货",
+  align_dropoff: "卸货对位",
+  lower_for_release: "下放卸货",
+  release_pending: "释放中",
+  recovery_release: "应急释放",
+};
+
+interface ZoneInfo {
+  floorId?: unknown;
+  levelIndex?: unknown;
+  zoneRole?: unknown;
 }
 
 function str(v: unknown): string {
@@ -45,9 +72,12 @@ function rowFromTask(task: LooseRecord, fallbackCraneId: unknown, index: number)
     id,
     craneId,
     type: task.type ?? task.task_type ?? task.load_type,
+    loadType: task.load_type ?? dropoff.load_type ?? pickup.load_type,
     stage,
     priority: task.priority,
     deadlineS: task.deadline_s,
+    pickupZoneId: task.pickup_zone_id ?? pickup.zone_id,
+    dropoffZoneId: task.dropoff_zone_id ?? dropoff.zone_id,
     pickupFloorId: pickup.floor_id ?? task.pickup_floor_id,
     dropoffFloorId: dropoff.floor_id ?? task.dropoff_floor_id,
     pickupSurfaceZ: pickup.surface_z_m ?? task.pickup_surface_z_m,
@@ -81,9 +111,12 @@ function fallbackRowsFromCranes(cranes: SimFrameCrane[]): TaskRow[] {
         id: crane.task_id,
         craneId: crane.crane_id,
         type: crane.load_type,
+        loadType: crane.load_type,
         stage: crane.task_stage,
         priority: null,
         deadlineS: null,
+        pickupZoneId: crane.pickup_zone_id,
+        dropoffZoneId: crane.dropoff_zone_id,
         pickupFloorId: null,
         dropoffFloorId: null,
         pickupSurfaceZ: null,
@@ -112,9 +145,69 @@ function taskRowsForFrame(frame: SimFrame | null): TaskRow[] {
   return rows.length > 0 ? rows : fallbackRowsFromCranes(frame.cranes);
 }
 
+function stageCell(stage: unknown) {
+  if (stage == null) return <>—</>;
+  const raw = String(stage);
+  const label = STAGE_LABEL[raw];
+  if (!label) return <>{raw}</>;
+  return (
+    <>
+      {label} <span className="faint">{raw}</span>
+    </>
+  );
+}
+
 export function TaskStatusPanel() {
   const frame = useStore((s) => s.latestFrame);
+  const manifest = useStore((s) => s.manifest);
+  const config = useStore((s) => s.config);
   const tasks = taskRowsForFrame(frame);
+
+  // zone_id → floor/role info, merged from config site and/or manifest lists.
+  const zoneIndex = useMemo(() => {
+    const index = new Map<string, ZoneInfo>();
+    const add = (zones: LooseRecord[] | undefined) => {
+      for (const z of zones ?? []) {
+        const id = z.zone_id;
+        if (typeof id !== "string") continue;
+        index.set(id, {
+          floorId: z.floor_id,
+          levelIndex: z.level_index,
+          zoneRole: z.zone_role,
+        });
+      }
+    };
+    const site = (config?.scenario?.site ?? null) as LooseRecord | null;
+    if (site) {
+      add(site.material_zones as LooseRecord[]);
+      add(site.work_zones as LooseRecord[]);
+      add(site.forbidden_zones as LooseRecord[]);
+    }
+    if (manifest) {
+      add(manifest.material_zones as unknown as LooseRecord[]);
+      add(manifest.work_zones as unknown as LooseRecord[]);
+      add(manifest.forbidden_zones as unknown as LooseRecord[]);
+      add(manifest.overlap_zones as unknown as LooseRecord[]);
+      const mSite = manifest.site as LooseRecord | undefined;
+      if (mSite) {
+        add(mSite.material_zones as LooseRecord[]);
+        add(mSite.work_zones as LooseRecord[]);
+        add(mSite.forbidden_zones as LooseRecord[]);
+      }
+    }
+    return index;
+  }, [config, manifest]);
+
+  const zoneCell = (zoneId: unknown) => {
+    if (zoneId == null) return "—";
+    const id = String(zoneId);
+    const info = zoneIndex.get(id);
+    if (!info) return id;
+    if (info.zoneRole === "roof") return `${id}（屋面）`;
+    if (info.levelIndex != null) return `${id}（${info.levelIndex}层）`;
+    if (info.floorId != null) return `${id}（${info.floorId}）`;
+    return id;
+  };
 
   return (
     <section className="panel" data-testid="task-status">
@@ -129,12 +222,15 @@ export function TaskStatusPanel() {
                 <th>ID</th>
                 <th>塔吊</th>
                 <th>类型</th>
+                <th>载荷</th>
                 <th>阶段</th>
-                <th>优先级</th>
-                <th>截止s</th>
+                <th>取货区</th>
+                <th>卸货区</th>
                 <th>取货面</th>
                 <th>卸货面</th>
                 <th>吊钩目标</th>
+                <th>优先级</th>
+                <th>截止s</th>
               </tr>
             </thead>
             <tbody>
@@ -143,12 +239,15 @@ export function TaskStatusPanel() {
                   <td>{str(t.id)}</td>
                   <td>{str(t.craneId)}</td>
                   <td>{str(t.type)}</td>
-                  <td>{str(t.stage)}</td>
-                  <td>{str(t.priority)}</td>
-                  <td>{str(t.deadlineS)}</td>
+                  <td>{str(t.loadType)}</td>
+                  <td>{stageCell(t.stage)}</td>
+                  <td>{zoneCell(t.pickupZoneId)}</td>
+                  <td>{zoneCell(t.dropoffZoneId)}</td>
                   <td>{str(t.pickupFloorId)} / {str(t.pickupSurfaceZ)}</td>
                   <td>{str(t.dropoffFloorId)} / {str(t.dropoffSurfaceZ)}</td>
                   <td>{str(t.pickupHookTargetZ)} → {str(t.dropoffHookTargetZ)}</td>
+                  <td>{str(t.priority)}</td>
+                  <td>{str(t.deadlineS)}</td>
                 </tr>
               ))}
             </tbody>

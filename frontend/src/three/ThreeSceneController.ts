@@ -17,6 +17,7 @@ import { buildBoundary } from "./geometry/site";
 import { buildLoad, loadHangOffsetY } from "./geometry/load";
 import { deriveDynamic } from "./model/dynamicState";
 import { buildRiskOverlay, riskLevelStyle, pairKey } from "./geometry/risk";
+import { buildTaskRoutes, routeKey, type TaskRoute } from "./geometry/taskPaths";
 import type { RiskOverlay } from "./model/SceneModel";
 
 export interface RendererLike {
@@ -41,6 +42,30 @@ function defaultRenderer(canvas: HTMLCanvasElement): RendererLike {
   const r = new THREE.WebGLRenderer({ canvas, antialias: true });
   r.setClearColor(0xeaeef4, 1);
   return r as unknown as RendererLike;
+}
+
+/** World-frame (ENU) center of a zone, preferring its surface height. */
+function zoneWorldCenter(z: ZoneManifest): Vec3 | null {
+  if (z.type === "box" && z.center && z.size) {
+    const [cx, cy, cz] = z.center as Vec3;
+    const zc =
+      typeof z.surface_z_m === "number" && Number.isFinite(z.surface_z_m) ? z.surface_z_m : cz;
+    return [cx, cy, zc];
+  }
+  if (z.type === "polygon" && z.points && z.points.length >= 3) {
+    let sx = 0;
+    let sy = 0;
+    for (const p of z.points) {
+      sx += p[0];
+      sy += p[1];
+    }
+    const n = z.points.length;
+    let zc = 0;
+    if (typeof z.surface_z_m === "number" && Number.isFinite(z.surface_z_m)) zc = z.surface_z_m;
+    else if (z.z_range_m && z.z_range_m.length === 2) zc = (z.z_range_m[0] + z.z_range_m[1]) / 2;
+    return [sx / n, sy / n, zc];
+  }
+  return null;
 }
 
 export interface ControllerStats {
@@ -69,8 +94,19 @@ export class ThreeSceneController {
 
   // Risk-overlay state.
   private readonly riskLines = new Map<string, THREE.Line>();
+  // Glow tubes for high/near_miss/collision (WebGL ignores line width, so a
+  // translucent cylinder is what actually reads as a thick, hot link).
+  private readonly riskGlows = new Map<string, THREE.Mesh>();
   private showRisk = true;
   private showZones = true;
+
+  // Task-route overlay state (pickup→dropoff arrows).
+  private readonly taskRoutes = new Map<string, THREE.Object3D>();
+  private readonly taskRouteKeys = new Map<string, string>();
+  private readonly zoneCenters = new Map<string, Vec3>();
+  private readonly craneColors = new Map<string, number>();
+  private showPaths = true;
+
   private readonly animate: boolean;
   private pulseRaf = 0;
   private controls: OrbitControls | null = null;
@@ -105,8 +141,14 @@ export class ThreeSceneController {
     this.trailLines.clear();
     this.loadKeys.clear();
     this.riskLines.clear();
+    this.riskGlows.clear();
+    this.taskRoutes.clear();
+    this.taskRouteKeys.clear();
+    this.zoneCenters.clear();
+    this.craneColors.clear();
     this.showRisk = true;
     this.showZones = true;
+    this.showPaths = true;
     this.windArrow = null;
     let unknownZoneTypes = 0;
 
@@ -150,6 +192,8 @@ export class ThreeSceneController {
         if (z.type && z.type !== "box" && z.type !== "polygon") {
           unknownZoneTypes += 1;
         }
+        const center = zoneWorldCenter(z);
+        if (center && typeof z.zone_id === "string") this.zoneCenters.set(z.zone_id, center);
         const obj = buildZone(z as unknown as Parameters<typeof buildZone>[0], kind);
         zonesGroup.add(obj);
         zoneCount += 1;
@@ -160,6 +204,8 @@ export class ThreeSceneController {
     for (const z of (manifest?.overlap_zones ?? []) as unknown as ZoneManifest[]) {
       if (!z || !z.type) continue;
       if (z.type !== "box" && z.type !== "polygon") unknownZoneTypes += 1;
+      const center = zoneWorldCenter(z);
+      if (center && typeof z.zone_id === "string") this.zoneCenters.set(z.zone_id, center);
       zonesGroup.add(buildZone(z as unknown as Parameters<typeof buildZone>[0], "overlap"));
       zoneCount += 1;
     }
@@ -178,6 +224,7 @@ export class ThreeSceneController {
       const color = paletteColor ?? DEFAULT_CRANE_PALETTE[i % DEFAULT_CRANE_PALETTE.length];
       const parts = buildCrane(c, { color });
       this.cranes.set(c.crane_id, parts);
+      this.craneColors.set(c.crane_id, color);
       this.root.add(parts.group);
     });
 
@@ -251,6 +298,9 @@ export class ThreeSceneController {
     states.forEach((d) => anchors.set(d.craneId, d.hook));
     this.applyRisk(buildRiskOverlay(frame, anchors));
 
+    // Task-route arrows (pickup → dropoff) per crane with an active task.
+    this.applyTaskRoutes(frame);
+
     this.render();
   }
 
@@ -295,9 +345,10 @@ export class ThreeSceneController {
         line.userData.baseOpacity = style.opacity;
         line.userData.level = link.level;
         line.userData.lineWidth = style.lineWidth;
+        this.updateRiskGlow(key, link.level, style.color, a, b);
       }
     }
-    // Drop lines whose pair is no longer present this frame.
+    // Drop lines + glows whose pair is no longer present this frame.
     for (const [key, line] of this.riskLines) {
       if (!present.has(key)) {
         this.root.remove(line);
@@ -306,12 +357,63 @@ export class ThreeSceneController {
         this.riskLines.delete(key);
       }
     }
+    for (const [key, glow] of this.riskGlows) {
+      if (!present.has(key)) this.removeRiskGlow(key, glow);
+    }
     this.maybePulse();
+  }
+
+  /** Thick translucent tube for hot links (high+); removed for calmer levels. */
+  private updateRiskGlow(
+    key: string,
+    level: import("@/types/sim").RiskLevel,
+    color: number,
+    a: Vec3,
+    b: Vec3,
+  ): void {
+    const radius =
+      level === "collision" ? 1.2 : level === "near_miss" ? 0.9 : level === "high" ? 0.6 : 0;
+    let glow = this.riskGlows.get(key);
+    if (radius === 0) {
+      if (glow) this.removeRiskGlow(key, glow);
+      return;
+    }
+    if (!glow) {
+      const geo = new THREE.CylinderGeometry(1, 1, 1, 10);
+      const mat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.3,
+        depthWrite: false,
+      });
+      glow = new THREE.Mesh(geo, mat);
+      glow.name = `risk:${key}:glow`;
+      glow.frustumCulled = false;
+      this.root.add(glow);
+      this.riskGlows.set(key, glow);
+    }
+    const va = new THREE.Vector3(a[0], a[1], a[2]);
+    const vb = new THREE.Vector3(b[0], b[1], b[2]);
+    const dir = vb.clone().sub(va);
+    const len = Math.max(0.001, dir.length());
+    glow.position.copy(va.clone().add(vb).multiplyScalar(0.5));
+    glow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+    glow.scale.set(radius, len, radius);
+    (glow.material as THREE.MeshBasicMaterial).color.setHex(color);
+    glow.visible = this.showRisk;
+  }
+
+  private removeRiskGlow(key: string, glow: THREE.Mesh): void {
+    this.root.remove(glow);
+    glow.geometry.dispose();
+    (glow.material as THREE.Material).dispose();
+    this.riskGlows.delete(key);
   }
 
   setShowRisk(visible: boolean): void {
     this.showRisk = visible;
     for (const line of this.riskLines.values()) line.visible = visible;
+    for (const glow of this.riskGlows.values()) glow.visible = visible;
     this.maybePulse();
     this.render();
   }
@@ -321,6 +423,71 @@ export class ThreeSceneController {
     const g = this.getObjectByName("zones");
     if (g) g.visible = visible;
     this.render();
+  }
+
+  /**
+   * Draw/refresh the pickup→dropoff arrow for every crane that has an active
+   * task with both zones known. Arrows are keyed by crane and rebuilt only when
+   * the route (task / endpoints / color) changes.
+   */
+  applyTaskRoutes(frame: SimFrame): void {
+    if (this.disposed) return;
+    const routes = buildTaskRoutes(frame, this.zoneCenters, this.craneColors);
+    const present = new Set<string>();
+    for (const r of routes) {
+      present.add(r.craneId);
+      const key = routeKey(r);
+      if (this.taskRouteKeys.get(r.craneId) === key) continue; // unchanged
+      const existing = this.taskRoutes.get(r.craneId);
+      if (existing) {
+        this.root.remove(existing);
+        this.disposeObject(existing);
+      }
+      const arrow = this.buildRouteArrow(r);
+      arrow.name = `taskpath:${r.craneId}`;
+      arrow.visible = this.showPaths;
+      this.root.add(arrow);
+      this.taskRoutes.set(r.craneId, arrow);
+      this.taskRouteKeys.set(r.craneId, key);
+    }
+    for (const [craneId, obj] of this.taskRoutes) {
+      if (!present.has(craneId)) {
+        this.root.remove(obj);
+        this.disposeObject(obj);
+        this.taskRoutes.delete(craneId);
+        this.taskRouteKeys.delete(craneId);
+      }
+    }
+  }
+
+  setShowPaths(visible: boolean): void {
+    this.showPaths = visible;
+    for (const obj of this.taskRoutes.values()) obj.visible = visible;
+    this.render();
+  }
+
+  private buildRouteArrow(r: TaskRoute): THREE.ArrowHelper {
+    const from = new THREE.Vector3(...worldToThree(r.from));
+    const to = new THREE.Vector3(...worldToThree(r.to));
+    const delta = to.clone().sub(from);
+    const len = Math.max(0.5, delta.length());
+    const dir = delta.lengthSq() > 0 ? delta.normalize() : new THREE.Vector3(0, 1, 0);
+    const head = Math.min(6, len * 0.18);
+    const arrow = new THREE.ArrowHelper(dir, from, len, r.color, head, head * 0.6);
+    const lineMat = arrow.line.material as THREE.LineBasicMaterial;
+    lineMat.transparent = true;
+    lineMat.opacity = 0.9;
+    return arrow;
+  }
+
+  private disposeObject(obj: THREE.Object3D): void {
+    obj.traverse((o) => {
+      const node = o as THREE.Mesh;
+      node.geometry?.dispose?.();
+      const mat = node.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else mat?.dispose?.();
+    });
   }
 
   /**
