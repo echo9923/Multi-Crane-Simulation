@@ -60,7 +60,7 @@ describe("electron backend helpers", () => {
         isPackaged: true,
         resourcesPath,
       }),
-    ).toBe(path.join(resourcesPath, "project"));
+    ).toBe(path.posix.join(resourcesPath, "project"));
   });
 
   it("resolves platform-specific venv python path", () => {

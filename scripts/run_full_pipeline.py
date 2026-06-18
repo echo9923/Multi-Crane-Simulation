@@ -133,17 +133,19 @@ def run_full_pipeline(
     )
     first_run_dir = run_dirs[0]
     return {
-        "run_dirs": [str(path) for path in run_dirs],
-        "dataset_dir": str(dataset_result.dataset_dir),
-        "stgnn_output_root": str(stgnn_output_root),
+        "run_dirs": [_path_to_json(path) for path in run_dirs],
+        "dataset_dir": _path_to_json(dataset_result.dataset_dir),
+        "stgnn_output_root": _path_to_json(stgnn_output_root),
         "stgnn_sample_count": len(stgnn_result.samples),
         "frontend_replay_files": {
-            "frames_jsonl": str(first_run_dir / "visual" / "frames.jsonl"),
-            "episode_manifest": str(
-                first_run_dir / "visual" / "episode_manifest.json"
-            ),
+            "frames_jsonl": _path_to_json(first_run_dir / "visual" / "frames.jsonl"),
+            "episode_manifest": _path_to_json(first_run_dir / "visual" / "episode_manifest.json"),
         },
     }
+
+
+def _path_to_json(path: Path) -> str:
+    return path.as_posix()
 
 
 def _runner_run_dir(runner: Any) -> Path | None:

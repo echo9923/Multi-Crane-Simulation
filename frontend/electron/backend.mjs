@@ -12,13 +12,13 @@ export function resolveResourceRoot({ electronRoot, isPackaged = false, resource
   if (typeof electronRoot !== "string" || electronRoot.trim().length === 0) {
     throw new Error("electronRoot is required to resolve desktop resources.");
   }
-  return path.resolve(electronRoot, "..", "..");
+  return pathApiForRoot(electronRoot).resolve(electronRoot, "..", "..");
 }
 
 export function resolveProjectRoot({ electronRoot, isPackaged = false, resourcesPath } = {}) {
   const resourceRoot = resolveResourceRoot({ electronRoot, isPackaged, resourcesPath });
   if (isPackaged) {
-    return path.join(resourceRoot, "project");
+    return pathApiForRoot(resourceRoot).join(resourceRoot, "project");
   }
   return resourceRoot;
 }
@@ -74,7 +74,17 @@ function venvPythonPath(projectRoot, platform = process.platform) {
     }
     return path.posix.join(projectRoot, ".venv", "Scripts", "python.exe");
   }
-  return path.join(projectRoot, ".venv", "bin", "python");
+  return path.posix.join(projectRoot, ".venv", "bin", "python");
+}
+
+function pathApiForRoot(rootPath) {
+  if (/^[A-Za-z]:[\\/]/.test(rootPath) || rootPath.includes("\\")) {
+    return path.win32;
+  }
+  if (rootPath.startsWith("/")) {
+    return path.posix;
+  }
+  return path;
 }
 
 export function isPathInsideAllowedRoots(targetPath, allowedRoots) {

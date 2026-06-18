@@ -109,7 +109,7 @@ class DatasetWindowIndexer:
                     num_cranes=max(episode.num_cranes, 1),
                     label_horizons_s=list(windows.risk_label_horizons_s),
                     source_paths={
-                        role: str(path)
+                        role: path.as_posix()
                         for role, path in sorted(episode.source_files.items())
                     },
                     is_positive=any(

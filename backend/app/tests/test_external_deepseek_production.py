@@ -31,7 +31,7 @@ def _load_env_local() -> None:
 def _deepseek_config(tmp_path: Path):
     _load_env_local()
     if not os.environ.get("DEEPSEEK_API_KEY"):
-        pytest.fail(
+        pytest.skip(
             "DEEPSEEK_API_KEY is required for external DeepSeek production "
             "acceptance. Set it in .env.local or the environment."
         )

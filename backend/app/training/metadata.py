@@ -27,7 +27,7 @@ class SampleMetadataBuilder:
         crane_order: Sequence[str],
     ) -> StgnnSampleMetadata:
         source_path_payload = {
-            role: str(path)
+            role: _path_to_portable_string(path)
             for role, path in sorted(source_paths.items())
         }
         assert_no_training_secret(source_path_payload, context="sample_source_paths")
@@ -120,7 +120,7 @@ def build_sample_index_row(
         episode_id=metadata.episode_id,
         scenario_id=metadata.scenario_id,
         start_frame=metadata.start_frame,
-        tensor_path=str(tensor_path) if tensor_path is not None else None,
+        tensor_path=_path_to_portable_string(tensor_path) if tensor_path is not None else None,
         tensor_offset=tensor_offset,
         num_nodes=num_nodes,
         max_nodes=feature_spec.max_nodes,
@@ -132,6 +132,10 @@ def build_sample_index_row(
         risk_target_dim=len(feature_spec.risk_targets),
         metadata_json=metadata.model_dump(mode="json"),
     )
+
+
+def _path_to_portable_string(path: Path) -> str:
+    return path.as_posix()
 
 
 __all__ = [

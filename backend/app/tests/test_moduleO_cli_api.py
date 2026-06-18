@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -90,7 +91,7 @@ def test_build_dataset_rejects_missing_source_root(tmp_path: Path) -> None:
 def test_build_dataset_script_help_returns_zero() -> None:
     result = subprocess.run(
         [
-            str(REPO_ROOT / ".venv" / "bin" / "python"),
+            sys.executable,
             str(REPO_ROOT / "scripts" / "build_dataset.py"),
             "--help",
         ],

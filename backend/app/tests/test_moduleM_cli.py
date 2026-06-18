@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,7 +28,7 @@ class FakeRunner:
 
 def _run_script(script: str, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "python"), str(REPO_ROOT / script), *args],
+        [sys.executable, str(REPO_ROOT / script), *args],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,

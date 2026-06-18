@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
@@ -10,7 +11,8 @@ def test_deepseek_demo_script_runs_production_with_venv_python() -> None:
     script = REPO_ROOT / "scripts" / "run_deepseek_demo.sh"
 
     assert script.is_file()
-    assert script.stat().st_mode & 0o111
+    if os.name != "nt":
+        assert script.stat().st_mode & 0o111
 
     content = script.read_text(encoding="utf-8")
     assert ".venv/bin/python" in content

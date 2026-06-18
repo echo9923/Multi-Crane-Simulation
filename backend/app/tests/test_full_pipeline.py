@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -17,7 +18,7 @@ def test_full_pipeline_script_generates_episode_dataset_and_stgnn_index(
     output_root = tmp_path / "full-pipeline"
     result = subprocess.run(
         [
-            str(REPO_ROOT / ".venv" / "bin" / "python"),
+            sys.executable,
             str(REPO_ROOT / "scripts" / "run_full_pipeline.py"),
             "--config",
             str(FIXTURE_DIR / "demo_valid.yaml"),

@@ -216,4 +216,4 @@ def test_dataset_builder_index_only_records_source_paths_without_copying(tmp_pat
     files = pq.read_table(result.dataset_dir / "index" / "files.parquet").to_pylist()
     assert any(row["source_path"].endswith("trajectories.parquet") for row in files)
     assert not (result.dataset_dir / "episodes" / "E001").exists()
-    assert str(run_dir) in json.dumps(files)
+    assert any(str(run_dir) in row["source_path"] for row in files)
