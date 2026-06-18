@@ -18,3 +18,10 @@ runs/
 # pytest transient basetemp/probe leaks
 tmp_pytest_probe/
 pytest-cache-files-*
+
+# pytest run output dirs (test fixtures / episode data)
+.pytest-tmp/
+.tmp-pytest-*/
+
+# frontend release-data probe artifacts
+frontend/release-data-probe/
