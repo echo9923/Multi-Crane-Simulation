@@ -76,6 +76,59 @@ describe("ThreeSceneController.buildStatic", () => {
     ctrl.dispose();
   });
 
+  it("renders building floor plates from site buildings", () => {
+    const ctrl = makeController();
+    const withBuilding = {
+      ...manifest,
+      site: {
+        ...manifest.site,
+        buildings: [
+          {
+            building_id: "tower_a",
+            name: "Tower A",
+            footprint: [[0, 0], [20, 0], [20, 20], [0, 20]],
+            floors: 3,
+            floor_height_m: 3.6,
+            base_z_m: 0,
+          },
+        ],
+      },
+    } as EpisodeManifest;
+
+    ctrl.buildStatic(null, withBuilding);
+
+    expect(ctrl.getObjectByName("floors")).toBeTruthy();
+    expect(ctrl.getObjectByName("floor:tower_a:level_3")).toBeTruthy();
+    expect(ctrl.getObjectByName("floor:tower_a:level_3")?.position.y).toBeCloseTo(10.8, 6);
+    ctrl.dispose();
+  });
+
+  it("infers floor plates from zone surface heights when buildings are absent", () => {
+    const ctrl = makeController();
+    const withSemanticZone = {
+      ...manifest,
+      work_zones: [
+        {
+          zone_id: "floor_05_dropoff",
+          type: "box",
+          center: [30, 20, 18],
+          size: [12, 10, 0.4],
+          surface_z_m: 18,
+          floor_id: "floor_05",
+          building_id: "tower_a",
+          zone_role: "floor_slab",
+        },
+      ],
+    } as EpisodeManifest;
+
+    ctrl.buildStatic(null, withSemanticZone);
+
+    expect(ctrl.getObjectByName("floors")).toBeTruthy();
+    expect(ctrl.getObjectByName("floor:tower_a:floor_05")).toBeTruthy();
+    expect(ctrl.getObjectByName("floor:tower_a:floor_05")?.position.y).toBeCloseTo(18, 6);
+    ctrl.dispose();
+  });
+
   it("supports config-driven scenes (resolved_cranes + site)", () => {
     const config: ResolvedConfig = {
       schema_version: "1.0",

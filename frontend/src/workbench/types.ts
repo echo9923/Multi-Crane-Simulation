@@ -29,6 +29,13 @@ export interface BoxZoneFormItem {
   sizeZ: number;
   zMin: number;
   zMax: number;
+  surfaceZM: number;
+  floorId: string;
+  buildingId: string;
+  levelIndex: number | null;
+  zoneRole: string;
+  hookTargetOffsetM: number;
+  approachClearanceM: number;
   loadTypes: string;
   acceptedLoadTypes: string;
 }

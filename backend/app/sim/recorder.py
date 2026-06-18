@@ -1461,6 +1461,14 @@ def _task_rows_from_task_queues(
                     dropoff_x=float(dropoff.get("x", 0.0)),
                     dropoff_y=float(dropoff.get("y", 0.0)),
                     dropoff_z=float(dropoff.get("z", 0.0)),
+                    pickup_surface_z_m=_optional_float(pickup.get("surface_z_m")),
+                    dropoff_surface_z_m=_optional_float(dropoff.get("surface_z_m")),
+                    pickup_hook_target_z_m=_optional_float(pickup.get("hook_target_z_m")),
+                    dropoff_hook_target_z_m=_optional_float(dropoff.get("hook_target_z_m")),
+                    pickup_floor_id=_optional_str(pickup.get("floor_id")),
+                    dropoff_floor_id=_optional_str(dropoff.get("floor_id")),
+                    pickup_building_id=_optional_str(pickup.get("building_id")),
+                    dropoff_building_id=_optional_str(dropoff.get("building_id")),
                     pickup_zone_id=str(
                         task_payload.get("pickup_zone_id")
                         or pickup.get("zone_id")
@@ -1875,6 +1883,19 @@ def _nested_get(payload: Mapping[str, Any], path: Sequence[str]) -> Any:
             return None
         current = current[key]
     return current
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _optional_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
 
 
 def _model_or_mapping_to_dict(row: object) -> Dict[str, Any]:

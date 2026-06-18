@@ -139,7 +139,7 @@ def test_lift_load_current_target_matches_state_machine_lift_threshold() -> None
     )
 
     assert context.current_target is not None
-    assert context.current_target.z == 12.0
+    assert context.current_target.z == 13.0
 
 
 def test_idle_observation_hides_next_task_information() -> None:

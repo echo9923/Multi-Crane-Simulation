@@ -253,16 +253,28 @@ def _task(crane_id: str = "C1") -> Task:
     pickup = TaskPoint(
         x=10.0,
         y=0.0,
-        z=1.0,
+        z=1.8,
         zone_id="material_zone",
         zone_type="material",
+        surface_z_m=0.0,
+        load_center_z_m=0.5,
+        hook_target_z_m=1.8,
+        approach_z_m=5.0,
+        zone_role="ground_yard",
     )
     dropoff = TaskPoint(
         x=30.0,
         y=10.0,
-        z=20.0,
+        z=21.8,
         zone_id="work_zone",
         zone_type="work",
+        surface_z_m=20.0,
+        load_center_z_m=20.5,
+        hook_target_z_m=21.8,
+        approach_z_m=25.0,
+        floor_id="floor_06",
+        building_id="tower_a",
+        zone_role="floor_slab",
     )
     return Task(
         task_id=f"T_{crane_id}_001",
@@ -463,6 +475,14 @@ def test_task_weather_command_event_and_summary_schemas_are_strict() -> None:
         dropoff_x=10.0,
         dropoff_y=11.0,
         dropoff_z=0.0,
+        pickup_surface_z_m=None,
+        dropoff_surface_z_m=None,
+        pickup_hook_target_z_m=None,
+        dropoff_hook_target_z_m=None,
+        pickup_floor_id=None,
+        dropoff_floor_id=None,
+        pickup_building_id=None,
+        dropoff_building_id=None,
         pickup_zone_id="yard",
         dropoff_zone_id="workface",
         load_type="steel",
@@ -1049,6 +1069,51 @@ def test_build_sim_frame_includes_task_queues_for_panel_contract() -> None:
     assert dumped["tasks"][0]["active_task_id"] == "T_C1_001"
     assert dumped["tasks"][0]["tasks"][0]["task_id"] == "T_C1_001"
     assert dumped["tasks"][0]["tasks"][0]["priority"] == "medium"
+    assert dumped["tasks"][0]["tasks"][0]["pickup"]["surface_z_m"] == 0.0
+    assert dumped["tasks"][0]["tasks"][0]["dropoff"]["surface_z_m"] == 20.0
+    assert dumped["tasks"][0]["tasks"][0]["dropoff"]["hook_target_z_m"] == 21.8
+    assert dumped["tasks"][0]["tasks"][0]["dropoff"]["floor_id"] == "floor_06"
+
+
+def test_task_parquet_rows_include_vertical_semantics() -> None:
+    queue = TaskQueue(
+        crane_id="C1",
+        tasks=[_task("C1")],
+        active_task_id="T_C1_001",
+        next_task_index=1,
+    )
+
+    frame = build_sim_frame(
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+        frame_index=2,
+        time_s=1.0,
+        episode_status="running",
+        states=[_crane_state("C1")],
+        weather_state=_weather_state(),
+        task_queues=[queue],
+    )
+
+    assert frame.tasks[0]["tasks"][0]["pickup"]["hook_target_z_m"] == 1.8
+
+    from backend.app.sim.recorder import _task_rows_from_task_queues
+
+    rows = _task_rows_from_task_queues(
+        [queue],
+        episode_id="episode-001",
+        scenario_id="scenario-001",
+    )
+    row = rows[0].model_dump(mode="json")
+
+    assert row["pickup_z"] == 1.8
+    assert row["dropoff_z"] == 21.8
+    assert row["pickup_surface_z_m"] == 0.0
+    assert row["dropoff_surface_z_m"] == 20.0
+    assert row["pickup_hook_target_z_m"] == 1.8
+    assert row["dropoff_hook_target_z_m"] == 21.8
+    assert row["pickup_floor_id"] is None
+    assert row["dropoff_floor_id"] == "floor_06"
+    assert row["dropoff_building_id"] == "tower_a"
 
 
 def test_build_sim_frame_enforces_offline_label_isolation() -> None:

@@ -83,6 +83,16 @@ describe("TaskStatusPanel", () => {
               status: "active",
               priority: "high",
               deadline_s: 120,
+              pickup: {
+                surface_z_m: 0,
+                hook_target_z_m: 1.8,
+                floor_id: null,
+              },
+              dropoff: {
+                surface_z_m: 18,
+                hook_target_z_m: 19.8,
+                floor_id: "floor_05",
+              },
             },
           ],
         },
@@ -98,6 +108,8 @@ describe("TaskStatusPanel", () => {
     expect(panel.textContent).toContain("active");
     expect(panel.textContent).toContain("high");
     expect(panel.textContent).toContain("120");
+    expect(panel.textContent).toContain("floor_05");
+    expect(panel.textContent).toContain("19.8");
     expect(panel.querySelectorAll("tbody tr").length).toBe(1);
   });
 

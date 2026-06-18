@@ -57,6 +57,14 @@ class TaskOverlapRegion:
     candidate_work_zone_ids: List[str]
 
 
+@dataclass(frozen=True)
+class ZoneVerticalSemantics:
+    surface_z_m: float
+    load_center_z_m: float
+    hook_target_z_m: float
+    approach_z_m: float
+
+
 def generate_task_queues(
     scenario: ScenarioConfig,
     crane_configs: Sequence[CraneConfig],
@@ -239,31 +247,60 @@ def _generate_manual_task(
     seed: int,
 ) -> Tuple[Task, int]:
     feasible: List[Task] = []
+    blocking_errors: List[TaskGenerationError] = []
     attempts = 0
-    for crane in cranes:
-        attempts += 1
+    requested_crane_id = getattr(template, "crane_id", None)
+    candidate_cranes = [
+        crane
+        for crane in cranes
+        if requested_crane_id is None or crane.crane_id == requested_crane_id
+    ]
+    if not candidate_cranes and requested_crane_id is not None:
+        raise TaskGenerationError(
+            "unknown crane id for manual task template",
+            error_code="TASK_E_001",
+            reason="unknown_crane",
+            details={"crane_id": requested_crane_id, "task_id": template.task_id},
+        )
+    for crane in candidate_cranes:
         local_seed = _stable_int(seed, template.task_id, crane.crane_id)
         local_rng = random.Random(local_seed)
-        try:
-            task = _build_task_candidate(
-                scenario,
-                crane,
-                local_rng,
-                seed=seed,
-                task_id=template.task_id,
-                task_type=template.task_type.value,
-                task_index=1,
-                generation_attempt=attempts,
-                overlap_regions=[],
-                pickup_zone_id=template.pickup_zone_id,
-                dropoff_zone_id=template.dropoff_zone_id,
-                load_type=template.load_type,
-                priority=template.priority.value,
-            )
-        except TaskGenerationError:
-            continue
-        feasible.append(task)
+        for _ in range(scenario.layout.max_sampling_attempts):
+            attempts += 1
+            try:
+                task = _build_task_candidate(
+                    scenario,
+                    crane,
+                    local_rng,
+                    seed=seed,
+                    task_id=template.task_id,
+                    task_type=template.task_type.value,
+                    task_index=1,
+                    generation_attempt=attempts,
+                    overlap_regions=[],
+                    pickup_zone_id=template.pickup_zone_id,
+                    dropoff_zone_id=template.dropoff_zone_id,
+                    load_type=template.load_type,
+                    priority=template.priority.value,
+                )
+            except TaskGenerationError as exc:
+                if exc.reason in {
+                    "point_height_unreachable",
+                    "over_capacity",
+                    "pickup_zone_rejects_load_type",
+                    "dropoff_zone_rejects_load_type",
+                    "no_supported_load_type",
+                    "unknown_load_type",
+                    "unknown_zone",
+                }:
+                    blocking_errors.append(exc)
+                    break
+                continue
+            feasible.append(task)
+            break
     if not feasible:
+        if blocking_errors:
+            raise blocking_errors[0]
         raise TaskGenerationError(
             "manual task template cannot be assigned to any crane",
             error_code="TASK_E_001",
@@ -308,10 +345,12 @@ def _build_task_candidate(
         material=False,
     )
     load_type_value = load_type or _sample_load_type(scenario, material_zone, work_zone, rng)
+    load_config = scenario.load_types[load_type_value]
     pickup = _sample_point(
         material_zone,
         rng,
         scenario,
+        load_size_m=load_config.size_m,
         fallback_z=scenario.tasks.fallback_pickup_z_m,
         zone_type="material",
     )
@@ -319,6 +358,7 @@ def _build_task_candidate(
         work_zone,
         rng,
         scenario,
+        load_size_m=load_config.size_m,
         fallback_z=rng.uniform(*scenario.tasks.fallback_dropoff_z_range_m),
         zone_type="work",
     )
@@ -326,7 +366,6 @@ def _build_task_candidate(
     _validate_point_for_generation(crane, scenario, pickup, material_zone)
     _validate_point_for_generation(crane, scenario, dropoff, work_zone)
     _validate_load_zone_support(scenario, material_zone, work_zone, load_type_value)
-    load_config = scenario.load_types[load_type_value]
     max_capacity = min(
         crane.model.capacity_at_radius_t(horizontal_distance(crane.base, pickup.as_xyz())),
         crane.model.capacity_at_radius_t(horizontal_distance(crane.base, dropoff.as_xyz())),
@@ -453,26 +492,52 @@ def _sample_point(
     rng: random.Random,
     scenario: ScenarioConfig,
     *,
+    load_size_m: Sequence[float],
     fallback_z: float,
     zone_type: str,
 ) -> TaskPoint:
     for _ in range(scenario.layout.max_sampling_attempts):
         if zone.type == "box" and zone.center is not None and zone.size is not None:
+            x = rng.uniform(zone.center[0] - zone.size[0] / 2.0, zone.center[0] + zone.size[0] / 2.0)
+            y = rng.uniform(zone.center[1] - zone.size[1] / 2.0, zone.center[1] + zone.size[1] / 2.0)
+            semantics = resolve_zone_vertical_semantics(
+                zone,
+                load_size_m,
+                fallback_z=fallback_z,
+                zone_type=zone_type,
+                rng=rng,
+            )
             point = [
-                rng.uniform(zone.center[0] - zone.size[0] / 2.0, zone.center[0] + zone.size[0] / 2.0),
-                rng.uniform(zone.center[1] - zone.size[1] / 2.0, zone.center[1] + zone.size[1] / 2.0),
-                _sample_z(zone, rng, fallback_z),
+                x,
+                y,
+                semantics.hook_target_z_m,
             ]
         elif zone.type == "polygon" and zone.points:
             xs = [point[0] for point in zone.points]
             ys = [point[1] for point in zone.points]
+            x = rng.uniform(min(xs), max(xs))
+            y = rng.uniform(min(ys), max(ys))
+            semantics = resolve_zone_vertical_semantics(
+                zone,
+                load_size_m,
+                fallback_z=fallback_z,
+                zone_type=zone_type,
+                rng=rng,
+            )
             point = [
-                rng.uniform(min(xs), max(xs)),
-                rng.uniform(min(ys), max(ys)),
-                _sample_z(zone, rng, fallback_z),
+                x,
+                y,
+                semantics.hook_target_z_m,
             ]
         elif zone.center is not None:
-            point = [zone.center[0], zone.center[1], _sample_z(zone, rng, fallback_z)]
+            semantics = resolve_zone_vertical_semantics(
+                zone,
+                load_size_m,
+                fallback_z=fallback_z,
+                zone_type=zone_type,
+                rng=rng,
+            )
+            point = [zone.center[0], zone.center[1], semantics.hook_target_z_m]
         else:
             raise TaskGenerationError(
                 "zone has no sampleable geometry",
@@ -480,13 +545,21 @@ def _sample_point(
                 reason="invalid_zone_geometry",
                 details={"zone_id": zone.zone_id},
             )
-        if point_in_zone(point, zone) and point_in_boundary(point, scenario.site.boundary):
+        surface_point = [point[0], point[1], semantics.surface_z_m]
+        if point_in_zone(surface_point, zone) and point_in_boundary(point, scenario.site.boundary):
             return TaskPoint(
                 x=round(point[0], 3),
                 y=round(point[1], 3),
-                z=round(point[2], 3),
+                z=round(semantics.hook_target_z_m, 3),
                 zone_id=zone.zone_id,
                 zone_type=zone_type,  # type: ignore[arg-type]
+                surface_z_m=round(semantics.surface_z_m, 3),
+                load_center_z_m=round(semantics.load_center_z_m, 3),
+                hook_target_z_m=round(semantics.hook_target_z_m, 3),
+                approach_z_m=round(semantics.approach_z_m, 3),
+                floor_id=zone.floor_id,
+                building_id=zone.building_id,
+                zone_role=zone.zone_role,
             )
     raise TaskGenerationError(
         "unable to sample point inside zone and boundary",
@@ -500,6 +573,40 @@ def _sample_z(zone: ZoneConfig, rng: random.Random, fallback_z: float) -> float:
     if zone.z_range_m is not None:
         return rng.uniform(zone.z_range_m[0], zone.z_range_m[1])
     return fallback_z
+
+
+def resolve_zone_vertical_semantics(
+    zone: ZoneConfig,
+    load_size_m: Sequence[float],
+    fallback_z: float,
+    zone_type: str,
+    rng: Optional[random.Random] = None,
+) -> ZoneVerticalSemantics:
+    del zone_type
+    load_size_z = float(load_size_m[2]) if len(load_size_m) >= 3 else 0.0
+    if zone.surface_z_m is not None:
+        surface_z_m = float(zone.surface_z_m)
+        if zone.load_center_offset_m is not None:
+            load_center_z_m = surface_z_m + float(zone.load_center_offset_m)
+        else:
+            load_center_z_m = surface_z_m + load_size_z / 2.0
+        hook_target_z_m = surface_z_m + load_size_z + zone.hook_target_offset_m
+        hook_target_z_m = max(hook_target_z_m, load_center_z_m)
+    else:
+        # Legacy YAML used z_range_m as the sampled task point height. Preserve
+        # that interpretation so old configs do not become unreachable when the
+        # new construction-surface fields are absent.
+        compatibility_z_m = _sample_z(zone, rng or random.Random(0), fallback_z)
+        surface_z_m = compatibility_z_m
+        load_center_z_m = compatibility_z_m
+        hook_target_z_m = compatibility_z_m
+    approach_z_m = hook_target_z_m + zone.approach_clearance_m
+    return ZoneVerticalSemantics(
+        surface_z_m=surface_z_m,
+        load_center_z_m=load_center_z_m,
+        hook_target_z_m=hook_target_z_m,
+        approach_z_m=approach_z_m,
+    )
 
 
 def _validate_point_for_generation(
@@ -517,15 +624,25 @@ def _validate_point_for_generation(
             reason="point_outside_radius",
             details={"crane_id": crane.crane_id, "zone_id": zone.zone_id, "radius_m": radius},
         )
-    if not (crane.hook_h_min_world_m <= point.z <= crane.hook_h_max_world_m):
+    hook_target_z = point.hook_target_z_m if point.hook_target_z_m is not None else point.z
+    if not (crane.hook_h_min_world_m <= hook_target_z <= crane.hook_h_max_world_m):
         raise TaskGenerationError(
-            "task point height is unreachable",
+            "task point hook target height is unreachable",
             error_code="TASK_E_001",
             reason="point_height_unreachable",
-            details={"crane_id": crane.crane_id, "zone_id": zone.zone_id, "z": point.z},
+            details={
+                "crane_id": crane.crane_id,
+                "zone_id": zone.zone_id,
+                "height_field": "hook_target_z_m",
+                "z": point.z,
+                "hook_target_z_m": hook_target_z,
+                "hook_h_min_world_m": crane.hook_h_min_world_m,
+                "hook_h_max_world_m": crane.hook_h_max_world_m,
+            },
         )
     for forbidden_zone in scenario.site.forbidden_zones:
-        if point_in_zone(xyz, forbidden_zone):
+        surface_z = point.surface_z_m if point.surface_z_m is not None else point.z
+        if point_in_zone([point.x, point.y, surface_z], forbidden_zone):
             raise TaskGenerationError(
                 "task point is inside forbidden zone",
                 error_code="TASK_E_001",

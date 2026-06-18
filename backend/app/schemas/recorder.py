@@ -257,6 +257,14 @@ class TaskParquetRow(RecorderBaseModel):
     dropoff_x: float
     dropoff_y: float
     dropoff_z: float
+    pickup_surface_z_m: Optional[float] = None
+    dropoff_surface_z_m: Optional[float] = None
+    pickup_hook_target_z_m: Optional[float] = None
+    dropoff_hook_target_z_m: Optional[float] = None
+    pickup_floor_id: Optional[str] = None
+    dropoff_floor_id: Optional[str] = None
+    pickup_building_id: Optional[str] = None
+    dropoff_building_id: Optional[str] = None
     pickup_zone_id: str
     dropoff_zone_id: str
     load_type: str

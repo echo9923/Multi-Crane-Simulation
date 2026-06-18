@@ -11,6 +11,7 @@ from backend.app.schemas.config import (
     DatasetConfig,
     ExperimentConfig,
     ScenarioConfig,
+    ZoneConfig,
 )
 from backend.app.schemas.enums import (
     LayoutMode,
@@ -35,6 +36,62 @@ def test_valid_scenario_yaml_loads_successfully() -> None:
     assert config.scenario_id == "site_001"
     assert config.layout.mode is LayoutMode.AUTO
     assert config.layout.num_cranes == 4
+
+
+def test_zone_semantic_height_fields_are_backward_compatible() -> None:
+    legacy = ZoneConfig.model_validate(
+        {
+            "zone_id": "legacy_work",
+            "type": "box",
+            "center": [10.0, 10.0, 1.0],
+            "size": [6.0, 6.0, 2.0],
+            "z_range_m": [0.0, 2.0],
+        }
+    )
+    semantic = ZoneConfig.model_validate(
+        {
+            "zone_id": "floor_05",
+            "type": "box",
+            "center": [12.0, 8.0, 18.0],
+            "size": [8.0, 8.0, 0.4],
+            "surface_z_m": 18.0,
+            "floor_id": "floor_05",
+            "building_id": "tower_a",
+            "level_index": 5,
+            "zone_role": "floor_slab",
+            "hook_target_offset_m": 0.75,
+            "load_center_offset_m": 0.45,
+            "approach_clearance_m": 4.0,
+        }
+    )
+
+    assert legacy.surface_z_m is None
+    assert legacy.zone_role is None
+    assert legacy.hook_target_offset_m == 0.5
+    assert legacy.approach_clearance_m == 3.0
+    assert semantic.surface_z_m == 18.0
+    assert semantic.floor_id == "floor_05"
+    assert semantic.zone_role == "floor_slab"
+
+
+def test_site_buildings_are_optional_and_serializable() -> None:
+    raw = load_fixture("scenario_valid.yaml")
+    raw["site"]["buildings"] = [
+        {
+            "building_id": "tower_a",
+            "name": "Tower A",
+            "footprint": [[-20.0, -20.0], [20.0, -20.0], [20.0, 20.0], [-20.0, 20.0]],
+            "floors": 6,
+            "floor_height_m": 3.6,
+            "base_z_m": 0.0,
+        }
+    ]
+
+    config = ScenarioConfig.model_validate(raw)
+    payload = config.model_dump(mode="json")
+
+    assert config.site.buildings[0].building_id == "tower_a"
+    assert payload["site"]["buildings"][0]["floors"] == 6
 
 
 def test_valid_experiment_yaml_loads_successfully() -> None:

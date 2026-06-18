@@ -14,6 +14,12 @@ interface TaskRow {
   stage: unknown;
   priority: unknown;
   deadlineS: unknown;
+  pickupFloorId: unknown;
+  dropoffFloorId: unknown;
+  pickupSurfaceZ: unknown;
+  dropoffSurfaceZ: unknown;
+  pickupHookTargetZ: unknown;
+  dropoffHookTargetZ: unknown;
 }
 
 function str(v: unknown): string {
@@ -32,6 +38,8 @@ function rowFromTask(task: LooseRecord, fallbackCraneId: unknown, index: number)
   const id = task.task_id ?? task.id;
   const craneId = task.crane_id ?? fallbackCraneId;
   const stage = task.stage ?? task.task_stage ?? task.status;
+  const pickup = isRecord(task.pickup) ? task.pickup : {};
+  const dropoff = isRecord(task.dropoff) ? task.dropoff : {};
   return {
     key: str(id ?? `${craneId ?? "task"}-${stage ?? index}`),
     id,
@@ -40,6 +48,12 @@ function rowFromTask(task: LooseRecord, fallbackCraneId: unknown, index: number)
     stage,
     priority: task.priority,
     deadlineS: task.deadline_s,
+    pickupFloorId: pickup.floor_id ?? task.pickup_floor_id,
+    dropoffFloorId: dropoff.floor_id ?? task.dropoff_floor_id,
+    pickupSurfaceZ: pickup.surface_z_m ?? task.pickup_surface_z_m,
+    dropoffSurfaceZ: dropoff.surface_z_m ?? task.dropoff_surface_z_m,
+    pickupHookTargetZ: pickup.hook_target_z_m ?? task.pickup_hook_target_z_m,
+    dropoffHookTargetZ: dropoff.hook_target_z_m ?? task.dropoff_hook_target_z_m,
   };
 }
 
@@ -70,6 +84,12 @@ function fallbackRowsFromCranes(cranes: SimFrameCrane[]): TaskRow[] {
         stage: crane.task_stage,
         priority: null,
         deadlineS: null,
+        pickupFloorId: null,
+        dropoffFloorId: null,
+        pickupSurfaceZ: null,
+        dropoffSurfaceZ: null,
+        pickupHookTargetZ: null,
+        dropoffHookTargetZ: null,
       })),
   );
 }
@@ -112,6 +132,9 @@ export function TaskStatusPanel() {
                 <th>阶段</th>
                 <th>优先级</th>
                 <th>截止s</th>
+                <th>取货面</th>
+                <th>卸货面</th>
+                <th>吊钩目标</th>
               </tr>
             </thead>
             <tbody>
@@ -123,6 +146,9 @@ export function TaskStatusPanel() {
                   <td>{str(t.stage)}</td>
                   <td>{str(t.priority)}</td>
                   <td>{str(t.deadlineS)}</td>
+                  <td>{str(t.pickupFloorId)} / {str(t.pickupSurfaceZ)}</td>
+                  <td>{str(t.dropoffFloorId)} / {str(t.dropoffSurfaceZ)}</td>
+                  <td>{str(t.pickupHookTargetZ)} → {str(t.dropoffHookTargetZ)}</td>
                 </tr>
               ))}
             </tbody>

@@ -84,6 +84,34 @@ def test_task_and_queue_are_json_serializable() -> None:
     assert payload["blocked_by_recovery"] is False
 
 
+def test_task_point_accepts_optional_vertical_semantics() -> None:
+    point = TaskPoint(
+        x=10.0,
+        y=20.0,
+        z=21.2,
+        zone_id="floor_05",
+        zone_type="work",
+        surface_z_m=18.0,
+        load_center_z_m=18.4,
+        hook_target_z_m=21.2,
+        approach_z_m=25.2,
+        floor_id="floor_05",
+        building_id="tower_a",
+        zone_role="floor_slab",
+    )
+
+    payload = point.model_dump(mode="json")
+
+    assert point.as_xyz() == [10.0, 20.0, 21.2]
+    assert payload["surface_z_m"] == 18.0
+    assert payload["load_center_z_m"] == 18.4
+    assert payload["hook_target_z_m"] == 21.2
+    assert payload["approach_z_m"] == 25.2
+    assert payload["floor_id"] == "floor_05"
+    assert payload["building_id"] == "tower_a"
+    assert payload["zone_role"] == "floor_slab"
+
+
 def test_recovery_release_task_type_is_runtime_only_but_serializable() -> None:
     task = _task().model_copy(
         update={

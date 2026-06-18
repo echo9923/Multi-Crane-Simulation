@@ -77,6 +77,17 @@ const HISTORY_OPTIONS = ["none", "short", "long"];
 const SUMMARIZER_OPTIONS = ["none", "rule", "llm"];
 const SUMMARIZER_PROVIDER_OPTIONS = ["same_as_operator", "explicit"];
 const FALLBACK_POLICY_OPTIONS = ["neutral_stop"];
+const ZONE_ROLE_OPTIONS = [
+  "",
+  "ground_yard",
+  "truck_bed",
+  "floor_slab",
+  "roof",
+  "podium",
+  "temporary_platform",
+  "unloading_platform",
+  "recovery",
+];
 const REAL_LLM_PROVIDERS = new Set(["deepseek", "minimax", "siliconflow"]);
 const AUTOSAVE_DELAY_MS = 800;
 
@@ -151,6 +162,55 @@ function makeCrane(index: number, form: CoreExperimentForm): CraneFormItem {
 }
 
 function makeZone(prefix: string, index: number): BoxZoneFormItem {
+  if (prefix === "mat") {
+    return {
+      zoneId: `ground_yard_${index + 1}`,
+      type: "box",
+      centerX: -20,
+      centerY: -12 + index * 8,
+      centerZ: 0,
+      sizeX: 14,
+      sizeY: 10,
+      sizeZ: 0.4,
+      zMin: 0,
+      zMax: 0.4,
+      surfaceZM: 0,
+      floorId: "",
+      buildingId: "",
+      levelIndex: null,
+      zoneRole: "ground_yard",
+      hookTargetOffsetM: 0.5,
+      approachClearanceM: 3,
+      loadTypes: "rebar_bundle",
+      acceptedLoadTypes: "",
+    };
+  }
+  if (prefix === "work") {
+    const level = index + 3;
+    const surface = level * 3.6;
+    const floorId = `floor_${String(level).padStart(2, "0")}`;
+    return {
+      zoneId: floorId,
+      type: "box",
+      centerX: 18,
+      centerY: 12 + index * 8,
+      centerZ: surface,
+      sizeX: 12,
+      sizeY: 10,
+      sizeZ: 0.4,
+      zMin: surface,
+      zMax: surface + 0.4,
+      surfaceZM: surface,
+      floorId,
+      buildingId: "tower_a",
+      levelIndex: level,
+      zoneRole: "floor_slab",
+      hookTargetOffsetM: 0.5,
+      approachClearanceM: 3,
+      loadTypes: "",
+      acceptedLoadTypes: "rebar_bundle",
+    };
+  }
   return {
     zoneId: `${prefix}_${index + 1}`,
     type: "box",
@@ -162,6 +222,13 @@ function makeZone(prefix: string, index: number): BoxZoneFormItem {
     sizeZ: 1,
     zMin: 0,
     zMax: 1,
+    surfaceZM: 0,
+    floorId: "",
+    buildingId: "",
+    levelIndex: null,
+    zoneRole: "",
+    hookTargetOffsetM: 0.5,
+    approachClearanceM: 3,
     loadTypes: "rebar_bundle",
     acceptedLoadTypes: "rebar_bundle",
   };
@@ -524,6 +591,9 @@ export function ConfigurationPage() {
       | "sizeZ"
       | "zMin"
       | "zMax"
+      | "surfaceZM"
+      | "hookTargetOffsetM"
+      | "approachClearanceM"
     >,
     value: string,
     opts: { min?: number; max?: number } = {},
@@ -531,6 +601,20 @@ export function ConfigurationPage() {
     const next = parseNumber(value, opts);
     if (next === null) return;
     updateZone(listKey, index, { [field]: next });
+  };
+
+  const updateZoneLevelIndex = (
+    listKey: ZoneListKey,
+    index: number,
+    value: string,
+  ) => {
+    if (value.trim() === "") {
+      updateZone(listKey, index, { levelIndex: null });
+      return;
+    }
+    const next = parseNumber(value, { integer: true, min: 0 });
+    if (next === null) return;
+    updateZone(listKey, index, { levelIndex: next });
   };
 
   const addZone = (listKey: ZoneListKey, prefix: string) => {
@@ -543,6 +627,57 @@ export function ConfigurationPage() {
     updateForm({
       [listKey]: form[listKey].filter((_, itemIndex) => itemIndex !== index),
     } as Partial<CoreExperimentForm>);
+  };
+
+  const applyMultifloorPreset = () => {
+    const materialZones: BoxZoneFormItem[] = [
+      {
+        ...makeZone("mat", 0),
+        zoneId: "ground_yard_1",
+        centerX: -24,
+        centerY: -18,
+        surfaceZM: 0,
+        zMin: 0,
+        zMax: 0.4,
+        zoneRole: "ground_yard",
+      },
+      {
+        ...makeZone("mat", 1),
+        zoneId: "truck_bed_1",
+        centerX: -8,
+        centerY: -24,
+        centerZ: 1.2,
+        surfaceZM: 1.2,
+        zMin: 1.2,
+        zMax: 1.6,
+        zoneRole: "truck_bed",
+      },
+    ];
+    const workZones: BoxZoneFormItem[] = [3, 5, 7].map((level, index) => {
+      const surface = level * 3.6;
+      const floorId = level === 7 ? "roof" : `floor_${String(level).padStart(2, "0")}`;
+      return {
+        ...makeZone("work", index),
+        zoneId: `${floorId}_dropoff`,
+        centerX: 18 + index * 8,
+        centerY: 10 + index * 6,
+        centerZ: surface,
+        zMin: surface,
+        zMax: surface + 0.4,
+        surfaceZM: surface,
+        floorId,
+        buildingId: "tower_a",
+        levelIndex: level,
+        zoneRole: level === 7 ? "roof" : "floor_slab",
+      };
+    });
+    updateForm({
+      scenarioId: "multifloor_construction_demo",
+      experimentId: "multifloor_construction_demo",
+      materialZones,
+      workZones,
+      tasksPerCrane: Math.max(form.tasksPerCrane, 2),
+    });
   };
 
   const selectedTemplate = templates.find(
@@ -741,6 +876,119 @@ export function ConfigurationPage() {
                 />
               </Field>
               <Field
+                id={`${listKey}-${index}-surface-z`}
+                label="surface_z_m"
+                help="装卸表面标高，物料区通常是地面堆场/车辆平台；工作区通常是楼层、屋面或卸料平台。"
+              >
+                <input
+                  id={`${listKey}-${index}-surface-z`}
+                  type="number"
+                  min={0}
+                  step={0.1}
+                  value={zone.surfaceZM}
+                  onChange={(event) =>
+                    updateZoneNumber(listKey, index, "surfaceZM", event.target.value, {
+                      min: 0,
+                    })
+                  }
+                />
+              </Field>
+              <Field
+                id={`${listKey}-${index}-floor-id`}
+                label="floor_id"
+                help="楼层或平台标识，例如 floor_03、roof；地面堆场可留空。"
+              >
+                <input
+                  id={`${listKey}-${index}-floor-id`}
+                  type="text"
+                  value={zone.floorId}
+                  onChange={(event) =>
+                    updateZone(listKey, index, { floorId: event.target.value })
+                  }
+                />
+              </Field>
+              <Field
+                id={`${listKey}-${index}-building-id`}
+                label="building_id"
+                help="建筑标识，用于 3D 楼层板和任务面板串联显示。"
+              >
+                <input
+                  id={`${listKey}-${index}-building-id`}
+                  type="text"
+                  value={zone.buildingId}
+                  onChange={(event) =>
+                    updateZone(listKey, index, { buildingId: event.target.value })
+                  }
+                />
+              </Field>
+              <Field
+                id={`${listKey}-${index}-level-index`}
+                label="level_index"
+                help="楼层序号，可留空；例如 3 表示第三层。"
+              >
+                <input
+                  id={`${listKey}-${index}-level-index`}
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={zone.levelIndex ?? ""}
+                  onChange={(event) =>
+                    updateZoneLevelIndex(listKey, index, event.target.value)
+                  }
+                />
+              </Field>
+              <Field
+                id={`${listKey}-${index}-zone-role`}
+                label="zone_role"
+                help="区域语义，影响任务高度解释和 3D 视觉样式。"
+              >
+                <select
+                  id={`${listKey}-${index}-zone-role`}
+                  value={zone.zoneRole}
+                  onChange={(event) =>
+                    updateZone(listKey, index, { zoneRole: event.target.value })
+                  }
+                >
+                  {ZONE_ROLE_OPTIONS.map(valueOption)}
+                </select>
+              </Field>
+              <Field
+                id={`${listKey}-${index}-hook-offset`}
+                label="hook_target_offset_m"
+                help="吊钩目标比载荷顶部额外高出的距离，单位米。"
+              >
+                <input
+                  id={`${listKey}-${index}-hook-offset`}
+                  type="number"
+                  min={0}
+                  step={0.1}
+                  value={zone.hookTargetOffsetM}
+                  onChange={(event) =>
+                    updateZoneNumber(listKey, index, "hookTargetOffsetM", event.target.value, {
+                      min: 0,
+                    })
+                  }
+                />
+              </Field>
+              <Field
+                id={`${listKey}-${index}-approach-clearance`}
+                label="approach_clearance_m"
+                help="接近/越障高度相对吊钩目标的净空，单位米。"
+              >
+                <input
+                  id={`${listKey}-${index}-approach-clearance`}
+                  type="number"
+                  min={0}
+                  step={0.1}
+                  value={zone.approachClearanceM}
+                  onChange={(event) =>
+                    updateZoneNumber(listKey, index, "approachClearanceM", event.target.value, {
+                      min: 0,
+                    })
+                  }
+                />
+              </Field>
+              <Field
                 id={`${listKey}-${index}-loads`}
                 label={listKey === "workZones" ? "接收载荷类型" : "载荷类型"}
                 help="多个类型用英文逗号分隔，系统会写成 YAML 数组。"
@@ -789,6 +1037,9 @@ export function ConfigurationPage() {
         </button>
         <button type="button" onClick={validateYaml} disabled={busy || !yamlText}>
           校验配置
+        </button>
+        <button type="button" onClick={applyMultifloorPreset} disabled={busy}>
+          生成多楼层施工示例
         </button>
         <button type="button" onClick={() => void saveDraft()} disabled={busy || !yamlText}>
           保存草稿

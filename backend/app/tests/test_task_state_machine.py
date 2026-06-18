@@ -67,6 +67,52 @@ def _task(task_type: str = "easy_task") -> Task:
     )
 
 
+def _semantic_task() -> Task:
+    return Task(
+        task_id="T_C1_010",
+        crane_id="C1",
+        task_type="easy_task",
+        pickup=TaskPoint(
+            x=20.0,
+            y=0.0,
+            z=1.8,
+            zone_id="ground_yard",
+            zone_type="material",
+            surface_z_m=0.0,
+            load_center_z_m=0.5,
+            hook_target_z_m=1.8,
+            approach_z_m=6.0,
+            zone_role="ground_yard",
+        ),
+        dropoff=TaskPoint(
+            x=25.0,
+            y=0.0,
+            z=21.8,
+            zone_id="floor_06",
+            zone_type="work",
+            surface_z_m=20.0,
+            load_center_z_m=20.5,
+            hook_target_z_m=21.8,
+            approach_z_m=27.0,
+            floor_id="floor_06",
+            building_id="tower_a",
+            zone_role="floor_slab",
+        ),
+        pickup_zone_id="ground_yard",
+        dropoff_zone_id="floor_06",
+        planned_start_s=0.0,
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+        load_size_m=[6.0, 1.0, 1.0],
+        priority="medium",
+        deadline_s=180.0,
+        status="active",
+        started_at_s=0.0,
+        generation_seed=1,
+        generation_attempt=0,
+    )
+
+
 def _state_at(
     crane,
     *,
@@ -170,6 +216,33 @@ def test_attach_requires_request_conditions_and_delay() -> None:
     assert attached.events[-1].event_type == "load_attached"
 
 
+def test_attach_uses_hook_target_not_load_center_height() -> None:
+    scenario, crane = _scenario_and_crane()
+    task = _semantic_task()
+    at_load_center = _state_at(crane, x=20.0, y=0.0, z=0.5, stage="lower_for_attach")
+    at_hook_target = _state_at(crane, x=20.0, y=0.0, z=1.8, stage="lower_for_attach")
+
+    rejected = step_task_state_machine(
+        task,
+        crane,
+        at_load_center,
+        _signal("request_attach"),
+        time_s=10.0,
+        config=scenario.tasks.state_machine,
+    )
+    accepted = step_task_state_machine(
+        task,
+        crane,
+        at_hook_target,
+        _signal("request_attach"),
+        time_s=11.0,
+        config=scenario.tasks.state_machine,
+    )
+
+    assert rejected.events[-1].reason == "height_error_too_large"
+    assert accepted.state.task_stage == "attach_pending"
+
+
 def test_attach_pending_drift_cancels_without_setting_load() -> None:
     scenario, crane = _scenario_and_crane()
     task = _task()
@@ -218,7 +291,7 @@ def test_lift_and_dropoff_release_complete_task() -> None:
         crane,
         x=20.0,
         y=0.0,
-        z=8.0,
+        z=36.0,
         stage="lift_load",
         load_attached=True,
         load_type="rebar_bundle",
@@ -328,7 +401,7 @@ def test_lift_load_advances_only_at_configured_lift_threshold() -> None:
             crane,
             x=20.0,
             y=0.0,
-            z=11.5,
+            z=12.5,
             stage="lift_load",
             load_attached=True,
             load_type="rebar_bundle",
@@ -345,7 +418,7 @@ def test_lift_load_advances_only_at_configured_lift_threshold() -> None:
             crane,
             x=20.0,
             y=0.0,
-            z=12.0,
+            z=13.0,
             stage="lift_load",
             load_attached=True,
             load_type="rebar_bundle",
@@ -358,6 +431,52 @@ def test_lift_load_advances_only_at_configured_lift_threshold() -> None:
 
     assert below_threshold.state.task_stage == "lift_load"
     assert at_threshold.state.task_stage == "move_to_dropoff"
+
+
+def test_lift_load_uses_pickup_and_dropoff_approach_heights() -> None:
+    scenario, crane = _scenario_and_crane()
+    task = _semantic_task()
+    config = scenario.tasks.state_machine.model_copy(
+        update={"safe_transport_height_m": 12.0, "lift_clearance_m": 2.0}
+    )
+
+    below_dropoff_approach = step_task_state_machine(
+        task,
+        crane,
+        _state_at(
+            crane,
+            x=20.0,
+            y=0.0,
+            z=26.5,
+            stage="lift_load",
+            load_attached=True,
+            load_type="rebar_bundle",
+            load_weight_t=2.0,
+        ),
+        _signal(),
+        time_s=20.0,
+        config=config,
+    )
+    at_dropoff_approach = step_task_state_machine(
+        task,
+        crane,
+        _state_at(
+            crane,
+            x=20.0,
+            y=0.0,
+            z=27.0,
+            stage="lift_load",
+            load_attached=True,
+            load_type="rebar_bundle",
+            load_weight_t=2.0,
+        ),
+        _signal(),
+        time_s=21.0,
+        config=config,
+    )
+
+    assert below_dropoff_approach.state.task_stage == "lift_load"
+    assert at_dropoff_approach.state.task_stage == "move_to_dropoff"
 
 
 def test_align_dropoff_advances_to_lower_for_release_without_height_gate() -> None:
@@ -449,6 +568,70 @@ def test_release_pending_repeated_request_does_not_block_completion() -> None:
         "load_released",
         "task_completed",
     ]
+
+
+def test_release_uses_hook_target_and_records_vertical_details() -> None:
+    scenario, crane = _scenario_and_crane()
+    task = _semantic_task()
+    at_surface = _state_at(
+        crane,
+        x=25.0,
+        y=0.0,
+        z=20.0,
+        stage="lower_for_release",
+        load_attached=True,
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+    )
+    at_hook_target = _state_at(
+        crane,
+        x=25.0,
+        y=0.0,
+        z=21.8,
+        stage="lower_for_release",
+        load_attached=True,
+        load_type="rebar_bundle",
+        load_weight_t=2.0,
+    )
+
+    rejected = step_task_state_machine(
+        task,
+        crane,
+        at_surface,
+        _signal("request_release"),
+        time_s=23.0,
+        config=scenario.tasks.state_machine,
+        release_delay_s=0.0,
+    )
+    pending = step_task_state_machine(
+        task,
+        crane,
+        at_hook_target,
+        _signal("request_release"),
+        time_s=24.0,
+        config=scenario.tasks.state_machine,
+        release_delay_s=0.0,
+    )
+    completed = step_task_state_machine(
+        pending.task,
+        crane,
+        pending.state,
+        _signal(),
+        time_s=24.1,
+        config=scenario.tasks.state_machine,
+        runtime=pending.runtime,
+        release_delay_s=0.0,
+    )
+
+    release_event = completed.events[0]
+    assert rejected.events[-1].reason == "height_error_too_large"
+    assert pending.state.task_stage == "release_pending"
+    assert release_event.event_type == "load_released"
+    assert release_event.details["surface_z_m"] == 20.0
+    assert release_event.details["load_center_z_m"] == 20.5
+    assert release_event.details["hook_target_z_m"] == 21.8
+    assert release_event.details["floor_id"] == "floor_06"
+    assert release_event.details["building_id"] == "tower_a"
 
 
 def test_release_pending_drift_cancels_and_keeps_load() -> None:

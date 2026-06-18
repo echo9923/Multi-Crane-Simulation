@@ -12,6 +12,7 @@ import type { EpisodeManifest, ZoneManifest, SimFrame, SimFrameWeather } from "@
 import { worldToThree, type Vec3 } from "@/coord";
 import { buildCrane, DEFAULT_CRANE_PALETTE, type CraneParts } from "./geometry/crane";
 import { buildZone, type ZoneKind } from "./geometry/zones";
+import { buildBuildingFloors, buildInferredZoneFloors } from "./geometry/floors";
 import { buildBoundary } from "./geometry/site";
 import { buildLoad, loadHangOffsetY } from "./geometry/load";
 import { deriveDynamic } from "./model/dynamicState";
@@ -127,6 +128,21 @@ export class ThreeSceneController {
     const zonesGroup = new THREE.Group();
     zonesGroup.name = "zones";
     this.root.add(zonesGroup);
+
+    const allZonesForFloors: ZoneManifest[] = [
+      ...zonesOf("material"),
+      ...zonesOf("work"),
+      ...zonesOf("forbidden"),
+    ];
+    const buildings =
+      (site?.buildings as unknown[]) ??
+      ((manifest?.site?.buildings as unknown[]) || []);
+    const floorGroup = buildings.length > 0
+      ? buildBuildingFloors(buildings as Parameters<typeof buildBuildingFloors>[0])
+      : buildInferredZoneFloors(allZonesForFloors as Parameters<typeof buildInferredZoneFloors>[0]);
+    if (floorGroup.children.length > 0) {
+      this.root.add(floorGroup);
+    }
 
     let zoneCount = 0;
     (["material", "work", "forbidden"] as ZoneKind[]).forEach((kind) => {

@@ -690,15 +690,15 @@ def test_build_task_summary_lift_load_uses_state_machine_lift_target() -> None:
 
     assert below_summary.control_hint is not None
     assert below_summary.control_hint.target_kind == "lift"
-    assert below_summary.control_hint.height_error_m == 0.5
+    assert below_summary.control_hint.height_error_m == 1.5
     assert below_summary.control_hint.hoist_hint_direction == "up"
     assert below_summary.control_hint.slew_hint_direction == "neutral"
     assert below_summary.control_hint.trolley_hint_direction == "neutral"
 
     at_target = below_target.model_copy(
         update={
-            "hook_h_m": 12.0,
-            "hook_position": [20.0, 0.0, 12.0],
+            "hook_h_m": 13.0,
+            "hook_position": [20.0, 0.0, 13.0],
         }
     )
 

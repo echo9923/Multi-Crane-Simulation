@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.schemas.state import CraneState
 from backend.app.schemas.task import Task, TaskEventPayload, TaskPoint, TaskQueue
+from backend.app.sim.task_state_machine import point_approach_z
 
 
 class TaskSchedulerConfig(BaseModel):
@@ -195,7 +196,14 @@ def current_target_for_stage(
             return task.pickup.model_copy(
                 update={
                     "z": max(
-                        task.pickup.z + state_machine_config.lift_clearance_m,
+                        point_approach_z(
+                            task.pickup,
+                            safe_clearance_m=state_machine_config.lift_clearance_m,
+                        ),
+                        point_approach_z(
+                            task.dropoff,
+                            safe_clearance_m=state_machine_config.lift_clearance_m,
+                        ),
                         state_machine_config.safe_transport_height_m,
                     )
                 }

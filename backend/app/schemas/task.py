@@ -39,9 +39,19 @@ class TaskPoint(TaskBaseModel):
     schema_version: str = TASK_SCHEMA_VERSION
     x: float
     y: float
+    # Compatibility height for existing controllers, logs, and visual frames.
+    # New task generation stores the hook target height here while also
+    # exposing the surface/load/approach heights below.
     z: float
     zone_id: str
     zone_type: Literal["material", "work", "recovery"]
+    surface_z_m: Optional[float] = None
+    load_center_z_m: Optional[float] = None
+    hook_target_z_m: Optional[float] = None
+    approach_z_m: Optional[float] = None
+    floor_id: Optional[str] = None
+    building_id: Optional[str] = None
+    zone_role: Optional[str] = None
 
     def as_xyz(self) -> List[float]:
         return [self.x, self.y, self.z]

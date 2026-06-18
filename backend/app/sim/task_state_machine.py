@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 from backend.app.schemas.config import TaskStateMachineConfig
 from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.state import CraneState
-from backend.app.schemas.task import Task, TaskActionSignal, TaskEventPayload
+from backend.app.schemas.task import Task, TaskActionSignal, TaskEventPayload, TaskPoint
 from backend.app.sim.layout_geometry import horizontal_distance
 
 
@@ -82,7 +82,7 @@ def step_task_state_machine(
     if (
         current_stage == "align_pickup"
         and _xy_error(state, task.pickup.as_xyz()) <= config.align_xy_threshold_m
-        and state.hook_h_m > task.pickup.z + config.attach_height_threshold_m
+        and state.hook_h_m > point_hook_target_z(task.pickup) + config.attach_height_threshold_m
     ):
         return _stage_changed(task, state, runtime_state, events, "lower_for_attach", time_s)
 
@@ -110,7 +110,7 @@ def step_task_state_machine(
                     state,
                     task,
                     reason=reason,
-                    details=_attach_release_details(state, task.pickup.as_xyz()),
+                    details=_attach_release_details(state, task.pickup),
                 )
             )
         return _result(task, state, runtime_state, events)
@@ -163,7 +163,8 @@ def step_task_state_machine(
 
     if current_stage == "lift_load":
         threshold = max(
-            task.pickup.z + config.lift_clearance_m,
+            point_approach_z(task.pickup, safe_clearance_m=config.lift_clearance_m),
+            point_approach_z(task.dropoff, safe_clearance_m=config.lift_clearance_m),
             config.safe_transport_height_m,
         )
         if state.hook_h_m >= threshold:
@@ -204,7 +205,7 @@ def step_task_state_machine(
                     state,
                     task,
                     reason=reason,
-                    details=_attach_release_details(state, task.dropoff.as_xyz()),
+                    details=_attach_release_details(state, task.dropoff),
                 )
             )
         return _result(task, state, runtime_state, events)
@@ -263,6 +264,7 @@ def step_task_state_machine(
                         "load_type": task.load_type,
                         "load_weight_t": task.load_weight_t,
                         "dropoff_zone_id": task.dropoff_zone_id,
+                        **_point_vertical_details(task.dropoff),
                     },
                 )
             )
@@ -283,7 +285,7 @@ def _attach_rejection_reason(
         return "load_already_attached"
     if _xy_error(state, task.pickup.as_xyz()) > config.attach_xy_threshold_m:
         return "xy_error_too_large"
-    if abs(state.hook_h_m - task.pickup.z) > config.attach_height_threshold_m:
+    if abs(state.hook_h_m - point_hook_target_z(task.pickup)) > config.attach_height_threshold_m:
         return "height_error_too_large"
     if not _speeds_below_threshold(
         state,
@@ -307,7 +309,7 @@ def _release_rejection_reason(
         return "load_not_attached"
     if _xy_error(state, task.dropoff.as_xyz()) > config.release_xy_threshold_m:
         return "xy_error_too_large"
-    if abs(state.hook_h_m - task.dropoff.z) > config.release_height_threshold_m:
+    if abs(state.hook_h_m - point_hook_target_z(task.dropoff)) > config.release_height_threshold_m:
         return "height_error_too_large"
     if not _speeds_below_threshold(
         state,
@@ -335,6 +337,20 @@ def _speeds_below_threshold(
 
 def _xy_error(state: CraneState, target: List[float]) -> float:
     return horizontal_distance(state.hook_position, target)
+
+
+def point_hook_target_z(point: TaskPoint) -> float:
+    return point.hook_target_z_m if point.hook_target_z_m is not None else point.z
+
+
+def point_surface_z(point: TaskPoint) -> float:
+    return point.surface_z_m if point.surface_z_m is not None else point.z
+
+
+def point_approach_z(point: TaskPoint, *, safe_clearance_m: float) -> float:
+    if point.approach_z_m is not None:
+        return point.approach_z_m
+    return point.z + safe_clearance_m
 
 
 def _stage_changed(
@@ -387,12 +403,27 @@ def _event(
     )
 
 
-def _attach_release_details(state: CraneState, target: List[float]) -> Dict[str, object]:
+def _attach_release_details(state: CraneState, point: TaskPoint) -> Dict[str, object]:
+    target = point.as_xyz()
+    hook_target_z = point_hook_target_z(point)
     return {
         "xy_error_m": round(_xy_error(state, target), 6),
-        "height_error_m": round(abs(state.hook_h_m - target[2]), 6),
+        "height_error_m": round(abs(state.hook_h_m - hook_target_z), 6),
         "slew_speed_deg_s": round(math.degrees(state.theta_dot_rad_s), 6),
         "trolley_speed_m_s": state.trolley_v_m_s,
         "hoist_speed_m_s": state.hoist_v_m_s,
         "load_attached": state.load_attached,
+        **_point_vertical_details(point),
+    }
+
+
+def _point_vertical_details(point: TaskPoint) -> Dict[str, object]:
+    return {
+        "surface_z_m": point_surface_z(point),
+        "load_center_z_m": point.load_center_z_m,
+        "hook_target_z_m": point_hook_target_z(point),
+        "approach_z_m": point_approach_z(point, safe_clearance_m=0.0),
+        "floor_id": point.floor_id,
+        "building_id": point.building_id,
+        "zone_role": point.zone_role,
     }

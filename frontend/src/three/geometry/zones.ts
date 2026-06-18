@@ -19,7 +19,14 @@ function verticalExtent(
   centerZ: number | undefined,
   sizeZ: number | undefined,
   zRange: [number, number] | null | undefined,
+  surfaceZ: number | null | undefined,
 ): [number, number] {
+  if (typeof surfaceZ === "number" && Number.isFinite(surfaceZ)) {
+    const thickness = zRange && zRange.length === 2
+      ? Math.max(0.05, zRange[1] - zRange[0])
+      : Math.max(0.05, sizeZ ?? 0.4);
+    return [surfaceZ, surfaceZ + thickness];
+  }
   if (zRange && zRange.length === 2) return [zRange[0], zRange[1]];
   const cz = centerZ ?? 0;
   const sz = sizeZ ?? 1;
@@ -54,7 +61,7 @@ export function buildZone(zone: ZoneConfig, kind: ZoneKind): THREE.Object3D {
     if (!center || !size) return group;
     const [cx, cy, cz] = center;
     const [dx, dy, dz] = size;
-    const [zmin, zmax] = verticalExtent(cz, dz, zone.z_range_m ?? null);
+    const [zmin, zmax] = verticalExtent(cz, dz, zone.z_range_m ?? null, zone.surface_z_m);
     const height = Math.max(0.05, zmax - zmin);
     // Three box dims: x=east(dx), y=up(height), z=north(dy).
     const geo = new THREE.BoxGeometry(dx, height, dy);
@@ -70,7 +77,7 @@ export function buildZone(zone: ZoneConfig, kind: ZoneKind): THREE.Object3D {
     const raw = zone.points ?? [];
     const pts = raw.map((p) => [p[0], p[1]] as [number, number]);
     if (pts.length < 3) return group;
-    const [zmin, zmax] = zone.z_range_m ? [zone.z_range_m[0], zone.z_range_m[1]] : [0, 0.5];
+    const [zmin, zmax] = verticalExtent(undefined, 0.5, zone.z_range_m ?? null, zone.surface_z_m);
     const depth = Math.max(0.05, zmax - zmin);
     const shape = new THREE.Shape();
     pts.forEach((p, i) => (i === 0 ? shape.moveTo(p[0], p[1]) : shape.lineTo(p[0], p[1])));

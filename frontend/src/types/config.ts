@@ -23,8 +23,25 @@ export interface ZoneConfig {
   size?: Vec3 | null;
   points?: Vec3[] | null;
   z_range_m?: [number, number] | null;
+  surface_z_m?: number | null;
+  floor_id?: string | null;
+  building_id?: string | null;
+  level_index?: number | null;
+  zone_role?: string | null;
+  hook_target_offset_m?: number | null;
+  load_center_offset_m?: number | null;
+  approach_clearance_m?: number | null;
   load_types?: string[] | null;
   accepted_load_types?: string[] | null;
+}
+
+export interface BuildingConfig {
+  building_id: string;
+  name: string;
+  footprint: Vec3[] | [number, number][];
+  floors: number;
+  floor_height_m: number;
+  base_z_m: number;
 }
 
 export interface LoadTypeConfig {
@@ -78,6 +95,7 @@ export interface CraneConfig {
 export interface SiteConfig {
   coordinate_system: string;
   boundary: BoundaryConfig;
+  buildings?: BuildingConfig[];
   forbidden_zones: ZoneConfig[];
   material_zones: ZoneConfig[];
   work_zones: ZoneConfig[];

@@ -61,6 +61,25 @@ describe("workbench config model", () => {
     expect(defaultCoreForm().llmBaseUrl).toBe("https://api.deepseek.com/v1");
   });
 
+  it("defaults zones to a ground yard and elevated work floor", () => {
+    const form = defaultCoreForm();
+
+    expect(form.materialZones[0]).toMatchObject({
+      zoneId: "ground_yard_1",
+      surfaceZM: 0,
+      zoneRole: "ground_yard",
+    });
+    expect(form.workZones[0]).toMatchObject({
+      zoneId: "floor_03",
+      surfaceZM: 12,
+      floorId: "floor_03",
+      buildingId: "tower_a",
+      zoneRole: "floor_slab",
+    });
+    expect(form.workZones[0].zMin).toBe(12);
+    expect(form.workZones[0].zMax).toBe(12.4);
+  });
+
   it("default manual cranes have distinct safe base positions", () => {
     const form = defaultCoreForm();
     const bases = form.cranes.map((crane) => [crane.baseX, crane.baseY, crane.baseZ]);
@@ -95,6 +114,10 @@ describe("workbench config model", () => {
       "        center: [-21.96, -21.96, 10]",
       "        size: [0.4, 0.4, 0.4]",
       "        z_range_m: [9.8, 10.2]",
+      "        surface_z_m: 0",
+      "        zone_role: ground_yard",
+      "        hook_target_offset_m: 0.75",
+      "        approach_clearance_m: 4",
       "        load_types: [rebar_bundle]",
       "    work_zones:",
       "      - zone_id: work_c1",
@@ -102,6 +125,11 @@ describe("workbench config model", () => {
       "        center: [-26.485, -26.485, 11]",
       "        size: [0.6, 0.6, 0.5]",
       "        z_range_m: [10.8, 11.2]",
+      "        surface_z_m: 10.8",
+      "        floor_id: floor_03",
+      "        building_id: tower_a",
+      "        level_index: 3",
+      "        zone_role: unloading_platform",
       "        accepted_load_types: [rebar_bundle]",
       "    forbidden_zones:",
       "      - zone_id: core",
@@ -215,8 +243,23 @@ describe("workbench config model", () => {
     expect(form.physicsHz).toBe(5);
     expect(form.controllerHz).toBe(5);
     expect(form.cranes[0]).toMatchObject({ craneId: "C1", mastHeightM: 30 });
-    expect(form.materialZones[0]).toMatchObject({ zoneId: "mat_c1", centerX: -21.96 });
-    expect(form.workZones[0]).toMatchObject({ zoneId: "work_c1", acceptedLoadTypes: "rebar_bundle" });
+    expect(form.materialZones[0]).toMatchObject({
+      zoneId: "mat_c1",
+      centerX: -21.96,
+      surfaceZM: 0,
+      zoneRole: "ground_yard",
+      hookTargetOffsetM: 0.75,
+      approachClearanceM: 4,
+    });
+    expect(form.workZones[0]).toMatchObject({
+      zoneId: "work_c1",
+      acceptedLoadTypes: "rebar_bundle",
+      surfaceZM: 10.8,
+      floorId: "floor_03",
+      buildingId: "tower_a",
+      levelIndex: 3,
+      zoneRole: "unloading_platform",
+    });
     expect(form.forbiddenZones[0]).toMatchObject({ zoneId: "core", sizeZ: 20 });
     expect(form.timeoutS).toBe(30);
     expect(form.maxRetries).toBe(1);
@@ -263,6 +306,90 @@ describe("workbench config model", () => {
     ]);
     expect(patches["experiment.llm.max_retries"]).toBe(2);
     expect(typeof patches["experiment.llm.max_retries"]).toBe("number");
+  });
+
+  it("writes zone vertical semantics into YAML patches", () => {
+    const patches = coreFormToPatches({
+      ...defaultCoreForm(),
+      materialZones: [
+        {
+          zoneId: "ground_yard_1",
+          type: "box",
+          centerX: -20,
+          centerY: -10,
+          centerZ: 0,
+          sizeX: 12,
+          sizeY: 10,
+          sizeZ: 0.4,
+          zMin: 0,
+          zMax: 0.4,
+          surfaceZM: 0,
+          floorId: "",
+          buildingId: "",
+          levelIndex: null,
+          zoneRole: "ground_yard",
+          hookTargetOffsetM: 0.5,
+          approachClearanceM: 3,
+          loadTypes: "rebar_bundle",
+          acceptedLoadTypes: "",
+        },
+      ],
+      workZones: [
+        {
+          zoneId: "floor_05",
+          type: "box",
+          centerX: 15,
+          centerY: 12,
+          centerZ: 18,
+          sizeX: 10,
+          sizeY: 8,
+          sizeZ: 0.4,
+          zMin: 18,
+          zMax: 18.4,
+          surfaceZM: 18,
+          floorId: "floor_05",
+          buildingId: "tower_a",
+          levelIndex: 5,
+          zoneRole: "floor_slab",
+          hookTargetOffsetM: 0.5,
+          approachClearanceM: 3,
+          loadTypes: "",
+          acceptedLoadTypes: "rebar_bundle",
+        },
+      ],
+    });
+
+    expect(patches["scenario.site.material_zones"]).toEqual([
+      {
+        zone_id: "ground_yard_1",
+        type: "box",
+        center: [-20, -10, 0],
+        size: [12, 10, 0.4],
+        z_range_m: [0, 0.4],
+        surface_z_m: 0,
+        zone_role: "ground_yard",
+        hook_target_offset_m: 0.5,
+        approach_clearance_m: 3,
+        load_types: ["rebar_bundle"],
+      },
+    ]);
+    expect(patches["scenario.site.work_zones"]).toEqual([
+      {
+        zone_id: "floor_05",
+        type: "box",
+        center: [15, 12, 18],
+        size: [10, 8, 0.4],
+        z_range_m: [18, 18.4],
+        surface_z_m: 18,
+        floor_id: "floor_05",
+        building_id: "tower_a",
+        level_index: 5,
+        zone_role: "floor_slab",
+        hook_target_offset_m: 0.5,
+        approach_clearance_m: 3,
+        accepted_load_types: ["rebar_bundle"],
+      },
+    ]);
   });
 
   it("applies core form values to YAML for live preview", () => {

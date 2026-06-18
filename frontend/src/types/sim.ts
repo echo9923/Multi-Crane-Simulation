@@ -112,6 +112,14 @@ export interface ZoneManifest extends Record<string, unknown> {
   size?: Vec3 | null;
   points?: Vec3[] | null;
   z_range_m?: [number, number] | null;
+  surface_z_m?: number | null;
+  floor_id?: string | null;
+  building_id?: string | null;
+  level_index?: number | null;
+  zone_role?: string | null;
+  hook_target_offset_m?: number | null;
+  load_center_offset_m?: number | null;
+  approach_clearance_m?: number | null;
   load_types?: string[] | null;
   accepted_load_types?: string[] | null;
 }

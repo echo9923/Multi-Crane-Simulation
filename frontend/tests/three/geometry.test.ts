@@ -117,6 +117,24 @@ describe("buildZone", () => {
     expect(mesh.position.toArray()).toEqual(worldToThree([40, 20, 15]));
   });
 
+  it("uses surface_z_m as the displayed platform height", () => {
+    const z: ZoneConfig = {
+      zone_id: "floor_05",
+      type: "box",
+      center: [40, 20, 0],
+      size: [30, 30, 0.4],
+      z_range_m: [0, 0.4],
+      surface_z_m: 18,
+      zone_role: "floor_slab",
+    };
+    const obj = buildZone(z, "work") as THREE.Group;
+    const mesh = obj.children[0] as THREE.Mesh;
+    const geo = mesh.geometry as THREE.BoxGeometry;
+
+    expect(geo.parameters.height).toBeCloseTo(0.4, 6);
+    expect(mesh.position.toArray()).toEqual(worldToThree([40, 20, 18.2]));
+  });
+
   it("builds a polygon zone (extruded footprint, laid flat)", () => {
     const z: ZoneConfig = {
       zone_id: "p1",

@@ -113,6 +113,52 @@ export function createDefaultCrane(
 }
 
 function defaultBoxZone(prefix: string, index = 0): BoxZoneFormItem {
+  if (prefix === "mat") {
+    return {
+      zoneId: `ground_yard_${index + 1}`,
+      type: "box",
+      centerX: -20,
+      centerY: -12 + index * 8,
+      centerZ: 0,
+      sizeX: 14,
+      sizeY: 10,
+      sizeZ: 0.4,
+      zMin: 0,
+      zMax: 0.4,
+      surfaceZM: 0,
+      floorId: "",
+      buildingId: "",
+      levelIndex: null,
+      zoneRole: "ground_yard",
+      hookTargetOffsetM: 0.5,
+      approachClearanceM: 3,
+      loadTypes: "rebar_bundle",
+      acceptedLoadTypes: "",
+    };
+  }
+  if (prefix === "work") {
+    return {
+      zoneId: index === 0 ? "floor_03" : `floor_${String(index + 3).padStart(2, "0")}`,
+      type: "box",
+      centerX: 18,
+      centerY: 12 + index * 8,
+      centerZ: 12,
+      sizeX: 12,
+      sizeY: 10,
+      sizeZ: 0.4,
+      zMin: 12,
+      zMax: 12.4,
+      surfaceZM: 12,
+      floorId: index === 0 ? "floor_03" : `floor_${String(index + 3).padStart(2, "0")}`,
+      buildingId: "tower_a",
+      levelIndex: index + 3,
+      zoneRole: "floor_slab",
+      hookTargetOffsetM: 0.5,
+      approachClearanceM: 3,
+      loadTypes: "",
+      acceptedLoadTypes: "rebar_bundle",
+    };
+  }
   return {
     zoneId: `${prefix}_${index + 1}`,
     type: "box",
@@ -124,6 +170,13 @@ function defaultBoxZone(prefix: string, index = 0): BoxZoneFormItem {
     sizeZ: 1,
     zMin: 0,
     zMax: 1,
+    surfaceZM: 0,
+    floorId: "",
+    buildingId: "",
+    levelIndex: null,
+    zoneRole: "",
+    hookTargetOffsetM: 0.5,
+    approachClearanceM: 3,
     loadTypes: "rebar_bundle",
     acceptedLoadTypes: "rebar_bundle",
   };
@@ -155,6 +208,8 @@ function zonesAt(root: unknown, path: string[], prefix: string): BoxZoneFormItem
     const center = numberArrayAt(zone, ["center"], [0, 0, 0]);
     const size = numberArrayAt(zone, ["size"], [1, 1, 1]);
     const zRange = numberArrayAt(zone, ["z_range_m"], [center[2] ?? 0, center[2] ?? 0]);
+    const surfaceZM = numberAt(zone, ["surface_z_m"], zRange[0] ?? center[2] ?? 0);
+    const levelValue = zone.level_index;
     return {
       zoneId: typeof zone.zone_id === "string" ? zone.zone_id : `${prefix}_${index + 1}`,
       type: typeof zone.type === "string" ? zone.type : "box",
@@ -166,6 +221,13 @@ function zonesAt(root: unknown, path: string[], prefix: string): BoxZoneFormItem
       sizeZ: size[2] ?? 1,
       zMin: zRange[0] ?? 0,
       zMax: zRange[1] ?? 0,
+      surfaceZM,
+      floorId: typeof zone.floor_id === "string" ? zone.floor_id : "",
+      buildingId: typeof zone.building_id === "string" ? zone.building_id : "",
+      levelIndex: typeof levelValue === "number" && Number.isFinite(levelValue) ? levelValue : null,
+      zoneRole: typeof zone.zone_role === "string" ? zone.zone_role : "",
+      hookTargetOffsetM: numberAt(zone, ["hook_target_offset_m"], 0.5),
+      approachClearanceM: numberAt(zone, ["approach_clearance_m"], 3),
       loadTypes: stringList(zone.load_types),
       acceptedLoadTypes: stringList(zone.accepted_load_types),
     };
@@ -190,7 +252,14 @@ function zoneToYaml(item: BoxZoneFormItem, listKey: "load_types" | "accepted_loa
     center: [item.centerX, item.centerY, item.centerZ],
     size: [item.sizeX, item.sizeY, item.sizeZ],
     z_range_m: [item.zMin, item.zMax],
+    surface_z_m: item.surfaceZM,
+    hook_target_offset_m: item.hookTargetOffsetM,
+    approach_clearance_m: item.approachClearanceM,
   };
+  if (item.floorId.trim()) payload.floor_id = item.floorId.trim();
+  if (item.buildingId.trim()) payload.building_id = item.buildingId.trim();
+  if (item.levelIndex !== null) payload.level_index = item.levelIndex;
+  if (item.zoneRole.trim()) payload.zone_role = item.zoneRole.trim();
   const values = splitStringList(listKey === "load_types" ? item.loadTypes : item.acceptedLoadTypes);
   if (values.length > 0) payload[listKey] = values;
   return payload;

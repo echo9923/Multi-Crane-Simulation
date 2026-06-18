@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -93,6 +93,25 @@ class ZoneConfig(ConfigBaseModel):
     z_range_m: Optional[List[float]] = None
     load_types: Optional[List[str]] = None
     accepted_load_types: Optional[List[str]] = None
+    surface_z_m: Optional[float] = None
+    floor_id: Optional[str] = None
+    building_id: Optional[str] = None
+    level_index: Optional[int] = None
+    zone_role: Optional[
+        Literal[
+            "ground_yard",
+            "truck_bed",
+            "floor_slab",
+            "roof",
+            "podium",
+            "temporary_platform",
+            "unloading_platform",
+            "recovery",
+        ]
+    ] = None
+    hook_target_offset_m: float = Field(default=0.5, ge=0)
+    load_center_offset_m: Optional[float] = Field(default=None, ge=0)
+    approach_clearance_m: float = Field(default=3.0, ge=0)
 
     @field_validator("center", "size")
     @classmethod
@@ -109,6 +128,25 @@ class ZoneConfig(ConfigBaseModel):
         return value
 
 
+class BuildingConfig(ConfigBaseModel):
+    building_id: str
+    name: str
+    footprint: List[List[float]]
+    floors: int = Field(gt=0)
+    floor_height_m: float = Field(gt=0)
+    base_z_m: float = 0.0
+
+    @field_validator("footprint")
+    @classmethod
+    def validate_footprint(cls, value: List[List[float]]) -> List[List[float]]:
+        if len(value) < 3:
+            raise ValueError("footprint must contain at least three vertices")
+        for point in value:
+            if len(point) not in {2, 3}:
+                raise ValueError("footprint vertices must contain two or three values")
+        return value
+
+
 class ForbiddenZonePolicyConfig(ConfigBaseModel):
     mode: ForbiddenZonePolicyMode
     record_violation: bool = True
@@ -117,6 +155,7 @@ class ForbiddenZonePolicyConfig(ConfigBaseModel):
 class SiteConfig(ConfigBaseModel):
     coordinate_system: str
     boundary: BoundaryConfig
+    buildings: List[BuildingConfig] = Field(default_factory=list)
     forbidden_zones: List[ZoneConfig] = Field(default_factory=list)
     material_zones: List[ZoneConfig] = Field(default_factory=list)
     work_zones: List[ZoneConfig] = Field(default_factory=list)
@@ -276,6 +315,7 @@ class TaskStateMachineConfig(ConfigBaseModel):
 
 class ManualTaskInput(ConfigBaseModel):
     task_id: str
+    crane_id: Optional[str] = None
     task_type: TaskType
     pickup_zone_id: str
     dropoff_zone_id: str
