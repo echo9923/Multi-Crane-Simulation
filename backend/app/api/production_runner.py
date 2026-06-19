@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,6 +71,27 @@ from backend.app.sim.task_state_machine import (
     step_task_state_machine,
 )
 from backend.app.sim.weather import WeatherGenerator, build_weather_visibility_context
+
+
+_PROGRESS_EVENT_TYPES = {
+    "task_stage_changed",
+    "attach_pending_started",
+    "attach_pending_cancelled",
+    "load_attached",
+    "release_pending_started",
+    "release_pending_cancelled",
+    "load_released",
+    "task_completed",
+    "recovery_release_completed",
+}
+
+_RELEASE_STAGES = {
+    "move_to_dropoff",
+    "align_dropoff",
+    "lower_for_release",
+    "release_pending",
+    "recovery_release",
+}
 
 
 def build_production_episode_runner(
@@ -224,6 +246,10 @@ class ProductionTaskSystem:
         self.crane_configs = {config.crane_id: config for config in crane_configs}
         self.state_machine_runtime: dict[str, TaskRuntimeState] = {}
         self.failure_runtime: dict[str, TaskFailureRuntimeState] = {}
+        self._last_progress_signature: dict[
+            str,
+            tuple[str, tuple[float, float, float]],
+        ] = {}
         self._recent_events: dict[str, list[Any]] = {}
 
     def activate_due_tasks(
@@ -301,6 +327,13 @@ class ProductionTaskSystem:
                 sm_result.task.task_id,
                 TaskFailureRuntimeState(last_progress_at_s=sm_result.task.started_at_s),
             )
+            failure_runtime = self._advance_failure_runtime_for_progress(
+                task_id=sm_result.task.task_id,
+                state=next_state,
+                runtime=failure_runtime,
+                events=sm_result.events,
+                time_s=time_s,
+            )
             failure_result = handle_task_timing_and_failures(
                 sm_result.task,
                 next_state,
@@ -312,8 +345,8 @@ class ProductionTaskSystem:
             )
             self.failure_runtime[failure_result.task.task_id] = failure_result.runtime
             next_state = failure_result.state
-            next_queue = failure_result.queue or _replace_task_in_queue(
-                next_queue,
+            next_queue = _replace_task_in_queue(
+                failure_result.queue or next_queue,
                 failure_result.task,
             )
             if failure_result.recovery_task is not None:
@@ -356,6 +389,48 @@ class ProductionTaskSystem:
             bucket = self._recent_events.setdefault(str(crane_id), [])
             bucket.append(event)
             del bucket[:-12]
+
+    def _advance_failure_runtime_for_progress(
+        self,
+        *,
+        task_id: str,
+        state: CraneState,
+        runtime: TaskFailureRuntimeState,
+        events: Sequence[Any],
+        time_s: float,
+    ) -> TaskFailureRuntimeState:
+        update: dict[str, float] = {}
+        if any(_event_type(event) in _PROGRESS_EVENT_TYPES for event in events):
+            update["last_progress_at_s"] = time_s
+        if (
+            state.task_stage in _RELEASE_STAGES
+            and runtime.release_stage_started_at_s is None
+        ):
+            update["release_stage_started_at_s"] = time_s
+        if self._hook_progressed(task_id, state):
+            update["last_progress_at_s"] = time_s
+        if not update:
+            return runtime
+        return runtime.model_copy(update=update)
+
+    def _hook_progressed(self, task_id: str, state: CraneState) -> bool:
+        signature = (
+            state.task_stage,
+            (
+                float(state.hook_position[0]),
+                float(state.hook_position[1]),
+                float(state.hook_position[2]),
+            ),
+        )
+        previous = self._last_progress_signature.get(task_id)
+        self._last_progress_signature[task_id] = signature
+        if previous is None:
+            return False
+        previous_stage, previous_position = previous
+        if previous_stage != state.task_stage:
+            return False
+        epsilon = self.scenario.tasks.state_machine.no_progress_xy_epsilon_m
+        return math.dist(signature[1], previous_position) >= epsilon
 
 
 class ProductionObservationBuilder:
@@ -753,6 +828,14 @@ def _command_is_neutral(command: ExecutedCommand) -> bool:
 def _neighbor_map(states: Sequence[CraneState]) -> dict[str, list[str]]:
     ids = [state.crane_id for state in states]
     return {crane_id: [other for other in ids if other != crane_id] for crane_id in ids}
+
+
+def _event_type(event: Any) -> str | None:
+    if isinstance(event, Mapping):
+        value = event.get("event_type")
+    else:
+        value = getattr(event, "event_type", None)
+    return str(value) if value is not None else None
 
 
 def _evaluate_risk_with_complete_commands(

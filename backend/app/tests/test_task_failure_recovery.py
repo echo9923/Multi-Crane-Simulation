@@ -106,6 +106,9 @@ def test_deadline_missed_only_marks_warning_and_updates_overtime() -> None:
     scenario, crane = _scenario_and_crane()
     task = _task()
     state = _state(crane, stage="move_to_pickup")
+    queue = schedule_task_queues.create_queue("C1", [task]).model_copy(
+        update={"active_task_id": task.task_id, "next_task_index": 1}
+    )
 
     missed = handle_task_timing_and_failures(
         task,
@@ -114,6 +117,7 @@ def test_deadline_missed_only_marks_warning_and_updates_overtime() -> None:
         crane,
         time_s=12.0,
         runtime=TaskFailureRuntimeState(last_progress_at_s=0.0),
+        queue=queue,
     )
     later = handle_task_timing_and_failures(
         missed.task,
@@ -122,12 +126,17 @@ def test_deadline_missed_only_marks_warning_and_updates_overtime() -> None:
         crane,
         time_s=15.0,
         runtime=missed.runtime,
+        queue=missed.queue,
     )
 
     assert missed.task.deadline_missed is True
     assert missed.task.status == "active"
+    assert missed.queue is not None
+    assert missed.queue.tasks[0].deadline_missed is True
     assert missed.events[0].event_type == "deadline_missed"
     assert later.task.overtime_s == 5.0
+    assert later.queue is not None
+    assert later.queue.tasks[0].overtime_s == 5.0
 
 
 def test_attach_timeout_without_load_fails_task_and_idles_state() -> None:
@@ -221,6 +230,9 @@ def test_release_timeout_with_load_creates_recovery_task_and_blocks_queue() -> N
     assert result.recovery_task.task_id == "R_C1_T_C1_001"
     assert result.queue is not None
     assert result.queue.blocked_by_recovery is True
+    tasks_by_id = {task.task_id: task for task in result.queue.tasks}
+    assert tasks_by_id["T_C1_001"].status == "failed"
+    assert tasks_by_id["T_C1_001"].failure_reason == "failed_release_timeout"
     assert result.events[-2].details["error_code"] == "TASK_E_103"
     assert result.events[-1].event_type == "recovery_release_started"
 
@@ -264,6 +276,9 @@ def test_recovery_timeout_returns_episode_failure_request_without_clearing_load(
         }
     )
     state = _state(crane, stage="recovery_release", load_attached=True)
+    queue = schedule_task_queues.create_queue("C1", [recovery]).model_copy(
+        update={"active_task_id": recovery.task_id, "blocked_by_recovery": True}
+    )
 
     result = handle_task_timing_and_failures(
         recovery,
@@ -272,10 +287,14 @@ def test_recovery_timeout_returns_episode_failure_request_without_clearing_load(
         crane,
         time_s=181.0,
         runtime=TaskFailureRuntimeState(recovery_started_at_s=0.0),
+        queue=queue,
     )
 
     assert result.task.status == "failed"
     assert result.task.failure_reason == "failed_recovery_timeout"
+    assert result.queue is not None
+    assert result.queue.tasks[0].status == "failed"
+    assert result.queue.tasks[0].failure_reason == "failed_recovery_timeout"
     assert result.state.load_attached is True
     assert result.episode_failure_request == "failed_recovery_timeout"
     assert result.events[-1].details["error_code"] == "TASK_E_104"
@@ -289,6 +308,9 @@ def test_blocked_recovery_target_returns_task_e_105_without_clearing_load() -> N
         }
     )
     state = _state(crane, stage="release_pending", load_attached=True, x=25.0, z=30.0)
+    queue = schedule_task_queues.create_queue("C1", [blocked_task]).model_copy(
+        update={"active_task_id": blocked_task.task_id, "next_task_index": 1}
+    )
 
     result = handle_task_timing_and_failures(
         blocked_task,
@@ -300,9 +322,13 @@ def test_blocked_recovery_target_returns_task_e_105_without_clearing_load() -> N
             release_stage_started_at_s=70.0,
             last_progress_at_s=190.0,
         ),
+        queue=queue,
     )
 
     assert result.recovery_task is None
+    assert result.queue is not None
+    assert result.queue.tasks[0].status == "failed"
+    assert result.queue.tasks[0].failure_reason == "failed_release_timeout"
     assert result.state.load_attached is True
     assert result.episode_failure_request == "failed_recovery_blocked"
     assert result.events[-1].details["error_code"] == "TASK_E_105"

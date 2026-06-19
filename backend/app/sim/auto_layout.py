@@ -8,6 +8,7 @@ from backend.app.schemas.config import ManualCraneLayoutInput, ScenarioConfig
 from backend.app.schemas.crane import CraneConfig, CraneModelLibrary, LayoutDiagnostics
 from backend.app.schemas.enums import CoverageTarget, HeightStrategy, OverlapLevel, SlewMode
 from backend.app.schemas.enums import LayoutMode
+from backend.app.schemas.enums import TaskGenerationMode
 from backend.app.schemas.errors import ConfigError
 from backend.app.sim.layout import (
     LayoutResolutionError,
@@ -90,6 +91,9 @@ def generate_auto_layout(
                 source="auto",
             )
             diagnostics = _score_layout(crane_configs, scenario)
+            reachability_tasks = scenario.tasks.model_copy(
+                update={"generation_mode": TaskGenerationMode.MANUAL}
+            )
             reachability = check_layout_reachability(
                 [crane.model_dump(mode="json") for crane in crane_configs],
                 [zone.model_dump(mode="json") for zone in scenario.site.material_zones],
@@ -98,7 +102,7 @@ def generate_auto_layout(
                     key: value.model_dump(mode="json")
                     for key, value in scenario.load_types.items()
                 },
-                scenario.tasks.model_dump(mode="json"),
+                reachability_tasks.model_dump(mode="json"),
             )
             diagnostics = diagnostics.model_copy(
                 update={
@@ -161,7 +165,7 @@ def _candidate_inputs(
     center_x, center_y = _layout_anchor(scenario)
     model_id = sorted(model_library)[0]
     model = model_library[model_id]
-    placement_radius = _placement_radius(scenario)
+    placement_radius = _placement_radius(scenario, attempt)
     phase = rng.random() * math.tau + attempt * 0.013
     heights = _height_sequence(scenario, model, count)
     cranes: List[ManualCraneLayoutInput] = []
@@ -216,7 +220,7 @@ def _zone_xy_anchor(zone) -> Optional[Tuple[float, float]]:
     return None
 
 
-def _placement_radius(scenario: ScenarioConfig) -> float:
+def _placement_radius(scenario: ScenarioConfig, attempt: int) -> float:
     if scenario.layout.overlap_level is OverlapLevel.HIGH:
         base = 18.0
     elif scenario.layout.overlap_level is OverlapLevel.MEDIUM:
@@ -229,7 +233,14 @@ def _placement_radius(scenario: ScenarioConfig) -> float:
         base -= 8.0
     boundary = scenario.site.boundary
     max_radius = max(1.0, min(boundary.x_max - boundary.x_min, boundary.y_max - boundary.y_min) / 2.0 - 8.0)
-    return min(base, max_radius)
+    radii = [
+        base,
+        base * 0.75,
+        base * 0.5,
+        base * 0.35,
+        base * 1.25,
+    ]
+    return min(max(1.0, radii[(attempt - 1) % len(radii)]), max_radius)
 
 
 def _height_sequence(scenario: ScenarioConfig, model, count: int) -> List[float]:

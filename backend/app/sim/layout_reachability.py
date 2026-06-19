@@ -15,6 +15,7 @@ class LayoutReachabilityReport(BaseModel):
     material_zone_reports: List[Dict[str, Any]]
     work_zone_reports: List[Dict[str, Any]]
     load_type_reports: List[Dict[str, Any]]
+    per_crane_task_pair_reports: List[Dict[str, Any]] = Field(default_factory=list)
     warnings: List[Dict[str, Any]] = Field(default_factory=list)
     blocking_reasons: List[str] = Field(default_factory=list)
 
@@ -81,11 +82,23 @@ def check_layout_reachability(
         if not report["reachable_by_crane_ids"]:
             _add_reason(blocking, "load_type_over_capacity")
 
+    per_crane_task_pair_reports: List[Dict[str, Any]] = []
+    if _requires_per_crane_task_pairs(tasks):
+        per_crane_task_pair_reports = _per_crane_task_pair_reports(
+            cranes,
+            material_reports,
+            work_reports,
+            load_types,
+        )
+        if any(not report["can_generate_task"] for report in per_crane_task_pair_reports):
+            _add_reason(blocking, "per_crane_task_pair_unreachable")
+
     return LayoutReachabilityReport(
         can_generate_tasks=not blocking,
         material_zone_reports=material_reports,
         work_zone_reports=work_reports,
         load_type_reports=load_type_reports,
+        per_crane_task_pair_reports=per_crane_task_pair_reports,
         warnings=warnings,
         blocking_reasons=blocking,
     )
@@ -185,7 +198,7 @@ def _load_type_report(
     cranes: List[Dict[str, Any]],
     reachable_radii_by_crane: Dict[str, Dict[str, List[float]]],
 ) -> Dict[str, Any]:
-    max_weight = load_config["weight_range_t"][1]
+    min_weight, max_weight = load_config["weight_range_t"]
     material_ids, material_margins = _side_capacity_report(
         cranes,
         reachable_radii_by_crane.get("material", {}),
@@ -200,12 +213,84 @@ def _load_type_report(
     margins = material_margins + work_margins
     return {
         "load_type": load_type,
+        "min_weight_t": min_weight,
         "max_weight_t": max_weight,
         "reachable_by_crane_ids": reachable_ids,
         "material_reachable_by_crane_ids": material_ids,
         "work_reachable_by_crane_ids": work_ids,
         "min_capacity_margin_t": min(margins) if margins else None,
     }
+
+
+def _requires_per_crane_task_pairs(tasks: Dict[str, Any]) -> bool:
+    return (
+        tasks.get("assignment_mode") == "per_crane_queue"
+        and tasks.get("generation_mode") == "auto"
+        and int(tasks.get("num_tasks_per_crane", 0)) > 0
+    )
+
+
+def _per_crane_task_pair_reports(
+    cranes: List[Dict[str, Any]],
+    material_reports: List[Dict[str, Any]],
+    work_reports: List[Dict[str, Any]],
+    load_types: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    reports = []
+    for crane in cranes:
+        crane_id = crane["crane_id"]
+        pairs = []
+        for material_report in material_reports:
+            material_points = material_report["reachable_points_by_crane"].get(crane_id, [])
+            if not material_points:
+                continue
+            for work_report in work_reports:
+                work_points = work_report["reachable_points_by_crane"].get(crane_id, [])
+                if not work_points:
+                    continue
+                common_load_types = sorted(
+                    set(material_report["supported_load_types"])
+                    & set(work_report["supported_load_types"])
+                    & set(load_types)
+                )
+                for load_type in common_load_types:
+                    min_weight = load_types[load_type]["weight_range_t"][0]
+                    material_capacity = max(
+                        _capacity_at_radius_from_payload(
+                            crane["model"],
+                            point["radius_m"],
+                        )
+                        for point in material_points
+                    )
+                    work_capacity = max(
+                        _capacity_at_radius_from_payload(
+                            crane["model"],
+                            point["radius_m"],
+                        )
+                        for point in work_points
+                    )
+                    if min(material_capacity, work_capacity) < min_weight:
+                        continue
+                    pairs.append(
+                        {
+                            "material_zone_id": material_report["zone_id"],
+                            "work_zone_id": work_report["zone_id"],
+                            "load_type": load_type,
+                            "min_capacity_margin_t": min(
+                                material_capacity,
+                                work_capacity,
+                            )
+                            - min_weight,
+                        }
+                    )
+        reports.append(
+            {
+                "crane_id": crane_id,
+                "can_generate_task": bool(pairs),
+                "candidate_pairs": pairs,
+            }
+        )
+    return reports
 
 
 def _add_reason(blocking: List[str], reason: str) -> None:

@@ -53,7 +53,13 @@ def _state(**updates):
     return state
 
 
-def _command(*, trolley: tuple[str, int] = ("out", 5), crane_id: str = "C1"):
+def _command(
+    *,
+    slew: tuple[str, int] = ("neutral", 0),
+    trolley: tuple[str, int] = ("out", 5),
+    hoist: tuple[str, int] = ("neutral", 0),
+    crane_id: str = "C1",
+):
     raw = ParsedCommand(
         command_id="cmd-001",
         response_id="resp-001",
@@ -63,10 +69,10 @@ def _command(*, trolley: tuple[str, int] = ("out", 5), crane_id: str = "C1"):
         crane_id=crane_id,
         time_s=5.0,
         left_joystick={
-            "slew": {"direction": "neutral", "gear": 0},
+            "slew": {"direction": slew[0], "gear": slew[1]},
             "trolley": {"direction": trolley[0], "gear": trolley[1]},
         },
-        right_joystick={"hoist": {"direction": "neutral", "gear": 0}},
+        right_joystick={"hoist": {"direction": hoist[0], "gear": hoist[1]}},
         deadman_pressed=True,
         emergency_stop=False,
         horn=False,
@@ -177,6 +183,64 @@ def test_hard_policy_blocks_motion_entering_forbidden_zone() -> None:
     assert result_command.left_joystick.trolley.direction == "neutral"
     assert result_command.left_joystick.trolley.source == "forbidden_zone"
     assert "forbidden_zone" in result_command.modification_reasons
+
+
+def test_hard_policy_blocks_slew_only_motion_entering_forbidden_zone() -> None:
+    config = _crane_config()
+    state = _state(trolley_r_m=20.0, hook_h_m=20.0)
+    command = _command(slew=("right", 5), trolley=("neutral", 0))
+
+    result_command, result = apply_forbidden_zone_policy(
+        command=command,
+        state=state,
+        config=config,
+        forbidden_zones=[
+            _box_zone(
+                center=[20.0, 0.75, 20.0],
+                size=[1.0, 0.4, 4.0],
+                z_range_m=[18.0, 22.0],
+            )
+        ],
+        policy=_policy(ForbiddenZonePolicyMode.HARD),
+        dt_s=5.0,
+    )
+
+    assert result.violation_detected is True
+    assert result.blocked is True
+    assert result.zone_ids == ["Z_BOX"]
+    assert result_command.left_joystick.slew.direction == "neutral"
+    assert result_command.left_joystick.slew.source == "forbidden_zone"
+    assert result_command.left_joystick.trolley.direction == "neutral"
+    assert result_command.right_joystick.hoist.direction == "neutral"
+
+
+def test_hard_policy_blocks_hoist_only_motion_entering_forbidden_zone() -> None:
+    config = _crane_config()
+    state = _state(trolley_r_m=20.0, hook_h_m=20.0)
+    command = _command(trolley=("neutral", 0), hoist=("up", 5))
+
+    result_command, result = apply_forbidden_zone_policy(
+        command=command,
+        state=state,
+        config=config,
+        forbidden_zones=[
+            _box_zone(
+                center=[20.0, 0.0, 21.5],
+                size=[4.0, 4.0, 1.0],
+                z_range_m=[21.0, 22.0],
+            )
+        ],
+        policy=_policy(ForbiddenZonePolicyMode.HARD),
+        dt_s=5.0,
+    )
+
+    assert result.violation_detected is True
+    assert result.blocked is True
+    assert result.zone_ids == ["Z_BOX"]
+    assert result_command.left_joystick.slew.direction == "neutral"
+    assert result_command.left_joystick.trolley.direction == "neutral"
+    assert result_command.right_joystick.hoist.direction == "neutral"
+    assert result_command.right_joystick.hoist.source == "forbidden_zone"
 
 
 def test_record_violation_false_suppresses_events_but_returns_result() -> None:

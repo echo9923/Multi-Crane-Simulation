@@ -18,7 +18,11 @@ def _short_payload(tmp_path: Path, *, runner: str | None = None) -> dict:
         "autostart": True,
         "overrides": {
             "scenario": {
-                "layout": {"num_cranes": 2},
+                "layout": {
+                    "num_cranes": 2,
+                    "overlap_level": "high",
+                    "coverage_target": "dense_overlap",
+                },
                 "tasks": {
                     "num_tasks_per_crane": 1,
                     "queue_policy": {

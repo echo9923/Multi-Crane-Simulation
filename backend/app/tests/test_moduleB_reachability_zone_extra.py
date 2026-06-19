@@ -91,7 +91,7 @@ def test_polygon_zone_report_checks_centroid_and_vertices() -> None:
     assert [20.0, 10.0, 3.0] in points
 
 
-def test_material_and_work_zones_may_be_covered_by_different_cranes() -> None:
+def test_different_cranes_covering_material_and_work_is_not_per_crane_generateable() -> None:
     raw = _base_manual_raw()
     raw["layout"]["num_cranes"] = 2
     raw["cranes"][0]["crane_id"] = "TC_MATERIAL"
@@ -113,10 +113,10 @@ def test_material_and_work_zones_may_be_covered_by_different_cranes() -> None:
 
     report = _report(raw)
 
-    assert report.can_generate_tasks is True
+    assert report.can_generate_tasks is False
     assert report.material_zone_reports[0]["reachable_by_crane_ids"] == ["TC_MATERIAL"]
     assert report.work_zone_reports[0]["reachable_by_crane_ids"] == ["TC_WORK"]
-    assert report.blocking_reasons == []
+    assert "per_crane_task_pair_unreachable" in report.blocking_reasons
 
 
 def test_load_capacity_must_cover_material_and_work_side_radii() -> None:

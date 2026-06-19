@@ -140,6 +140,33 @@ def test_multi_crane_report_lists_reachable_crane_ids() -> None:
     assert "TC_B" in report.work_zone_reports[0]["reachable_by_crane_ids"]
 
 
+def test_per_crane_queue_requires_each_crane_to_have_task_pair() -> None:
+    raw = _manual_raw()
+    raw["layout"]["num_cranes"] = 2
+    raw["cranes"][0]["crane_id"] = "TC_MATERIAL"
+    raw["site"]["material_zones"][0]["type"] = "box"
+    raw["site"]["material_zones"][0]["center"] = [-45.0, -60.0, 1.0]
+    raw["site"]["material_zones"][0]["size"] = [1.0, 1.0, 1.0]
+    raw["site"]["material_zones"][0].pop("points", None)
+    raw["site"]["work_zones"][0]["center"] = [45.0, 60.0, 30.0]
+    raw["site"]["work_zones"][0]["size"] = [1.0, 1.0, 1.0]
+    raw["cranes"].append(
+        {
+            "crane_id": "TC_WORK",
+            "model_id": "generic_flat_top_55m",
+            "base": [60.0, 60.0, 0.0],
+            "mast_height_m": 55.0,
+            "theta_init_deg": 0.0,
+            "slew": {"mode": "continuous"},
+        }
+    )
+
+    report = _report(raw)
+
+    assert report.can_generate_tasks is False
+    assert "per_crane_task_pair_unreachable" in report.blocking_reasons
+
+
 def test_manual_precheck_report_does_not_create_task_fields() -> None:
     report = _report(_manual_raw())
     payload = report.model_dump(mode="json")

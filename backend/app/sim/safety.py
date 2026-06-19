@@ -320,8 +320,11 @@ def apply_forbidden_zone_policy(
     updated_command = command.model_copy(
         update={
             "left_joystick": ExecutedLeftJoystickCommand(
-                slew=command.left_joystick.slew,
+                slew=_neutral_axis(source="forbidden_zone"),
                 trolley=_neutral_axis(source="forbidden_zone"),
+            ),
+            "right_joystick": ExecutedRightJoystickCommand(
+                hoist=_neutral_axis(source="forbidden_zone")
             ),
             "modified": True,
             "modification_reasons": updated_reasons,

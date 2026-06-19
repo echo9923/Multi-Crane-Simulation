@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import threading
 import time
 from typing import Any
 
@@ -24,8 +26,11 @@ class WebSocketConnectionManager:
     def __init__(self, *, send_timeout_s: float = 0.5) -> None:
         self.connections: dict[str, set[Any]] = {}
         self.send_timeout_s = send_timeout_s
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_lock = threading.Lock()
 
     async def connect(self, episode_id: str, websocket: WebSocket) -> None:
+        self._remember_loop(asyncio.get_running_loop())
         await websocket.accept()
         self.connections.setdefault(episode_id, set()).add(websocket)
 
@@ -61,6 +66,19 @@ class WebSocketConnectionManager:
         await self._broadcast(
             episode_id,
             {"type": "heartbeat", "data": {"server_time_s": server_time_s}},
+        )
+
+    def submit_broadcast_sim_frame(
+        self,
+        episode_id: str,
+        frame: SimFrame,
+    ) -> concurrent.futures.Future[Any] | None:
+        loop = self._get_loop()
+        if loop is None or loop.is_closed() or not loop.is_running():
+            return None
+        return asyncio.run_coroutine_threadsafe(
+            self.broadcast_sim_frame(episode_id, frame),
+            loop,
         )
 
     async def send_initial_frame(
@@ -102,6 +120,18 @@ class WebSocketConnectionManager:
             )
         except Exception:
             self.disconnect(episode_id, websocket)
+
+    def _remember_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        with self._loop_lock:
+            if self._loop is None or self._loop.is_closed():
+                self._loop = loop
+
+    def _get_loop(self) -> asyncio.AbstractEventLoop | None:
+        with self._loop_lock:
+            return self._loop
+
+    def owns_loop(self, loop: asyncio.AbstractEventLoop) -> bool:
+        return self._get_loop() is loop
 
 
 @router.websocket("/ws/episodes/{episode_id}")
@@ -196,9 +226,16 @@ class ApiWebSocketAdapter:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(self.manager.broadcast_sim_frame(episode_id, sim_frame))
+            future = self.manager.submit_broadcast_sim_frame(episode_id, sim_frame)
+            if future is None:
+                asyncio.run(self.manager.broadcast_sim_frame(episode_id, sim_frame))
             return
-        loop.create_task(self.manager.broadcast_sim_frame(episode_id, sim_frame))
+        if self.manager.owns_loop(loop):
+            loop.create_task(self.manager.broadcast_sim_frame(episode_id, sim_frame))
+            return
+        future = self.manager.submit_broadcast_sim_frame(episode_id, sim_frame)
+        if future is None:
+            loop.create_task(self.manager.broadcast_sim_frame(episode_id, sim_frame))
 
 
 __all__ = [

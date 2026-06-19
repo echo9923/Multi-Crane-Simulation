@@ -88,7 +88,7 @@ def handle_task_timing_and_failures(
                 state,
                 runtime,
                 events,
-                queue=queue,
+                queue=_replace_task_in_queue(queue, failed) if queue is not None else None,
                 episode_failure_request="failed_recovery_timeout",
             )
 
@@ -194,6 +194,9 @@ def handle_task_timing_and_failures(
             error_code="TASK_E_101",
             queue=queue,
         )
+
+    if updated_queue is not None:
+        updated_queue = _replace_task_in_queue(updated_queue, updated_task)
 
     return _result(
         updated_task,
@@ -316,7 +319,7 @@ def _enter_recovery(
             next_state,
             runtime,
             events,
-            queue=queue,
+            queue=_replace_task_in_queue(queue, failed) if queue is not None else None,
             episode_failure_request="failed_recovery_blocked",
         )
     recovery = _create_recovery_task(failed, state, crane, time_s)
@@ -345,7 +348,13 @@ def _enter_recovery(
             details={"source_failed_task_id": failed.task_id},
         )
     )
-    next_queue = queue.model_copy(update={"blocked_by_recovery": True}) if queue else None
+    next_queue = (
+        _replace_task_in_queue(queue, failed).model_copy(
+            update={"blocked_by_recovery": True}
+        )
+        if queue
+        else None
+    )
     return _result(
         failed,
         next_state,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 
 from fastapi.testclient import TestClient
 
@@ -38,6 +39,24 @@ class FakeWebSocket:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class LoopBoundFakeWebSocket(FakeWebSocket):
+    def __init__(self) -> None:
+        super().__init__()
+        self.accept_loop: asyncio.AbstractEventLoop | None = None
+        self.send_loops: list[asyncio.AbstractEventLoop] = []
+
+    async def accept(self) -> None:
+        self.accept_loop = asyncio.get_running_loop()
+        await super().accept()
+
+    async def send_json(self, payload: dict) -> None:
+        loop = asyncio.get_running_loop()
+        self.send_loops.append(loop)
+        if loop is not self.accept_loop:
+            raise RuntimeError("send_json called from wrong event loop")
+        await super().send_json(payload)
 
 
 def _frame() -> SimFrame:
@@ -310,6 +329,34 @@ def test_adapter_includes_task_queues_when_building_realtime_frame() -> None:
     assert payload["offline_labels"] is None
     assert payload["tasks"][0]["active_task_id"] == "T_C1_001"
     assert payload["tasks"][0]["tasks"][0]["task_id"] == "T_C1_001"
+
+
+def test_adapter_hands_worker_thread_broadcast_to_connection_loop() -> None:
+    from backend.app.api.websocket import ApiWebSocketAdapter, WebSocketConnectionManager
+
+    manager = WebSocketConnectionManager()
+    websocket = LoopBoundFakeWebSocket()
+    adapter = ApiWebSocketAdapter(manager)
+
+    async def scenario() -> None:
+        await manager.connect("E-ws", websocket)
+
+        worker = threading.Thread(
+            target=adapter.broadcast_sim_frame_if_enabled,
+            kwargs={"episode_id": "E-ws", "frame": _frame()},
+        )
+        worker.start()
+        worker.join(timeout=1.0)
+
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while not websocket.sent and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+
+    asyncio.run(scenario())
+
+    assert websocket.sent[0]["type"] == "sim_frame"
+    assert websocket.send_loops == [websocket.accept_loop]
+    assert websocket in manager.connections["E-ws"]
 
 
 def test_websocket_module_does_not_define_duplicate_simframe_schema() -> None:

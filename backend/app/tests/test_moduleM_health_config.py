@@ -129,6 +129,27 @@ def test_validate_scenario_error_response_redacts_inline_secret() -> None:
     assert response.json()["code"] == "M_E_CONFIG_INVALID"
 
 
+def test_validate_scenario_pydantic_error_redacts_inline_secret_input() -> None:
+    client = _client()
+    scenario = load_fixture("scenario_valid.yaml")
+    experiment = load_fixture("experiment_valid.yaml")
+    secret = "sk-inline-secret-123456"
+    experiment["llm"]["api_key"] = secret
+    experiment["llm"]["api_key_env"] = None
+    experiment["llm"].pop("model")
+
+    response = client.post(
+        "/scenarios/validate",
+        json={"scenario": scenario, "experiment": experiment},
+    )
+
+    assert response.status_code == 422
+    assert secret not in response.text
+    payload = response.json()
+    assert payload["code"] == "M_E_CONFIG_INVALID"
+    assert payload["details"]["field_path"] == "llm.model"
+
+
 def test_validate_scenario_returns_manual_layout_error_details() -> None:
     client = _client()
     scenario = load_fixture("scenario_valid.yaml")

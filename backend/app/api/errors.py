@@ -95,11 +95,14 @@ def config_api_error_from_exception(
     forbidden_secret_values: Optional[Iterable[str]] = None,
 ) -> ConfigValidationApiError:
     if isinstance(exc, ValidationError):
-        raw_errors = exc.errors()
+        raw_errors = _scrub_error_details(exc.errors(), forbidden_secret_values)
         first = raw_errors[0] if raw_errors else {}
         loc = first.get("loc", ())
         field = ".".join(str(part) for part in loc) if loc else field_path
-        message = str(first.get("msg") or "configuration validation failed")
+        message = _scrub_error_text(
+            str(first.get("msg") or "configuration validation failed"),
+            forbidden_secret_values,
+        )
         details = {
             "config_kind": config_kind,
             "field_path": field,
@@ -116,6 +119,38 @@ def config_api_error_from_exception(
         forbidden_secret_values=forbidden_secret_values,
     )
     return config_api_error_from_config_error(config_error)
+
+
+def _scrub_error_details(
+    value: Any,
+    forbidden_secret_values: Optional[Iterable[str]],
+) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _scrub_error_details(item, forbidden_secret_values)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_scrub_error_details(item, forbidden_secret_values) for item in value]
+    if isinstance(value, tuple):
+        return tuple(
+            _scrub_error_details(item, forbidden_secret_values)
+            for item in value
+        )
+    if isinstance(value, str):
+        return _scrub_error_text(value, forbidden_secret_values)
+    return value
+
+
+def _scrub_error_text(
+    value: str,
+    forbidden_secret_values: Optional[Iterable[str]],
+) -> str:
+    scrubbed = value
+    for secret in forbidden_secret_values or []:
+        if secret:
+            scrubbed = scrubbed.replace(secret, "[REDACTED]")
+    return scrubbed
 
 
 def config_api_error_from_config_error(

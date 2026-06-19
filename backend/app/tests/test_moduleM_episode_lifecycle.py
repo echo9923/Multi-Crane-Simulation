@@ -173,6 +173,23 @@ def test_start_episode_accepts_inline_config_payload() -> None:
     assert factory.created[0]["episode_id"] == "E-inline"
 
 
+def test_start_episode_pydantic_error_redacts_inline_secret_input() -> None:
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory)
+    payload = _inline_payload("E-secret-redaction")
+    secret = "sk-inline-secret-123456"
+    payload["experiment"]["llm"]["api_key"] = secret
+    payload["experiment"]["llm"]["api_key_env"] = None
+    payload["experiment"]["llm"].pop("model")
+
+    response = client.post("/episodes/start", json=payload)
+
+    assert response.status_code == 422
+    assert secret not in response.text
+    assert response.json()["code"] == "M_E_CONFIG_INVALID"
+    assert factory.created == []
+
+
 def test_start_episode_uses_desktop_local_llm_secret_summary(tmp_path: Path) -> None:
     from backend.app.api.desktop_llm_settings import save_provider_secret
     from backend.app.schemas.enums import LLMProviderName
