@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -12,6 +13,17 @@ def _client():
     from backend.app.main import create_app
 
     return TestClient(create_app())
+
+
+def _client_with_roots(project_root: Path, data_root: Path):
+    from fastapi.testclient import TestClient
+
+    from backend.app.main import create_app
+
+    app = create_app()
+    app.state.project_root = project_root
+    app.state.data_root = data_root
+    return TestClient(app)
 
 
 def test_health_endpoint_uses_uniform_success_response() -> None:
@@ -54,6 +66,68 @@ def test_validate_scenario_accepts_valid_demo_config() -> None:
     assert payload["data"]["valid"] is True
     assert payload["data"]["resolved_config_hash"]
     assert payload["data"]["errors"] == []
+
+
+def test_validate_scenario_resolves_relative_config_path_from_project_root(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    data_root = tmp_path / "data"
+    configs = project_root / "configs"
+    configs.mkdir(parents=True)
+    shutil.copyfile(FIXTURE_DIR / "demo_valid.yaml", configs / "demo_valid.yaml")
+    client = _client_with_roots(project_root, data_root)
+
+    response = client.post(
+        "/scenarios/validate",
+        json={
+            "config_path": "configs/demo_valid.yaml",
+            "overrides": {
+                "scenario": {
+                    "layout": {"mode": "manual", "num_cranes": 1},
+                    "cranes": [
+                        {
+                            "crane_id": "C1",
+                            "model_id": "generic_flat_top_55m",
+                            "base": [-60.0, -60.0, 0.0],
+                            "mast_height_m": 45.0,
+                            "theta_init_deg": 0.0,
+                            "slew": {"mode": "continuous"},
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["code"] == 0
+    assert payload["data"]["valid"] is True
+
+
+def test_validate_scenario_rejects_relative_config_path_escape(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    data_root = tmp_path / "data"
+    outside = tmp_path / "outside"
+    project_root.mkdir()
+    outside.mkdir()
+    shutil.copyfile(FIXTURE_DIR / "demo_valid.yaml", outside / "demo_valid.yaml")
+    client = _client_with_roots(project_root, data_root)
+
+    response = client.post(
+        "/scenarios/validate",
+        json={"config_path": "../outside/demo_valid.yaml"},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "M_E_CONFIG_INVALID"
+    assert payload["data"] is None
+    assert payload["details"]["field_path"] == "config_path"
+    assert payload["details"]["source_file"] == "../outside/demo_valid.yaml"
 
 
 def test_validate_scenario_accepts_inline_config_without_dataset() -> None:

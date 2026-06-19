@@ -97,9 +97,22 @@ function explicitTaskRows(tasks: LooseRecord[]): TaskRow[] {
       });
       continue;
     }
+    if (isEmptyQueueShell(task)) continue;
     rows.push(rowFromTask(task, task.crane_id, index));
   }
   return dedupeRows(rows);
+}
+
+function isEmptyQueueShell(task: LooseRecord): boolean {
+  return (
+    Array.isArray(task.tasks) &&
+    task.tasks.length === 0 &&
+    task.task_id == null &&
+    task.id == null &&
+    task.stage == null &&
+    task.task_stage == null &&
+    task.status == null
+  );
 }
 
 function fallbackRowsFromCranes(cranes: SimFrameCrane[]): TaskRow[] {
@@ -179,24 +192,31 @@ export function TaskStatusPanel() {
     };
     const site = (config?.scenario?.site ?? null) as LooseRecord | null;
     if (site) {
-      add(site.material_zones as LooseRecord[]);
-      add(site.work_zones as LooseRecord[]);
-      add(site.forbidden_zones as LooseRecord[]);
+      add(recordArray(site.material_zones));
+      add(recordArray(site.work_zones));
+      add(recordArray(site.forbidden_zones));
+    }
+    const frameSite = frame?.site as LooseRecord | undefined;
+    if (frameSite) {
+      add(recordArray(frameSite.material_zones));
+      add(recordArray(frameSite.work_zones));
+      add(recordArray(frameSite.forbidden_zones));
+      add(recordArray(frameSite.overlap_zones));
     }
     if (manifest) {
-      add(manifest.material_zones as unknown as LooseRecord[]);
-      add(manifest.work_zones as unknown as LooseRecord[]);
-      add(manifest.forbidden_zones as unknown as LooseRecord[]);
-      add(manifest.overlap_zones as unknown as LooseRecord[]);
+      add(recordArray(manifest.material_zones));
+      add(recordArray(manifest.work_zones));
+      add(recordArray(manifest.forbidden_zones));
+      add(recordArray(manifest.overlap_zones));
       const mSite = manifest.site as LooseRecord | undefined;
       if (mSite) {
-        add(mSite.material_zones as LooseRecord[]);
-        add(mSite.work_zones as LooseRecord[]);
-        add(mSite.forbidden_zones as LooseRecord[]);
+        add(recordArray(mSite.material_zones));
+        add(recordArray(mSite.work_zones));
+        add(recordArray(mSite.forbidden_zones));
       }
     }
     return index;
-  }, [config, manifest]);
+  }, [config, frame, manifest]);
 
   const zoneCell = (zoneId: unknown) => {
     if (zoneId == null) return "—";

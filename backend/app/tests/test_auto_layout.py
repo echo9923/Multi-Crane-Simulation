@@ -67,13 +67,30 @@ def test_low_overlap_average_is_below_high_overlap_average() -> None:
 
 
 def test_staggered_height_strategy_uses_minimum_height_delta() -> None:
+    same_level = _resolve(
+        _raw_auto(num_cranes=3, overlap_level="high", height_strategy="same_level")
+    )
     resolved = _resolve(
         _raw_auto(num_cranes=3, overlap_level="high", height_strategy="staggered")
     )
 
+    same_deltas = [
+        pair["height_delta_m"]
+        for pair in same_level.layout.layout_diagnostics["pair_diagnostics"]
+        if pair["overlap_ratio"] > 0
+    ]
+    staggered_deltas = [
+        pair["height_delta_m"]
+        for pair in resolved.layout.layout_diagnostics["pair_diagnostics"]
+        if pair["overlap_ratio"] > 0
+    ]
+
+    assert same_deltas
+    assert staggered_deltas
+    assert max(staggered_deltas) > max(same_deltas)
     for pair in resolved.layout.layout_diagnostics["pair_diagnostics"]:
         if pair["overlap_ratio"] > 0:
-            assert pair["height_delta_m"] >= 6.0
+            assert pair["height_delta_m"] >= 3.0
 
 
 def test_mixed_height_strategy_allows_both_close_and_staggered_pairs() -> None:
@@ -86,8 +103,8 @@ def test_mixed_height_strategy_allows_both_close_and_staggered_pairs() -> None:
         if pair["overlap_ratio"] > 0
     ]
 
-    assert any(delta < 6.0 for delta in deltas)
-    assert any(delta >= 6.0 for delta in deltas)
+    assert any(delta < 3.0 for delta in deltas)
+    assert any(delta >= 3.0 for delta in deltas)
 
 
 def test_coverage_target_affects_quality_subscores() -> None:
@@ -118,6 +135,66 @@ def test_impossible_auto_layout_returns_lay_e_001() -> None:
     assert getattr(error, "error_code") == "LAY_E_001"
     assert error.details["failure_counts_by_reason"]
     assert error.details["seed"]
+
+
+def test_auto_layout_precheck_uses_real_per_crane_auto_task_contract() -> None:
+    raw = _raw_auto(
+        num_cranes=4,
+        overlap_level="high",
+        coverage_target="dense_overlap",
+        max_sampling_attempts=5,
+    )
+    raw["site"]["boundary"] = {
+        "x_min": -160,
+        "x_max": 160,
+        "y_min": -160,
+        "y_max": 160,
+        "z_min": 0,
+        "z_max": 80,
+    }
+    raw["site"]["forbidden_zones"] = []
+    raw["site"]["material_zones"] = [
+        {
+            "zone_id": "mat_only_left",
+            "type": "box",
+            "center": [-40.0, 0.0, 0.0],
+            "size": [1.0, 1.0, 0.4],
+            "surface_z_m": 0.0,
+            "load_types": ["formwork"],
+        }
+    ]
+    raw["site"]["work_zones"] = [
+        {
+            "zone_id": "work_only_right",
+            "type": "box",
+            "center": [40.0, 0.0, 20.0],
+            "size": [1.0, 1.0, 0.4],
+            "surface_z_m": 20.0,
+            "accepted_load_types": ["formwork"],
+        }
+    ]
+    raw["crane_models"][0].update(
+        {
+            "jib_length_m": 35.0,
+            "trolley_r_max_m": 35.0,
+            "max_load_radius_m": 20.0,
+        }
+    )
+    raw["tasks"]["assignment_mode"] = "per_crane_queue"
+    raw["tasks"]["generation_mode"] = "auto"
+    raw["tasks"]["num_tasks_per_crane"] = 1
+    raw["tasks"]["task_type_distribution"] = {
+        "easy_task": 1.0,
+        "overlap_task": 0.0,
+        "stress_task": 0.0,
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        _resolve(raw)
+
+    error = exc_info.value
+    assert getattr(error, "error_code") == "LAY_E_001"
+    assert error.details["failure_counts_by_reason"]["task_reachability_precheck_failed"] > 0
 
 
 def test_auto_layout_supports_two_cranes() -> None:

@@ -187,8 +187,15 @@ describe("electron backend helpers", () => {
   });
 
   it("configures Electron Builder scripts and resource inclusion rules", () => {
-    expect(packageJson.scripts["desktop:pack"]).toBe("npm run build && electron-builder --mac --dir");
-    expect(packageJson.scripts["desktop:dist"]).toBe("npm run build && electron-builder --mac");
+    const unsignedWindowsArgs =
+      "--win --config.win.signAndEditExecutable=false --config.win.signExecutable=false";
+
+    expect(packageJson.scripts["desktop:pack"]).toBe(
+      `npm run build && electron-builder ${unsignedWindowsArgs} --dir`,
+    );
+    expect(packageJson.scripts["desktop:dist"]).toBe(
+      `npm run build && electron-builder ${unsignedWindowsArgs}`,
+    );
     expect(packageJson.scripts.desktop).toBe("electron electron/main.cjs");
     expect(packageJson.scripts["desktop:dev"]).toBe("electron electron/dev.cjs");
     expect(packageJson.main).toBe("electron/main.cjs");
@@ -238,6 +245,9 @@ describe("electron backend helpers", () => {
     )) {
       expect(projectResource.filter).toEqual(expect.arrayContaining(requiredProjectExclusions));
     }
+    expect(packageJson.build.win.target).toEqual(["dir"]);
+    expect(packageJson.build.win.signAndEditExecutable).toBe(false);
+    expect(packageJson.build.win.signExecutable).toBe(false);
     expect(packageJson.build.mac.extendInfo.LSEnvironment.ELECTRON_RUN_AS_NODE).toBe("");
   });
 

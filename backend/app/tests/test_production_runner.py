@@ -242,6 +242,52 @@ def test_production_runner_runtime_secret_falls_back_to_cwd_project_root(
     assert provider.runtime_secret.full_api_key == "sf-cwd-secret-123456"
 
 
+def test_production_runner_runtime_secret_prefers_data_root_over_project_root(
+    tmp_path: Path,
+) -> None:
+    from backend.app.api.desktop_llm_settings import save_provider_secret
+    from backend.app.api.production_runner import (
+        RuntimeSecretProvider,
+        build_production_episode_runner,
+    )
+    from backend.app.schemas.enums import LLMProviderName
+
+    project_root = tmp_path / "project"
+    data_root = tmp_path / "data"
+    project_root.mkdir()
+    data_root.mkdir()
+    save_provider_secret(
+        data_root,
+        provider=LLMProviderName.SILICONFLOW,
+        api_key="sf-data-root-secret-123456",
+    )
+    resolved = _production_smoke_config(tmp_path / "runs")
+    llm = dict(resolved.experiment["llm"])
+    llm.update(
+        {
+            "provider": "siliconflow",
+            "model": "deepseek-ai/DeepSeek-V4-Flash",
+            "api_key": None,
+            "api_key_env": "SILICONFLOW_API_KEY",
+            "base_url": "https://api.siliconflow.cn/v1",
+        }
+    )
+    resolved = resolved.model_copy(
+        update={"experiment": {**resolved.experiment, "llm": llm}}
+    )
+
+    runner = build_production_episode_runner(
+        episode_id="E-data-root-secret",
+        resolved_config=resolved,
+        project_root=project_root,
+        data_root=data_root,
+    )
+
+    provider = runner.runner.dependencies.operator.provider
+    assert isinstance(provider, RuntimeSecretProvider)
+    assert provider.runtime_secret.full_api_key == "sf-data-root-secret-123456"
+
+
 def test_production_runner_rejects_unreachable_manual_tasks_instead_of_empty_queues(
     tmp_path: Path,
 ) -> None:
@@ -443,3 +489,38 @@ def test_production_runner_multifloor_demo_records_task_payloads(tmp_path: Path)
     assert manifest["site"]["buildings"]
     assert len(manifest["material_zones"]) >= 2
     assert len(manifest["work_zones"]) >= 3
+
+
+def test_production_runner_warm_stop_records_and_broadcasts_terminal_frame(
+    tmp_path: Path,
+) -> None:
+    from backend.app.api.production_runner import build_production_episode_runner
+
+    class RecordingWebSocket:
+        def __init__(self) -> None:
+            self.frames: list[Any] = []
+
+        def broadcast_sim_frame_if_enabled(self, *, episode_id: str, frame: Any) -> None:
+            self.frames.append(frame)
+
+    websocket = RecordingWebSocket()
+    runner = build_production_episode_runner(
+        episode_id="E-warm-stop",
+        resolved_config=_production_smoke_config(tmp_path),
+        websocket=websocket,
+    )
+    first = runner.run_one_frame()
+    assert first.status is EpisodeStatus.RUNNING
+
+    runner.stop("api stop")
+    stopped = runner.run_one_frame()
+
+    assert stopped.status is EpisodeStatus.STOPPED_BY_USER
+    run_dir = tmp_path / "E-warm-stop"
+    frames = [
+        json.loads(line)
+        for line in (run_dir / "visual" / "frames.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert frames[-1]["episode_status"] == "stopped_by_user"
+    assert websocket.frames[-1].episode_status == "stopped_by_user"

@@ -17,8 +17,6 @@ from backend.app.schemas.recorder import (
     EpisodeManifest,
     EpisodeSummary,
     SimFrame,
-    SimFrameCrane,
-    SimFrameWeather,
 )
 from backend.app.schemas.scheduler import EpisodeResult, SchedulerConfig
 from backend.app.schemas.state import CraneState
@@ -29,6 +27,7 @@ from backend.app.schemas.weather import (
 )
 from backend.app.sim.controller import Controller
 from backend.app.sim.physics import initialize_crane_state, step_world
+from backend.app.sim.recorder import build_sim_frame
 from backend.app.sim.scheduler import EpisodeRunner, SchedulerDependencies
 
 
@@ -333,19 +332,19 @@ class LocalFileRecorder:
         episode_id = str(kwargs["episode_id"])
         self._ensure_run_dir(episode_id)
         commands = dict(kwargs.get("commands") or {})
-        frame = SimFrame(
+        frame = build_sim_frame(
             episode_id=episode_id,
             scenario_id=self.scenario_id,
-            frame=kwargs["frame_index"],
+            frame_index=kwargs["frame_index"],
             time_s=kwargs["time_s"],
             episode_status=_enum_or_value(kwargs.get("status", "running")),
-            cranes=[
-                _frame_crane_from_state(state, commands.get(state.crane_id))
-                for state in kwargs["states"]
-            ],
+            states=kwargs["states"],
+            commands=commands,
             pairs=[],
             tasks=[],
-            weather=_frame_weather(kwargs["weather_state"]),
+            task_queues=kwargs.get("task_queues", []),
+            site=_scenario_mapping(self.resolved_config).get("site", {}),
+            weather_state=kwargs["weather_state"],
             events=[_dump_jsonable(event) for event in kwargs.get("events", [])],
         )
         self.frames.append(frame)

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -300,6 +302,48 @@ def test_manager_sends_last_frame_to_new_connection() -> None:
     assert websocket.sent[0]["type"] == "sim_frame"
     assert websocket.sent[0]["data"]["episode_id"] == "E-ws"
     assert websocket.sent[0]["data"]["frame"] == 1
+
+
+def test_manager_sends_runner_recorder_frame_when_handle_frame_not_synced() -> None:
+    from backend.app.api.websocket import WebSocketConnectionManager
+
+    manager = WebSocketConnectionManager()
+    websocket = FakeWebSocket()
+    handle = EpisodeHandle(
+        episode_id="E-ws",
+        runner=SimpleNamespace(recorder=SimpleNamespace(last_frame=_frame())),
+        run_dir=None,
+        status=EpisodeStatus.RUNNING,
+        last_frame=None,
+    )
+
+    async def scenario() -> None:
+        await manager.connect("E-ws", websocket)
+        await manager.send_initial_frame("E-ws", websocket, handle)
+
+    asyncio.run(scenario())
+
+    assert websocket.sent[0]["type"] == "sim_frame"
+    assert websocket.sent[0]["data"]["frame"] == 1
+
+
+def test_websocket_lazy_episode_service_preserves_desktop_roots(
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    project_root = tmp_path / "project"
+    data_root = tmp_path / "data"
+    app.state.project_root = project_root
+    app.state.data_root = data_root
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/episodes/missing") as websocket:
+        message = websocket.receive_json()
+
+    assert message["type"] == "error"
+    service = client.app.state.episode_service
+    assert service.project_root == project_root.resolve()
+    assert service.data_root == data_root.resolve()
 
 
 def test_adapter_includes_task_queues_when_building_realtime_frame() -> None:

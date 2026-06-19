@@ -8,7 +8,6 @@ from backend.app.schemas.config import ManualCraneLayoutInput, ScenarioConfig
 from backend.app.schemas.crane import CraneConfig, CraneModelLibrary, LayoutDiagnostics
 from backend.app.schemas.enums import CoverageTarget, HeightStrategy, OverlapLevel, SlewMode
 from backend.app.schemas.enums import LayoutMode
-from backend.app.schemas.enums import TaskGenerationMode
 from backend.app.schemas.errors import ConfigError
 from backend.app.sim.layout import (
     LayoutResolutionError,
@@ -18,6 +17,7 @@ from backend.app.sim.layout import (
 )
 from backend.app.sim.layout_geometry import horizontal_distance
 from backend.app.sim.layout_reachability import check_layout_reachability
+from backend.app.sim.task_generation import TaskGenerationError, generate_task_queues
 
 
 class AutoLayoutError(Exception):
@@ -66,6 +66,7 @@ def generate_auto_layout(
     model_library: CraneModelLibrary,
     *,
     seed: int,
+    task_seed: Optional[int] = None,
 ) -> Tuple[List[CraneConfig], LayoutDiagnostics]:
     rng = Random(seed)
     best: Optional[Tuple[float, List[CraneConfig], LayoutDiagnostics]] = None
@@ -91,9 +92,6 @@ def generate_auto_layout(
                 source="auto",
             )
             diagnostics = _score_layout(crane_configs, scenario)
-            reachability_tasks = scenario.tasks.model_copy(
-                update={"generation_mode": TaskGenerationMode.MANUAL}
-            )
             reachability = check_layout_reachability(
                 [crane.model_dump(mode="json") for crane in crane_configs],
                 [zone.model_dump(mode="json") for zone in scenario.site.material_zones],
@@ -102,7 +100,7 @@ def generate_auto_layout(
                     key: value.model_dump(mode="json")
                     for key, value in scenario.load_types.items()
                 },
-                reachability_tasks.model_dump(mode="json"),
+                scenario.tasks.model_dump(mode="json"),
             )
             diagnostics = diagnostics.model_copy(
                 update={
@@ -112,11 +110,30 @@ def generate_auto_layout(
                             "reason": "layout_reachability_report",
                             "can_generate_tasks": reachability.can_generate_tasks,
                             "blocking_reasons": reachability.blocking_reasons,
+                            "per_crane_task_pair_reports": reachability.per_crane_task_pair_reports,
                         }
                     ]
                 }
             )
-            if not reachability.can_generate_tasks:
+            task_generation_error = _task_generation_error(
+                scenario,
+                crane_configs,
+                seed=task_seed if task_seed is not None else scenario.seed,
+            )
+            if task_generation_error is not None:
+                diagnostics = diagnostics.model_copy(
+                    update={
+                        "warnings": diagnostics.warnings
+                        + [
+                            {
+                                "reason": "task_generation_precheck_failed",
+                                "error_code": task_generation_error.error_code,
+                                "task_reason": task_generation_error.reason,
+                                "details": task_generation_error.details,
+                            }
+                        ]
+                    }
+                )
                 last_failure = "task_reachability_precheck_failed"
                 failure_counts[last_failure] = failure_counts.get(last_failure, 0) + 1
                 continue
@@ -188,14 +205,37 @@ def _candidate_inputs(
     return cranes
 
 
+def _task_generation_error(
+    scenario: ScenarioConfig,
+    crane_configs: List[CraneConfig],
+    *,
+    seed: int,
+) -> Optional[TaskGenerationError]:
+    try:
+        result = generate_task_queues(scenario, crane_configs, seed=seed)
+        if not result.tasks:
+            return TaskGenerationError(
+                "task generation produced zero tasks",
+                error_code="TASK_E_001",
+                reason="no_tasks_generated",
+                details={"num_cranes": len(crane_configs)},
+            )
+    except TaskGenerationError as exc:
+        return exc
+    return None
+
+
 def _layout_anchor(scenario: ScenarioConfig) -> Tuple[float, float]:
     boundary = scenario.site.boundary
-    anchors = [
-        anchor
-        for zone in [*scenario.site.material_zones, *scenario.site.work_zones]
-        for anchor in [_zone_xy_anchor(zone)]
-        if anchor is not None
+    material_anchors = [
+        anchor for zone in scenario.site.material_zones for anchor in [_zone_xy_anchor(zone)] if anchor is not None
     ]
+    work_anchors = [
+        anchor for zone in scenario.site.work_zones for anchor in [_zone_xy_anchor(zone)] if anchor is not None
+    ]
+    anchors = _task_pair_anchors(material_anchors, work_anchors)
+    if not anchors:
+        anchors = [*material_anchors, *work_anchors]
     if not anchors:
         return (
             (boundary.x_min + boundary.x_max) / 2.0,
@@ -207,6 +247,19 @@ def _layout_anchor(scenario: ScenarioConfig) -> Tuple[float, float]:
         min(max(x, boundary.x_min + 5.0), boundary.x_max - 5.0),
         min(max(y, boundary.y_min + 5.0), boundary.y_max - 5.0),
     )
+
+
+def _task_pair_anchors(
+    material_anchors: List[Tuple[float, float]],
+    work_anchors: List[Tuple[float, float]],
+) -> List[Tuple[float, float]]:
+    if not material_anchors or not work_anchors:
+        return []
+    return [
+        ((material[0] + work[0]) / 2.0, (material[1] + work[1]) / 2.0)
+        for material in material_anchors
+        for work in work_anchors
+    ]
 
 
 def _zone_xy_anchor(zone) -> Optional[Tuple[float, float]]:
@@ -221,40 +274,65 @@ def _zone_xy_anchor(zone) -> Optional[Tuple[float, float]]:
 
 
 def _placement_radius(scenario: ScenarioConfig, attempt: int) -> float:
+    count = max(1, scenario.layout.num_cranes)
+    min_radius_for_base_spacing = (
+        4.5
+        if count <= 2
+        else (4.5 / math.sin(math.pi / count))
+    )
     if scenario.layout.overlap_level is OverlapLevel.HIGH:
-        base = 18.0
+        base = 14.0
     elif scenario.layout.overlap_level is OverlapLevel.MEDIUM:
-        base = 35.0
+        base = 12.0
     else:
-        base = 58.0
+        base = 28.0
     if scenario.layout.coverage_target is CoverageTarget.WIDE_COVERAGE:
         base += 10.0
     if scenario.layout.coverage_target is CoverageTarget.DENSE_OVERLAP:
-        base -= 8.0
+        base -= 4.0
+    base = max(base, min_radius_for_base_spacing)
     boundary = scenario.site.boundary
     max_radius = max(1.0, min(boundary.x_max - boundary.x_min, boundary.y_max - boundary.y_min) / 2.0 - 8.0)
     radii = [
         base,
         base * 0.75,
         base * 0.5,
-        base * 0.35,
+        min_radius_for_base_spacing,
+        min_radius_for_base_spacing * 1.25,
         base * 1.25,
+        max(1.0, base * 1.5),
     ]
     return min(max(1.0, radii[(attempt - 1) % len(radii)]), max_radius)
 
 
 def _height_sequence(scenario: ScenarioConfig, model, count: int) -> List[float]:
     low, high = model.mast_height_range_m
-    base = max(low, min(high, (low + high) / 2.0))
+    pickup_floor = _minimum_pickup_height(scenario)
+    task_safe_high = min(high, pickup_floor + model.cable_length_max_m)
+    if task_safe_high < low:
+        task_safe_high = low
+    base = max(low, min(task_safe_high, (low + task_safe_high) / 2.0))
     if scenario.layout.height_strategy is HeightStrategy.STAGGERED:
-        return [min(high, base + index * 6.0) for index in range(count)]
+        return [min(task_safe_high, base + index * 3.0) for index in range(count)]
     if scenario.layout.height_strategy is HeightStrategy.SAME_LEVEL:
         return [base for _ in range(count)]
     values = []
     for index in range(count):
-        delta = 0.0 if index % 2 == 0 else 7.0
-        values.append(min(high, base + delta + (index // 2) * 2.0))
+        delta = 0.0 if index % 2 == 0 else 3.0
+        values.append(min(task_safe_high, base + delta + (index // 2) * 1.0))
     return values
+
+
+def _minimum_pickup_height(scenario: ScenarioConfig) -> float:
+    candidates = [float(scenario.tasks.fallback_pickup_z_m)]
+    for zone in scenario.site.material_zones:
+        if zone.surface_z_m is not None:
+            candidates.append(float(zone.surface_z_m))
+        if zone.z_range_m is not None:
+            candidates.append(float(zone.z_range_m[0]))
+        elif zone.center is not None and zone.size is not None:
+            candidates.append(float(zone.center[2] - zone.size[2] / 2.0))
+    return max(0.0, min(candidates))
 
 
 def _score_layout(cranes: List[CraneConfig], scenario: ScenarioConfig) -> LayoutDiagnostics:

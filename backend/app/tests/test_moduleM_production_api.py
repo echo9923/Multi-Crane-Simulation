@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import io
+import json
 import zipfile
 from pathlib import Path
 
@@ -11,11 +13,16 @@ from backend.app.schemas.scheduler import EpisodeStatus
 from backend.app.tests.test_config_schema import FIXTURE_DIR
 
 
-def _short_payload(tmp_path: Path, *, runner: str | None = None) -> dict:
+def _short_payload(
+    tmp_path: Path,
+    *,
+    runner: str | None = None,
+    autostart: bool = True,
+) -> dict:
     payload = {
         "config_path": str(FIXTURE_DIR / "demo_valid.yaml"),
         "episode_id": f"E-api-{runner or 'default'}",
-        "autostart": True,
+        "autostart": autostart,
         "overrides": {
             "scenario": {
                 "layout": {
@@ -106,6 +113,25 @@ def test_start_episode_runner_local_keeps_fast_smoke_runner(tmp_path: Path) -> N
     assert not (run_dir / "data" / "trajectories.parquet").is_file()
 
 
+def test_start_episode_runner_local_records_site_payload_in_visual_frame(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app())
+
+    response = client.post("/episodes/start", json=_short_payload(tmp_path, runner="local"))
+
+    assert response.status_code == 200, response.text
+    run_dir = Path(response.json()["data"]["run_dir"])
+    first_frame = json.loads(
+        (run_dir / "visual" / "frames.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[0]
+    )
+    assert first_frame["site"]["boundary"]
+    assert first_frame["site"]["material_zones"]
+    assert first_frame["site"]["work_zones"]
+
+
 def test_start_episode_default_production_broadcasts_live_sim_frame(
     tmp_path: Path,
 ) -> None:
@@ -113,19 +139,23 @@ def test_start_episode_default_production_broadcasts_live_sim_frame(
     manager = client.app.state.websocket_manager
     capture = _CaptureWebSocket()
 
-    response = client.post("/episodes/start", json=_short_payload(tmp_path))
+    response = client.post(
+        "/episodes/start",
+        json=_short_payload(tmp_path, autostart=False),
+    )
 
     assert response.status_code == 200, response.text
     episode_id = response.json()["data"]["episode_id"]
-
-    import asyncio
 
     async def scenario() -> None:
         await manager.connect(episode_id, capture)
         service = client.app.state.episode_service
         handle = service.get_handle(episode_id)
+        handle.worker_stop.set()
         service._advance_handle_once(handle)
-        await asyncio.sleep(0)
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while not capture.sent and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
 
     asyncio.run(scenario())
 

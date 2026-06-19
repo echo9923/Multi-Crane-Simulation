@@ -14,8 +14,8 @@
     "e2e": "playwright test",
     "desktop": "electron electron/main.cjs",
     "desktop:dev": "electron electron/dev.cjs",
-    "desktop:pack": "npm run build && electron-builder --mac --dir",
-    "desktop:dist": "npm run build && electron-builder --mac"
+    "desktop:pack": "npm run build && electron-builder --win --config.win.signAndEditExecutable=false --config.win.signExecutable=false --dir",
+    "desktop:dist": "npm run build && electron-builder --win --config.win.signAndEditExecutable=false --config.win.signExecutable=false"
   },
   "build": {
     "appId": "com.multicrane.workbench",
@@ -107,6 +107,13 @@
         "dir",
         "dmg"
       ]
+    },
+    "win": {
+      "target": [
+        "dir"
+      ],
+      "signAndEditExecutable": false,
+      "signExecutable": false
     }
   },
   "dependencies": {

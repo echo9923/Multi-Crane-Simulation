@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import * as THREE from "three";
 import { buildCrane, registerCraneAsset, clearCraneAssets } from "@/three/geometry/crane";
 import { buildZone, ZONE_COLOR } from "@/three/geometry/zones";
+import { buildTaskRoutes } from "@/three/geometry/taskPaths";
 import { buildBoundary } from "@/three/geometry/site";
 import { worldToThree } from "@/coord";
+import type { SimFrame } from "@/types/sim";
 import type { CraneConfig, ZoneConfig } from "@/types/config";
 
 function manifestCrane(over: Partial<CraneConfig> = {}): CraneConfig {
@@ -184,5 +186,150 @@ describe("buildBoundary", () => {
     expect(grid.position.y).toBe(0);
     expect(grid.position.x).toBeCloseTo(55, 6); // (-30+140)/2
     expect(grid.position.z).toBeCloseTo(-55, 6); // -((−30+140)/2)
+  });
+});
+
+describe("buildTaskRoutes", () => {
+  function taskFrame(): SimFrame {
+    return {
+      type: "sim_frame",
+      schema_version: "1.0",
+      episode_id: "E-route",
+      scenario_id: "scenario-route",
+      frame: 1,
+      time_s: 0.1,
+      episode_status: "running",
+      cranes: [
+        {
+          schema_version: "1.0",
+          crane_id: "C1",
+          base: [0, 0, 0],
+          root: [0, 0, 40],
+          tip: [50, 0, 40],
+          hook: [20, 0, 10],
+          theta_rad: 0,
+          trolley_r_m: 20,
+          hook_h_m: 10,
+          load_attached: false,
+          load_type: null,
+          load_size_m: null,
+          task_id: "T_C1_001",
+          task_stage: "move_to_pickup",
+          pickup_zone_id: null,
+          dropoff_zone_id: null,
+          operator_profile: null,
+          current_command: null,
+        },
+      ],
+      pairs: [],
+      tasks: [
+        {
+          crane_id: "C1",
+          active_task_id: "T_C1_001",
+          tasks: [
+            {
+              task_id: "T_C1_001",
+              crane_id: "C1",
+              pickup_zone_id: "mat",
+              dropoff_zone_id: "floor_05",
+              pickup: {
+                x: -12,
+                y: 4,
+                z: 1.8,
+                hook_target_z_m: 1.8,
+                zone_id: "mat",
+              },
+              dropoff: {
+                x: 25,
+                y: 18,
+                z: 21.8,
+                hook_target_z_m: 21.8,
+                zone_id: "floor_05",
+              },
+            },
+          ],
+        },
+      ],
+      weather: {
+        schema_version: "1.0",
+        wind_speed_m_s: 0,
+        wind_gust_m_s: null,
+        wind_direction_deg: null,
+        visibility: "good",
+        rain_level: null,
+        fog_level: null,
+      },
+      events: [],
+      offline_labels: null,
+    };
+  }
+
+  it("builds active task routes from frame task queues when crane rows only carry task ids", () => {
+    const routes = buildTaskRoutes(
+      taskFrame(),
+      new Map([
+        ["mat", [-100, -100, 0]],
+        ["floor_05", [100, 100, 18]],
+      ]),
+      new Map([["C1", 0xff0000]]),
+    );
+
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({
+      craneId: "C1",
+      taskId: "T_C1_001",
+      color: 0xff0000,
+    });
+  });
+
+  it("uses task pickup/dropoff points before zone centers for route endpoints", () => {
+    const [route] = buildTaskRoutes(
+      taskFrame(),
+      new Map([
+        ["mat", [-100, -100, 0]],
+        ["floor_05", [100, 100, 18]],
+      ]),
+      new Map(),
+    );
+
+    expect(route.from).toEqual([-12, 4, 1.8]);
+    expect(route.to).toEqual([25, 18, 21.8]);
+  });
+
+  it("does not draw pending queue routes for an idle crane with no active task", () => {
+    const idleFrame = taskFrame();
+    idleFrame.cranes = idleFrame.cranes.map((crane) => ({
+      ...crane,
+      task_id: null,
+      task_stage: "idle",
+      pickup_zone_id: null,
+      dropoff_zone_id: null,
+    }));
+    idleFrame.tasks = [
+      {
+        crane_id: "C1",
+        active_task_id: null,
+        tasks: [
+          {
+            task_id: "T_C1_PENDING",
+            crane_id: "C1",
+            status: "pending",
+            pickup_zone_id: "mat",
+            dropoff_zone_id: "floor_05",
+          },
+        ],
+      },
+    ];
+
+    const routes = buildTaskRoutes(
+      idleFrame,
+      new Map([
+        ["mat", [-100, -100, 0]],
+        ["floor_05", [100, 100, 18]],
+      ]),
+      new Map(),
+    );
+
+    expect(routes).toEqual([]);
   });
 });

@@ -6,6 +6,7 @@ import { useEffect, useRef } from "react";
 import { ThreeSceneController } from "@/three/ThreeSceneController";
 import { useStore } from "@/state/store";
 import { manifestFromFrame } from "@/three/model/liveManifest";
+import type { SimFrameCrane } from "@/types/sim";
 
 export function SceneView() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -22,9 +23,16 @@ export function SceneView() {
       const s = useStore.getState();
       if (s.config || s.manifest) return `offline:${s.episodeId ?? ""}:${Boolean(s.config)}:${s.manifest?.episode_id ?? ""}`;
       if (s.latestFrame) {
-        return `live:${s.latestFrame.episode_id}:${s.latestFrame.cranes.map((crane) => crane.crane_id).join(",")}`;
+        return `live:${s.latestFrame.episode_id}:${cranesKey(s.latestFrame.cranes)}:${siteKey(s.latestFrame.site)}`;
       }
       return "empty";
+    };
+
+    const syncLayerVisibility = () => {
+      const { ui } = useStore.getState();
+      ctrl.setShowRisk(ui.showRisk);
+      ctrl.setShowZones(ui.showZones);
+      ctrl.setShowPaths(ui.showPaths);
     };
 
     const buildStaticForState = () => {
@@ -37,6 +45,7 @@ export function SceneView() {
         ctrl.buildStatic(null, null);
       }
       staticKey = keyForState();
+      syncLayerVisibility();
     };
 
     // Build the static scene from config/manifest if available; in live mode
@@ -112,4 +121,38 @@ export function SceneView() {
       style={{ width: "100%", height: "100%", display: "block" }}
     />
   );
+}
+
+function cranesKey(cranes: SimFrameCrane[]): string {
+  return stableStringify(
+    cranes.map((crane) => ({
+      crane_id: crane.crane_id,
+      base: crane.base,
+      root: crane.root,
+      tip: crane.tip,
+    })),
+  );
+}
+
+function siteKey(site: unknown): string {
+  if (!site || typeof site !== "object") return "no-site";
+  const record = site as Record<string, unknown>;
+  return stableStringify({
+    boundary: record.boundary,
+    buildings: record.buildings,
+    material_zones: record.material_zones,
+    work_zones: record.work_zones,
+    forbidden_zones: record.forbidden_zones,
+    overlap_zones: record.overlap_zones,
+  });
+}
+
+function stableStringify(value: unknown): string {
+  if (value == null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+    .join(",")}}`;
 }

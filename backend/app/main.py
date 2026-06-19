@@ -63,14 +63,21 @@ def _path_from_env(name: str):
 
 
 def _production_runner_factory(app: FastAPI):
-    def factory(*, episode_id: str, resolved_config):
+    def factory(
+        *,
+        episode_id: str,
+        resolved_config,
+        project_root=None,
+        data_root=None,
+    ):
         from backend.app.api.production_runner import build_production_episode_runner
 
         return build_production_episode_runner(
             episode_id=episode_id,
             resolved_config=resolved_config,
             websocket=ApiWebSocketAdapter(app.state.websocket_manager),
-            project_root=resolve_desktop_data_root(app),
+            project_root=project_root or resolve_desktop_project_root(app),
+            data_root=data_root or resolve_desktop_data_root(app),
         )
 
     return factory

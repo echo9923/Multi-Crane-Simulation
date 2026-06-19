@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
+from backend.app.schemas.enums import RuntimeMode
 from backend.app.schemas.scheduler import EpisodeStatus, FrameStepResult
 from backend.app.tests.test_config_schema import FIXTURE_DIR, load_fixture
 
@@ -76,6 +78,28 @@ class FakeRunnerFactory:
         return runner
 
 
+class RootAwareRunnerFactory(FakeRunnerFactory):
+    def __call__(
+        self,
+        *,
+        episode_id: str,
+        resolved_config: Any,
+        project_root: Path | None = None,
+        data_root: Path | None = None,
+    ) -> FakeRunner:
+        runner = FakeRunner()
+        self.created.append(
+            {
+                "episode_id": episode_id,
+                "resolved_config": resolved_config,
+                "project_root": project_root,
+                "data_root": data_root,
+                "runner": runner,
+            }
+        )
+        return runner
+
+
 class BlockingFirstFrameRunner(FakeRunner):
     def __init__(self) -> None:
         super().__init__()
@@ -104,15 +128,30 @@ class BlockingRunnerFactory(FakeRunnerFactory):
         return runner
 
 
+class InteractiveBlockingRunnerFactory(BlockingRunnerFactory):
+    def __call__(self, *, episode_id: str, resolved_config: Any) -> BlockingFirstFrameRunner:
+        runner = super().__call__(
+            episode_id=episode_id,
+            resolved_config=resolved_config,
+        )
+        runner.runner = SimpleNamespace(
+            config=SimpleNamespace(run_mode=RuntimeMode.INTERACTIVE_SERVER)
+        )
+        return runner
+
+
 def _client_with_factory(
     factory: FakeRunnerFactory,
     *,
     project_root: Path | None = None,
+    data_root: Path | None = None,
 ) -> TestClient:
     app = create_app()
     app.state.runner_factory = factory
     if project_root is not None:
         app.state.project_root = project_root
+    if data_root is not None:
+        app.state.data_root = data_root
     return TestClient(app)
 
 
@@ -156,6 +195,129 @@ def test_start_episode_creates_registry_handle_with_explicit_id() -> None:
     handle = service.get_handle("E-life")
     assert handle.episode_id == "E-life"
     assert handle.runner is factory.created[0]["runner"]
+
+
+def test_start_episode_resolves_relative_config_path_from_project_root(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    data_root = tmp_path / "data"
+    configs = project_root / "configs"
+    configs.mkdir(parents=True)
+    shutil.copyfile(FIXTURE_DIR / "demo_valid.yaml", configs / "demo_valid.yaml")
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(
+        factory,
+        project_root=project_root,
+        data_root=data_root,
+    )
+
+    response = client.post(
+        "/episodes/start",
+        json={
+            "config_path": "configs/demo_valid.yaml",
+            "episode_id": "E-relative-path",
+            "autostart": False,
+            "overrides": {
+                "scenario": {
+                    "layout": {"mode": "manual", "num_cranes": 1},
+                    "cranes": [
+                        {
+                            "crane_id": "C1",
+                            "model_id": "generic_flat_top_55m",
+                            "base": [-60.0, -60.0, 0.0],
+                            "mast_height_m": 45.0,
+                            "theta_init_deg": 0.0,
+                            "slew": {"mode": "continuous"},
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["episode_id"] == "E-relative-path"
+    assert factory.created[0]["resolved_config_hash"]
+    assert Path(response.json()["data"]["run_dir"]).is_relative_to(data_root)
+
+
+def test_start_episode_rejects_relative_config_path_escape(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    data_root = tmp_path / "data"
+    outside = tmp_path / "outside"
+    project_root.mkdir()
+    outside.mkdir()
+    shutil.copyfile(FIXTURE_DIR / "demo_valid.yaml", outside / "demo_valid.yaml")
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(
+        factory,
+        project_root=project_root,
+        data_root=data_root,
+    )
+
+    response = client.post(
+        "/episodes/start",
+        json={
+            "config_path": "../outside/demo_valid.yaml",
+            "episode_id": "E-escape",
+            "autostart": False,
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "M_E_CONFIG_INVALID"
+    assert payload["data"] is None
+    assert payload["details"]["field_path"] == "config_path"
+    assert payload["details"]["source_file"] == "../outside/demo_valid.yaml"
+    assert factory.created == []
+    assert not hasattr(client.app.state, "episode_service") or (
+        "E-escape" not in client.app.state.episode_service.handles
+    )
+
+
+def test_start_episode_passes_project_and_data_roots_to_root_aware_runner_factory(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    data_root = tmp_path / "data"
+    project_root.mkdir()
+    data_root.mkdir()
+    factory = RootAwareRunnerFactory()
+    client = _client_with_factory(
+        factory,
+        project_root=project_root,
+        data_root=data_root,
+    )
+
+    response = client.post(
+        "/episodes/start",
+        json={
+            **_inline_payload("E-roots"),
+            "overrides": {
+                "scenario": {
+                    "layout": {"mode": "manual", "num_cranes": 1},
+                    "cranes": [
+                        {
+                            "crane_id": "C1",
+                            "model_id": "generic_flat_top_55m",
+                            "base": [-60.0, -60.0, 0.0],
+                            "mast_height_m": 45.0,
+                            "theta_init_deg": 0.0,
+                            "slew": {"mode": "continuous"},
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert factory.created[0]["project_root"] == project_root
+    assert factory.created[0]["data_root"] == data_root
 
 
 def test_start_episode_accepts_inline_config_payload() -> None:
@@ -362,6 +524,72 @@ def test_default_runner_stop_before_autostart_writes_terminal_summary(
     )
 
 
+def test_production_runner_stop_before_first_frame_writes_terminal_summary(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    response = client.post(
+        "/episodes/start",
+        json={
+            **_start_payload("E-production-stop-cold", autostart=False),
+            "overrides": {
+                "scenario": {
+                    "layout": {
+                        "num_cranes": 2,
+                        "overlap_level": "high",
+                        "coverage_target": "dense_overlap",
+                    },
+                    "tasks": {
+                        "num_tasks_per_crane": 1,
+                        "queue_policy": {
+                            "start_mode": "simultaneous",
+                            "initial_start_jitter_s": [0, 0],
+                            "inter_task_delay_s": [0, 0],
+                        },
+                        "task_type_distribution": {
+                            "easy_task": 1.0,
+                            "overlap_task": 0.0,
+                            "stress_task": 0.0,
+                        },
+                    },
+                },
+                "experiment": {
+                    "sim": {
+                        "dt": 0.1,
+                        "duration_s": 0.3,
+                        "min_duration_s": 0.0,
+                        "stop_when_all_tasks_done": False,
+                        "completion_cooldown_s": 0.0,
+                        "llm_decision_interval_s": 0.2,
+                    },
+                    "llm": {
+                        "provider": "mock",
+                        "model": "mock-production",
+                        "api_key_env": None,
+                        "api_key": None,
+                        "timeout_s": 1,
+                        "max_retries": 0,
+                        "context": {"history_mode": "none", "recent_decisions_full": 0},
+                    },
+                    "output": {"run_root": str(tmp_path)},
+                },
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    stop = client.post("/episodes/E-production-stop-cold/stop")
+
+    assert stop.status_code == 200, stop.text
+    assert stop.json()["data"]["status"] == "stopped_by_user"
+    run_dir = Path(response.json()["data"]["run_dir"])
+    summary_path = run_dir / "metadata" / "episode_summary.json"
+    assert summary_path.is_file()
+    assert json.loads(summary_path.read_text(encoding="utf-8"))["episode_status"] == (
+        "stopped_by_user"
+    )
+
+
 def test_autostart_false_does_not_advance_runner() -> None:
     factory = FakeRunnerFactory()
     client = _client_with_factory(factory)
@@ -408,6 +636,23 @@ def test_interactive_server_autostart_returns_before_first_frame_then_advances()
     handle.worker_stop.set()
     assert runner.run_one_frame_calls >= 2
     assert handle.frame_index >= 2
+
+
+def test_autostart_uses_background_worker_for_runner_interactive_mode() -> None:
+    factory = InteractiveBlockingRunnerFactory()
+    client = _client_with_factory(factory)
+
+    response = client.post("/episodes/start", json=_start_payload(autostart=True))
+
+    assert response.status_code == 200
+    runner = factory.created[0]["runner"]
+    assert runner.run_one_frame_calls == 0
+    assert runner.entered_first_frame.wait(1.0)
+    handle = client.app.state.episode_service.get_handle("E-life")
+    handle.worker_stop.set()
+    runner.release_first_frame.set()
+    handle.worker_thread.join(timeout=1.0)
+    assert runner.run_one_frame_calls >= 1
 
 
 def test_pause_stops_background_advancement_until_resume() -> None:

@@ -131,6 +131,118 @@ describe("TaskStatusPanel", () => {
 
     expect(screen.getByTestId("task-status").textContent).toContain("无任务");
   });
+
+  it("skips empty queue shells so crane fallback rows still render", () => {
+    loadSingleFrame({
+      ...frames[0],
+      tasks: [{ crane_id: "C1", active_task_id: null, tasks: [] }],
+    });
+
+    render(<TaskStatusPanel />);
+
+    const panel = screen.getByTestId("task-status");
+    expect(panel.textContent).toContain("T-C1");
+    expect(panel.textContent).toContain("T-C3");
+    expect(panel.querySelectorAll("tbody tr").length).toBe(2);
+  });
+
+  it("enriches live task zone cells from frame site metadata without manifest or config", () => {
+    useStore.getState().reset();
+    useStore.getState().startLiveEpisode("E-live-zones");
+    useStore.getState().pushRealtimeFrame({
+      ...frames[0],
+      episode_id: "E-live-zones",
+      tasks: [
+        {
+          crane_id: "C1",
+          active_task_id: "T_C1_ROOF",
+          tasks: [
+            {
+              task_id: "T_C1_ROOF",
+              crane_id: "C1",
+              task_type: "easy_task",
+              status: "active",
+              pickup_zone_id: "ground_yard",
+              dropoff_zone_id: "roof_dropoff",
+              pickup: { zone_id: "ground_yard", surface_z_m: 0 },
+              dropoff: { zone_id: "roof_dropoff", surface_z_m: 25.2 },
+            },
+          ],
+        },
+      ],
+      site: {
+        material_zones: [
+          { zone_id: "ground_yard", type: "box", center: [0, 0, 0], size: [4, 4, 0.4] },
+        ],
+        work_zones: [
+          {
+            zone_id: "roof_dropoff",
+            type: "box",
+            center: [20, 20, 25.2],
+            size: [4, 4, 0.4],
+            surface_z_m: 25.2,
+            floor_id: "roof",
+            zone_role: "roof",
+          },
+        ],
+        forbidden_zones: [],
+      },
+    });
+
+    render(<TaskStatusPanel />);
+
+    expect(screen.getByTestId("task-status").textContent).toContain(
+      "roof_dropoff（屋面）",
+    );
+  });
+});
+
+describe("TaskStatusPanel malformed live site data", () => {
+  beforeEach(loadStore);
+
+  it("ignores non-array live site zone collections without crashing", () => {
+    useStore.getState().reset();
+    useStore.getState().startLiveEpisode("E-live-malformed-zones");
+    useStore.getState().pushRealtimeFrame({
+      ...frames[0],
+      episode_id: "E-live-malformed-zones",
+      tasks: [
+        {
+          crane_id: "C1",
+          active_task_id: "T_C1_FLOOR",
+          tasks: [
+            {
+              task_id: "T_C1_FLOOR",
+              crane_id: "C1",
+              task_type: "easy_task",
+              status: "active",
+              pickup_zone_id: "bad_material",
+              dropoff_zone_id: "floor_dropoff",
+            },
+          ],
+        },
+      ],
+      site: {
+        material_zones: { zone_id: "bad_material", floor_id: "bad" } as unknown as [],
+        work_zones: [
+          {
+            zone_id: "floor_dropoff",
+            type: "box",
+            center: [20, 20, 12],
+            size: [4, 4, 0.4],
+            floor_id: "floor_03",
+          },
+        ],
+      },
+    });
+
+    render(<TaskStatusPanel />);
+
+    const panel = screen.getByTestId("task-status");
+    expect(panel.textContent).toContain("bad_material");
+    expect(panel.textContent).toContain("floor_dropoff");
+    expect(panel.textContent).toContain("floor_03");
+  });
 });
 
 describe("RiskStatusPanel", () => {

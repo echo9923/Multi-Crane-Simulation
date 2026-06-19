@@ -146,9 +146,6 @@ export class ThreeSceneController {
     this.taskRouteKeys.clear();
     this.zoneCenters.clear();
     this.craneColors.clear();
-    this.showRisk = true;
-    this.showZones = true;
-    this.showPaths = true;
     this.windArrow = null;
     let unknownZoneTypes = 0;
 

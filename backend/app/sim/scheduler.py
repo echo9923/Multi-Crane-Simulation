@@ -158,6 +158,16 @@ class EpisodeRunner:
                 time_s=self.time_s,
                 frame_index=self.frame_index,
             )
+            if self._initial_recorded:
+                frame = self._record_terminal_stop_frame()
+                if (
+                    self.config.run_mode is RuntimeMode.INTERACTIVE_SERVER
+                    and self.dependencies.websocket is not None
+                ):
+                    self.dependencies.websocket.broadcast_sim_frame_if_enabled(
+                        episode_id=self.episode_id,
+                        frame=copy.deepcopy(frame),
+                    )
             return FrameStepResult(
                 frame_index=self.frame_index,
                 time_s=self.time_s,
@@ -373,6 +383,27 @@ class EpisodeRunner:
                 frame=copy.deepcopy(frame),
             )
         self._initial_recorded = True
+
+    def _record_terminal_stop_frame(self) -> Any:
+        assert self._terminal_candidate is not None
+        return self.dependencies.recorder.record_step(
+            episode_id=self.episode_id,
+            frame_index=self.frame_index,
+            time_s=self.time_s,
+            states=copy.deepcopy(self.crane_states),
+            weather_state=copy.deepcopy(self.weather_state),
+            visibility_context=copy.deepcopy(self.visibility_context),
+            commands=copy.deepcopy(self.command_store.get_current_commands()),
+            control_targets=copy.deepcopy(list(self.current_control_targets.values())),
+            controller_diagnostics=[],
+            task_queues=copy.deepcopy(self.task_queues),
+            events=[self._terminal_candidate.model_dump(mode="json")],
+            status=self.episode_status,
+            snapshot_id=None,
+            online_risk=None,
+            observations=[],
+            llm_calls=[],
+        )
 
     def _update_weather(
         self,

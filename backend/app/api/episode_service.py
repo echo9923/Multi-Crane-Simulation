@@ -4,19 +4,23 @@ import uuid
 import threading
 import time
 import copy
+import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
 from backend.app.core.config_loader import apply_overrides, load_demo_config
 from backend.app.core.config_resolver import resolve_config
 from backend.app.core.secret_resolver import resolve_provider_secrets
 from backend.app.api.desktop_llm_settings import resolve_local_api_key
+from backend.app.schemas.enums import RuntimeMode
 from backend.app.sim.task_generation import TaskGenerationError
 from backend.app.schemas.config import DatasetConfig, ExperimentConfig, ScenarioConfig
 from backend.app.schemas.recorder import SimFrame
 from backend.app.schemas.scheduler import EpisodeStatus
 
+from .config_paths import resolve_config_path_for_request
 from .errors import ApiException, config_api_error_from_exception
 from .schemas import (
     EpisodeControlResponse,
@@ -89,6 +93,11 @@ class EpisodeService:
             runner = factory(
                 episode_id=episode_id,
                 resolved_config=resolved_config,
+                **_runner_root_kwargs(
+                    factory,
+                    project_root=self.project_root,
+                    data_root=self.data_root,
+                ),
             )
         except TaskGenerationError as exc:
             raise ApiException(
@@ -316,14 +325,20 @@ class EpisodeService:
                 details={"field_path": "scenario"},
             )
 
+        config_path: Path | str | None = request.config_path
         try:
             overrides = _request_overrides_with_run_mode(request)
             if request.config_path is not None:
-                scenario, experiment, dataset = load_demo_config(
+                config_path = resolve_config_path_for_request(
                     request.config_path,
+                    SimpleNamespace(project_root=self.project_root),
+                )
+                scenario, experiment, dataset = load_demo_config(
+                    config_path,
                     overrides=overrides,
                 )
             else:
+                config_path = None
                 scenario, experiment, dataset = _load_inline_start_config(
                     request,
                     overrides=overrides,
@@ -345,7 +360,8 @@ class EpisodeService:
             raise config_api_error_from_exception(
                 exc,
                 config_kind="scenario",
-                source_file=request.config_path,
+                source_file=str(config_path) if request.config_path is not None else None,
+                field_path="config_path" if request.config_path is not None else None,
                 forbidden_secret_values=_inline_secret_values(request.experiment),
             ) from exc
 
@@ -460,10 +476,16 @@ def _needs_background_worker(
     request: EpisodeStartRequest,
     handle: EpisodeHandle,
 ) -> bool:
-    return (
-        request.run_mode == "interactive_server"
-        and handle.status is EpisodeStatus.RUNNING
+    return handle.status is EpisodeStatus.RUNNING and (
+        request.run_mode == "interactive_server" or _runner_is_interactive(handle.runner)
     )
+
+
+def _runner_is_interactive(runner: Any) -> bool:
+    inner = getattr(runner, "runner", runner)
+    config = getattr(inner, "config", None)
+    run_mode = getattr(config, "run_mode", None)
+    return run_mode == RuntimeMode.INTERACTIVE_SERVER or run_mode == "interactive_server"
 
 
 def _runner_frame_delay_s(runner: Any) -> float:
@@ -565,12 +587,20 @@ def _request_overrides_with_run_mode(request: EpisodeStartRequest) -> dict[str, 
     return overrides
 
 
-def default_runner_factory(*, episode_id: str, resolved_config: Any) -> Any:
+def default_runner_factory(
+    *,
+    episode_id: str,
+    resolved_config: Any,
+    project_root: Optional[Path] = None,
+    data_root: Optional[Path] = None,
+) -> Any:
     from .production_runner import build_production_episode_runner
 
     return build_production_episode_runner(
         episode_id=episode_id,
         resolved_config=resolved_config,
+        project_root=project_root,
+        data_root=data_root,
     )
 
 
@@ -586,7 +616,13 @@ def _provider_summary_for_desktop(
     return resolve_provider_secrets(llm, local_api_key=local_api_key).persisted_summary
 
 
-def local_runner_factory(*, episode_id: str, resolved_config: Any) -> Any:
+def local_runner_factory(
+    *,
+    episode_id: str,
+    resolved_config: Any,
+    project_root: Optional[Path] = None,
+    data_root: Optional[Path] = None,
+) -> Any:
     from .local_runner import build_local_episode_runner
 
     return build_local_episode_runner(
@@ -604,6 +640,29 @@ def _runner_factory_for_request(
     if request.runner == "local":
         return local_runner_factory
     return fallback
+
+
+def _runner_root_kwargs(
+    factory: RunnerFactory,
+    *,
+    project_root: Optional[Path],
+    data_root: Optional[Path],
+) -> dict[str, Optional[Path]]:
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):
+        return {}
+    if any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return {"project_root": project_root, "data_root": data_root}
+    result: dict[str, Optional[Path]] = {}
+    if "project_root" in signature.parameters:
+        result["project_root"] = project_root
+    if "data_root" in signature.parameters:
+        result["data_root"] = data_root
+    return result
 
 
 __all__ = [

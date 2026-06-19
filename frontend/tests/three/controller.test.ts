@@ -230,6 +230,76 @@ describe("ThreeSceneController.buildStatic", () => {
     expect(ctrl.lastStats.cranes).toBe(6);
     ctrl.dispose();
   });
+
+  it("preserves layer visibility choices across static rebuilds", () => {
+    const ctrl = makeController();
+    ctrl.buildStatic(null, manifest);
+    ctrl.setShowZones(false);
+    ctrl.setShowPaths(false);
+
+    ctrl.buildStatic(null, manifest);
+
+    expect(ctrl.getObjectByName("zones")?.visible).toBe(false);
+    ctrl.applyFrame({
+      ...frames[0],
+      tasks: [
+        {
+          crane_id: "C1",
+          active_task_id: "T_C1_001",
+          tasks: [
+            {
+              task_id: "T_C1_001",
+              crane_id: "C1",
+              pickup_zone_id: manifest.material_zones[0].zone_id,
+              dropoff_zone_id: manifest.work_zones[0].zone_id,
+              pickup: { x: 1, y: 2, z: 3 },
+              dropoff: { x: 20, y: 25, z: 18 },
+            },
+          ],
+        },
+      ],
+    });
+    expect(ctrl.getObjectByName("taskpath:C1")?.visible).toBe(false);
+    ctrl.dispose();
+  });
+
+  it("rebuilds live static geometry when later frames add site data", () => {
+    const ctrl = makeController();
+    const first = { ...frames[0], site: undefined } as SimFrame;
+    const second = {
+      ...frames[1],
+      episode_id: first.episode_id,
+      site: {
+        boundary: { x_min: -80, x_max: 80, y_min: -80, y_max: 80, z_min: 0, z_max: 60 },
+        buildings: [
+          {
+            building_id: "tower_a",
+            name: "Tower A",
+            footprint: [[0, 0], [20, 0], [20, 20], [0, 20]],
+            floors: 3,
+            floor_height_m: 3.6,
+            base_z_m: 0,
+          },
+        ],
+        material_zones: [
+          { zone_id: "mat_live", type: "box", center: [10, 0, 0], size: [4, 4, 0.4], surface_z_m: 0 },
+        ],
+        work_zones: [
+          { zone_id: "roof_live", type: "box", center: [15, 10, 10.8], size: [4, 4, 0.4], surface_z_m: 10.8 },
+        ],
+        forbidden_zones: [],
+      },
+    } as SimFrame;
+
+    ctrl.buildStatic(null, manifestFromFrame(first));
+    expect(ctrl.getObjectByName("zone:material:mat_live")).toBeFalsy();
+
+    ctrl.buildStatic(null, manifestFromFrame(second));
+
+    expect(ctrl.getObjectByName("zone:material:mat_live")).toBeTruthy();
+    expect(ctrl.getObjectByName("floor:tower_a:level_3")).toBeTruthy();
+    ctrl.dispose();
+  });
 });
 
 describe("ThreeSceneController.setCranePose", () => {

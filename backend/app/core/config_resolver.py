@@ -57,7 +57,7 @@ def resolve_config(
     experiment_payload = _safe_dump(experiment_config)
     dataset_payload = _safe_dump(dataset_config) if dataset_config is not None else None
 
-    layout = _resolve_layout(scenario_config, seeds.layout)
+    layout = _resolve_layout(scenario_config, seeds.layout, seeds.task)
     resolved = ResolvedConfig(
         schema_version=scenario_config.schema_version,
         scenario=scenario_payload,
@@ -313,7 +313,11 @@ def _default_schedule_segment(weather_payload: Dict[str, Any]) -> Dict[str, Any]
     }
 
 
-def _resolve_layout(scenario_config: ScenarioConfig, layout_seed: int) -> ResolvedLayoutConfig:
+def _resolve_layout(
+    scenario_config: ScenarioConfig,
+    layout_seed: int,
+    task_seed: int,
+) -> ResolvedLayoutConfig:
     layout_payload = _safe_dump(scenario_config.layout)
     model_library = build_crane_model_library(scenario_config.crane_models)
     model_snapshot = {
@@ -346,6 +350,7 @@ def _resolve_layout(scenario_config: ScenarioConfig, layout_seed: int) -> Resolv
         scenario_config,
         model_library,
         seed=layout_seed,
+        task_seed=task_seed,
     )
     return ResolvedLayoutConfig(
         mode=LayoutMode.AUTO.value,

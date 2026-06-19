@@ -1,15 +1,15 @@
 # Desktop Workbench Phase 1
 
-This document records the Phase 1 developer workflow for the desktop workbench. Phase 1 is a local development workbench with a macOS developer package path, not a final signed installer or Windows packaged release. Development startup expects the repository Python virtualenv and frontend dependencies to already exist; the macOS package currently copies the local `.venv` into the app resources.
+This document records the Phase 1 developer workflow for the desktop workbench. Phase 1 is a local development workbench with a Windows `win-unpacked` developer package path, not a final signed installer or frozen backend release. Development startup expects the repository Python virtualenv and frontend dependencies to already exist; the Windows package currently copies the local `.venv` into the app resources.
 
 ## Scope
 
 Phase 1 connects the existing simulation stack into a desktop-oriented workbench:
 
-- During development, Electron starts the FastAPI backend from the repository `.venv`; packaged macOS builds use the copied resource `.venv` unless `MULTI_CRANE_PYTHON` is set.
+- During development, Electron starts the FastAPI backend from the repository `.venv`; packaged Windows builds use the copied resource `.venv` unless `MULTI_CRANE_PYTHON` is set.
 - React opens as a tabbed workbench served by the Vite dev server.
 - A user can load a template, edit core experiment fields and advanced YAML, validate the config, start one episode, watch the 3D view, inspect run state, and download run artifacts.
-- The backend and frontend still run as development services during `desktop:dev`. The macOS packaging path is for local unsigned verification; installer signing, notarization, auto-update, backend binary freezing, and Windows EXE behavior are outside Phase 1.
+- The backend and frontend still run as development services during `desktop:dev`. The Windows packaging path is for local unsigned `win-unpacked` verification; installer signing, notarization, auto-update, and backend binary freezing are outside Phase 1.
 
 ## Development Startup
 
@@ -27,11 +27,11 @@ cd frontend && npm run desktop:dev
 
 `desktop:dev` launches `electron/dev.mjs`, which sets `VITE_DEV_SERVER_URL=http://127.0.0.1:5173` in Node before importing the main Electron process. This keeps the command cross-platform for Unix and Windows npm shells.
 
-Electron resolves the project root, chooses an available backend port, starts FastAPI with `.venv/bin/python -m uvicorn backend.app.main:app`, passes the selected port through `MULTI_CRANE_BACKEND_PORT`, waits for `/health`, then loads the Vite dev server with desktop API and WebSocket runtime parameters. FastAPI enables narrowly scoped CORS for local renderer origins such as `http://127.0.0.1:5173` and `http://localhost:5173`; arbitrary remote origins are not allowed.
+Electron resolves the project root, chooses an available backend port, starts FastAPI with the repository virtualenv Python (`.venv/Scripts/python.exe` on Windows), passes the selected port through `MULTI_CRANE_BACKEND_PORT`, waits for `/health`, then loads the Vite dev server with desktop API and WebSocket runtime parameters. FastAPI enables narrowly scoped CORS for local renderer origins such as `http://127.0.0.1:5173` and `http://localhost:5173`; arbitrary remote origins are not allowed.
 
 For non-dev `npm run desktop`, build the frontend first with `npm run build`. Electron reads `frontend/dist/index.html`, injects the desktop runtime config in memory, starts an Electron-owned static renderer server bound to `127.0.0.1`, and serves the injected HTML at `http://127.0.0.1:<renderer-port>/desktop-index.html`. The built renderer uses the same narrow local HTTP origin shape as the development renderer, so backend CORS does not need to allow `Origin: null`. The build output must remain available while the desktop shell is running.
 
-## macOS Packaging
+## Windows Packaging
 
 The Phase 1 packaging workflow is documented in [desktop_packaging.md](desktop_packaging.md). The main local commands are:
 
@@ -40,9 +40,9 @@ The Phase 1 packaging workflow is documented in [desktop_packaging.md](desktop_p
 (cd frontend && npm run desktop:dist)
 ```
 
-`desktop:pack` builds an unsigned unpacked `.app` under `frontend/release/`, usually `frontend/release/mac-arm64/Multi Crane Workbench.app` on Apple Silicon or `frontend/release/mac/Multi Crane Workbench.app` on Intel macOS. `desktop:dist` uses the same build config and additionally asks Electron Builder for distributable macOS targets such as a DMG when the local signing/notarization toolchain allows it.
+`desktop:pack` builds an unsigned unpacked Windows app under `frontend/release/win-unpacked/Multi Crane Workbench.exe`. `desktop:dist` uses the same Windows `dir` target today, so it remains an unpacked Windows directory unless installer targets are added later.
 
-The packaged app resolves Python as documented in [desktop_packaging.md](desktop_packaging.md): `MULTI_CRANE_PYTHON`, then packaged `Contents/Resources/.venv/bin/python`, then optional `MULTI_CRANE_DEV_PROJECT_ROOT/.venv/bin/python` for packaged-app troubleshooting; ordinary development runs use the checkout `.venv/bin/python`. This is not yet a frozen backend binary; the package remains tied to a compatible macOS/Python virtualenv and architecture.
+The packaged app resolves Python as documented in [desktop_packaging.md](desktop_packaging.md): `MULTI_CRANE_PYTHON`, then packaged `resources/.venv/Scripts/python.exe`, then optional `MULTI_CRANE_DEV_PROJECT_ROOT/.venv/Scripts/python.exe` for packaged-app troubleshooting; ordinary development runs use the checkout `.venv/Scripts/python.exe` on Windows. This is not yet a frozen backend binary; the package remains tied to a compatible Windows/Python virtualenv from the build environment.
 
 ## Workbench Tabs And Module Mapping
 

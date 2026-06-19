@@ -100,6 +100,7 @@ def build_production_episode_runner(
     resolved_config: Any,
     websocket: Any = None,
     project_root: Any = None,
+    data_root: Any = None,
 ) -> "ProductionEpisodeRunner":
     scenario = scenario_config_from_resolved(resolved_config)
     experiment = ExperimentConfig.model_validate(_mapping_section(resolved_config, "experiment"))
@@ -114,7 +115,10 @@ def build_production_episode_runner(
     weather_state, visibility_context = weather.update(0.0)
 
     llm_config = experiment.llm
-    provider = _provider_with_runtime_secret(llm_config, project_root=project_root)
+    provider = _provider_with_runtime_secret(
+        llm_config,
+        project_root=data_root if data_root is not None else project_root,
+    )
     operator_profiles = _assign_operator_profiles(
         experiment=experiment,
         crane_ids=[config.crane_id for config in crane_configs],
@@ -203,7 +207,7 @@ class ProductionEpisodeRunner:
     def run_one_frame(self) -> Any:
         result = self.runner.run_one_frame()
         if result.status is not EpisodeStatus.RUNNING:
-            if self.recorder.run_dir is None:
+            if self.recorder.last_frame is None and self.recorder.layout is None:
                 self.runner._record_initial_frame()
             self.recorder.finalize(episode_status=result.status)
         return result

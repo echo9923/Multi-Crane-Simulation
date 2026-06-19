@@ -11,6 +11,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from backend.app.schemas.recorder import SimFrame
 from backend.app.sim.recorder import build_sim_frame
 
+from .desktop_context import resolve_desktop_data_root, resolve_desktop_project_root
 from .episode_service import EpisodeHandle, EpisodeService, default_runner_factory
 from .schemas import (
     ApiError,
@@ -87,7 +88,7 @@ class WebSocketConnectionManager:
         websocket: WebSocket,
         handle: EpisodeHandle,
     ) -> None:
-        frame = handle.last_frame
+        frame = _runner_last_frame(handle.runner) or handle.last_frame
         if frame is None:
             return
         if frame.offline_labels is not None:
@@ -185,8 +186,24 @@ def _episode_service(websocket: WebSocket) -> EpisodeService:
     state = websocket.app.state
     if not hasattr(state, "episode_service"):
         runner_factory = getattr(state, "runner_factory", default_runner_factory)
-        state.episode_service = EpisodeService(runner_factory=runner_factory)
+        state.episode_service = EpisodeService(
+            runner_factory=runner_factory,
+            project_root=resolve_desktop_project_root(websocket.app),
+            data_root=resolve_desktop_data_root(websocket.app),
+        )
     return state.episode_service
+
+
+def _runner_last_frame(runner: Any) -> SimFrame | None:
+    for candidate in (
+        runner,
+        getattr(runner, "recorder", None),
+        getattr(getattr(runner, "recorder", None), "recorder", None),
+    ):
+        frame = getattr(candidate, "last_frame", None)
+        if frame is not None:
+            return frame
+    return None
 
 
 def _websocket_manager(websocket: WebSocket) -> WebSocketConnectionManager:
