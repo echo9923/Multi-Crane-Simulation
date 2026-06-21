@@ -74,7 +74,7 @@ def config_error_from_exception(
             message=_scrub_secrets(str(exc), forbidden_secret_values),
             field_path=field_path or "llm.api_key",
             source_file=source_file,
-            hint=exc.hint or "Use api_key_env or provide a startup-only runtime secret.",
+            hint=exc.hint or "Save a local desktop API Key before startup.",
             details=_scrub_details(
                 {
                     "config_kind": config_kind,

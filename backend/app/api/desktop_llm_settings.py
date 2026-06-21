@@ -68,21 +68,21 @@ PROVIDER_PRESETS: dict[LLMProviderName, ProviderPreset] = {
         display_name="DeepSeek",
         default_base_url="https://api.deepseek.com/v1",
         default_model="deepseek-chat",
-        api_key_env="DEEPSEEK_API_KEY",
+        api_key_env=None,
     ),
     LLMProviderName.MINIMAX: ProviderPreset(
         provider=LLMProviderName.MINIMAX,
         display_name="MiniMax",
         default_base_url="https://api.minimax.chat/v1",
         default_model="abab6.5s-chat",
-        api_key_env="MINIMAX_API_KEY",
+        api_key_env=None,
     ),
     LLMProviderName.SILICONFLOW: ProviderPreset(
         provider=LLMProviderName.SILICONFLOW,
         display_name="SiliconFlow",
         default_base_url="https://api.siliconflow.cn/v1",
         default_model="deepseek-ai/DeepSeek-V4-Flash",
-        api_key_env="SILICONFLOW_API_KEY",
+        api_key_env=None,
     ),
     LLMProviderName.MOCK: ProviderPreset(
         provider=LLMProviderName.MOCK,
@@ -208,9 +208,6 @@ def test_provider_connectivity(
     key = _clean_optional(api_key)
     if key is None and saved is not None:
         key = saved.api_key
-    env_mapping = os.environ if env is None else env
-    if key is None and preset.api_key_env:
-        key = _clean_optional(env_mapping.get(preset.api_key_env))
     resolved_base_url = (
         _clean_optional(base_url)
         or (saved.base_url if saved is not None else None)

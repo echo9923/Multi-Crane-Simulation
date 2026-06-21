@@ -67,6 +67,7 @@ export interface AppState {
   setEpisodeId: (id: string | null) => void;
   setMode: (mode: AppMode) => void;
   startLiveEpisode: (episodeId: string) => void;
+  prepareOfflineReplay: () => void;
   setFrame: (index: number) => void;
   stepFrame: (delta: number) => void;
   pushRealtimeFrame: (frame: SimFrame) => void;
@@ -144,6 +145,22 @@ export const useStore = create<AppState>((set, get) => ({
 
   setEpisodeId: (id) => set({ episodeId: id }),
   setMode: (mode) => set({ mode }),
+
+  prepareOfflineReplay: () =>
+    set({
+      mode: "replay",
+      episodeId: null,
+      config: null,
+      manifest: null,
+      summary: null,
+      frames: [],
+      currentIndex: 0,
+      latestFrame: null,
+      commandLog: [],
+      playback: { ...initialPlayback },
+      connection: { ...initialConnection },
+      notices: [],
+    }),
 
   startLiveEpisode: (episodeId) =>
     set({

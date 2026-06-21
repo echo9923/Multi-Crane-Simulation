@@ -10,17 +10,14 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.app.api.desktop_llm_settings import save_provider_secret
 from backend.app.api.episode_service import EpisodeHandle, EpisodeService
 from backend.app.api.websocket import WebSocketConnectionManager
 from backend.app.main import create_app
+from backend.app.schemas.enums import LLMProviderName
 from backend.app.schemas.recorder import EpisodeSummary, SimFrame, SimFrameWeather
 from backend.app.schemas.scheduler import EpisodeStatus, FrameStepResult
 from backend.app.tests.test_config_schema import FIXTURE_DIR
-
-
-@pytest.fixture(autouse=True)
-def _deepseek_env_for_demo_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-secret-123456")
 
 
 @dataclass
@@ -131,8 +128,15 @@ def _client(tmp_path: Path) -> tuple[TestClient, list[AcceptanceRunner]]:
         return runner
 
     app = create_app()
+    app.state.project_root = tmp_path
+    app.state.data_root = tmp_path
     app.state.runner_factory = factory
     app.state.dataset_root = tmp_path / "datasets"
+    save_provider_secret(
+        tmp_path,
+        provider=LLMProviderName.DEEPSEEK,
+        api_key="sk-test-secret-123456",
+    )
     return TestClient(app), runners
 
 

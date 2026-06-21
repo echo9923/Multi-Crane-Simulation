@@ -346,8 +346,10 @@ describe("workbench data export and settings pages", () => {
     expect(screen.getAllByText("8765").length).toBeGreaterThan(0);
     expect(screen.getByText("deepseek")).toBeTruthy();
     expect(screen.getByText("minimax")).toBeTruthy();
-    expect(screen.getByText("mock")).toBeTruthy();
-    expect(screen.getByText("replay")).toBeTruthy();
+    expect(screen.queryByText("mock")).toBeNull();
+    expect(screen.queryByText("replay")).toBeNull();
+    expect(screen.queryByText(/mock\/replay/)).toBeNull();
+    expect(screen.queryByText(/环境变量默认名/)).toBeNull();
     expect(screen.queryByRole("option", { name: /OpenAI-compatible/i })).toBeNull();
   });
 });

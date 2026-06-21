@@ -93,10 +93,6 @@ def build_persisted_provider_summary(
         key_source = "inline"
         key_env_name = None
         key_masked = mask_api_key(api_key)
-    elif llm.api_key_env:
-        key_source = "env"
-        key_env_name = llm.api_key_env
-        key_masked = None
     else:
         key_source = "none"
         key_env_name = None

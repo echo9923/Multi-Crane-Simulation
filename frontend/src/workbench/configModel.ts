@@ -5,7 +5,10 @@ import type {
   CoreExperimentForm,
   CraneFormItem,
   ExperimentSummary,
+  ScenarioMetadata,
+  ScenarioTaskPreview,
 } from "./types";
+import type { ManualTaskValidationTaskReport } from "@/types/api";
 
 export const UNSUPPORTED_CORE_PATCH_FIELDS = ["craneModelId"] as const;
 
@@ -72,6 +75,14 @@ function splitStringList(value: string): string[] {
 
 function firstNumberAt(root: unknown, path: string[], index: number, fallback: number): number {
   return numberArrayAt(root, path, [])[index] ?? fallback;
+}
+
+function stringFrom(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function numberFrom(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function defaultBoundary(): BoundaryForm {
@@ -274,6 +285,10 @@ function setPatchPath(
   let cursor = root;
   for (const [index, part] of parts.entries()) {
     if (index === parts.length - 1) {
+      if (value === undefined) {
+        delete cursor[part];
+        return;
+      }
       cursor[part] = value;
       return;
     }
@@ -352,7 +367,7 @@ export function defaultCoreForm(): CoreExperimentForm {
     llmProvider: "deepseek",
     llmModel: "deepseek-v4-flash",
     llmBaseUrl: "https://api.deepseek.com/v1",
-    llmApiKeyEnv: "DEEPSEEK_API_KEY",
+    llmApiKeyEnv: "",
     llmTemperature: 0.2,
     timeoutS: 30,
     maxRetries: 1,
@@ -841,4 +856,92 @@ export function extractExperimentSummary(text: string): ExperimentSummary {
     durationS: form.durationS,
     llmProvider: form.llmProvider,
   };
+}
+
+export function extractScenarioMetadata(
+  text: string,
+  fallback: Partial<ScenarioMetadata> = {},
+): ScenarioMetadata {
+  const parsed = yaml.load(text);
+  const scenario = asRecord(readPath(parsed, ["scenario"]));
+  const site = asRecord(scenario.site);
+  const buildings = asArray(site.buildings);
+  const cranes = asArray(scenario.cranes);
+  const tasks = asArray(readPath(scenario, ["tasks", "manual_tasks"]));
+  const layoutCount = numberAt(scenario, ["layout", "num_cranes"], cranes.length);
+  const scenarioId = stringFrom(scenario.scenario_id, fallback.scenarioId ?? "未选择");
+  const elevated = cranes.some((item) => {
+    const crane = asRecord(item);
+    return numberArrayAt(crane, ["base"], [])[2] > 0 || numberAt(crane, ["base_z_m"], 0) > 0;
+  });
+  return {
+    scenarioId,
+    name: fallback.name ?? scenarioId,
+    purpose:
+      fallback.purpose ??
+      stringAt(parsed, ["description"], "用于验证 tower crane pickup_zone 到 dropoff_zone 的吊运任务。"),
+    buildingCount: buildings.length || fallback.buildingCount || 0,
+    craneCount: layoutCount || fallback.craneCount || 0,
+    taskCount: tasks.length || fallback.taskCount || 0,
+    hasElevatedCrane: elevated || fallback.hasElevatedCrane || false,
+    primaryCrossRisk:
+      fallback.primaryCrossRisk ??
+      "多塔吊吊臂半径与吊运路径存在交叉，需要校验任务可达性与交叉风险。",
+  };
+}
+
+export function extractYamlTaskPreview(text: string): ScenarioTaskPreview[] {
+  const parsed = yaml.load(text);
+  const materialZones = new Map(
+    zonesAt(parsed, ["scenario", "site", "material_zones"], "mat").map((zone) => [
+      zone.zoneId,
+      zone,
+    ]),
+  );
+  const workZones = new Map(
+    zonesAt(parsed, ["scenario", "site", "work_zones"], "work").map((zone) => [
+      zone.zoneId,
+      zone,
+    ]),
+  );
+  return asArray(readPath(parsed, ["scenario", "tasks", "manual_tasks"])).map((item) => {
+    const task = asRecord(item);
+    const pickupZoneId = stringFrom(task.pickup_zone_id);
+    const dropoffZoneId = stringFrom(task.dropoff_zone_id);
+    return {
+      taskId: stringFrom(task.task_id, "未命名任务"),
+      craneId: stringFrom(task.crane_id, "自动分配"),
+      pickupZoneId,
+      dropoffZoneId,
+      loadType: stringFrom(task.load_type),
+      priority: stringFrom(task.priority, "medium"),
+      pickupHeightM: materialZones.get(pickupZoneId)?.surfaceZM ?? null,
+      dropoffHeightM: workZones.get(dropoffZoneId)?.surfaceZM ?? null,
+      reachabilityStatus: "待校验",
+      blockingReasons: [],
+      source: "yaml",
+    };
+  });
+}
+
+export function validationReportsToTaskPreview(
+  reports: ManualTaskValidationTaskReport[],
+): ScenarioTaskPreview[] {
+  return reports.map((report) => {
+    const blockingReasons = report.blocking_reasons ?? [];
+    const reachable = report.pickup_reachable && report.dropoff_reachable && blockingReasons.length === 0;
+    return {
+      taskId: report.task_id,
+      craneId: report.crane_id ?? "自动分配",
+      pickupZoneId: report.pickup_zone_id,
+      dropoffZoneId: report.dropoff_zone_id,
+      loadType: report.load_type,
+      priority: report.priority,
+      pickupHeightM: numberFrom(report.pickup_height_m),
+      dropoffHeightM: numberFrom(report.dropoff_height_m),
+      reachabilityStatus: reachable ? "可达" : `不可达: ${blockingReasons.join(", ") || "unknown"}`,
+      blockingReasons,
+      source: "validation",
+    };
+  });
 }

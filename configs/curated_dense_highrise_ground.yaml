@@ -1,0 +1,432 @@
+description: "Curated scenario 1: ground-mounted tower cranes serving a dense high-rise cluster."
+
+scenario:
+  schema_version: "1.0"
+  scenario_id: "curated_dense_highrise_ground"
+  seed: 20260619
+
+  site:
+    coordinate_system: "ENU"
+    boundary:
+      x_min: -110
+      x_max: 110
+      y_min: -90
+      y_max: 100
+      z_min: 0
+      z_max: 90
+    buildings:
+      - building_id: "tower_a"
+        name: "Tower A"
+        footprint:
+          - [-48, -20]
+          - [-8, -20]
+          - [-8, 42]
+          - [-48, 42]
+        floors: 18
+        floor_height_m: 3.6
+        base_z_m: 0
+      - building_id: "tower_b"
+        name: "Tower B"
+        footprint:
+          - [10, -18]
+          - [50, -18]
+          - [50, 45]
+          - [10, 45]
+        floors: 22
+        floor_height_m: 3.6
+        base_z_m: 0
+      - building_id: "tower_c"
+        name: "Tower C"
+        footprint:
+          - [-18, 48]
+          - [34, 48]
+          - [34, 82]
+          - [-18, 82]
+        floors: 14
+        floor_height_m: 3.6
+        base_z_m: 0
+    forbidden_zones: []
+    material_zones:
+      - zone_id: "ground_yard_west"
+        type: "box"
+        center: [-82, 10, 0]
+        size: [18, 14, 0.4]
+        z_range_m: [0, 0.4]
+        surface_z_m: 0
+        zone_role: "ground_yard"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 3
+        load_types: ["rebar_bundle", "formwork_panel"]
+      - zone_id: "truck_bed_south"
+        type: "box"
+        center: [8, -48, 1.2]
+        size: [20, 10, 0.4]
+        z_range_m: [1.2, 1.6]
+        surface_z_m: 1.2
+        zone_role: "truck_bed"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 3
+        load_types: ["rebar_bundle", "mep_box"]
+      - zone_id: "ground_yard_east"
+        type: "box"
+        center: [82, 16, 0]
+        size: [18, 14, 0.4]
+        z_range_m: [0, 0.4]
+        surface_z_m: 0
+        zone_role: "ground_yard"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 3
+        load_types: ["formwork_panel", "mep_box"]
+    work_zones:
+      - zone_id: "tower_a_floor_10"
+        type: "box"
+        center: [-28, 18, 36.0]
+        size: [12, 10, 0.4]
+        z_range_m: [36.0, 36.4]
+        surface_z_m: 36.0
+        floor_id: "floor_10"
+        building_id: "tower_a"
+        level_index: 10
+        zone_role: "floor_slab"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        accepted_load_types: ["rebar_bundle", "formwork_panel"]
+      - zone_id: "tower_a_floor_15"
+        type: "box"
+        center: [-20, 34, 54.0]
+        size: [12, 10, 0.4]
+        z_range_m: [54.0, 54.4]
+        surface_z_m: 54.0
+        floor_id: "floor_15"
+        building_id: "tower_a"
+        level_index: 15
+        zone_role: "floor_slab"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        accepted_load_types: ["rebar_bundle"]
+      - zone_id: "tower_b_floor_12"
+        type: "box"
+        center: [30, 12, 43.2]
+        size: [12, 10, 0.4]
+        z_range_m: [43.2, 43.6]
+        surface_z_m: 43.2
+        floor_id: "floor_12"
+        building_id: "tower_b"
+        level_index: 12
+        zone_role: "floor_slab"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        accepted_load_types: ["rebar_bundle", "mep_box"]
+      - zone_id: "tower_b_floor_18"
+        type: "box"
+        center: [38, 36, 64.8]
+        size: [12, 10, 0.4]
+        z_range_m: [64.8, 65.2]
+        surface_z_m: 64.8
+        floor_id: "floor_18"
+        building_id: "tower_b"
+        level_index: 18
+        zone_role: "floor_slab"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        accepted_load_types: ["mep_box", "formwork_panel"]
+      - zone_id: "tower_c_roof"
+        type: "box"
+        center: [8, 66, 50.4]
+        size: [14, 10, 0.4]
+        z_range_m: [50.4, 50.8]
+        surface_z_m: 50.4
+        floor_id: "roof"
+        building_id: "tower_c"
+        level_index: 14
+        zone_role: "roof"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        accepted_load_types: ["rebar_bundle", "formwork_panel", "mep_box"]
+    forbidden_zone_policy:
+      mode: "task_only"
+      record_violation: true
+
+  load_types:
+    rebar_bundle:
+      display_name: "Rebar bundle"
+      weight_range_t: [1.2, 2.0]
+      size_m: [5.0, 0.8, 0.8]
+      shape: "box_long"
+    formwork_panel:
+      display_name: "Formwork panel"
+      weight_range_t: [0.8, 1.5]
+      size_m: [3.0, 1.6, 0.4]
+      shape: "panel"
+    mep_box:
+      display_name: "MEP equipment box"
+      weight_range_t: [0.6, 1.2]
+      size_m: [1.6, 1.2, 1.2]
+      shape: "box"
+
+  crane_models:
+    - model_id: "urban_flat_top_80m"
+      jib_length_m: 80
+      counter_jib_length_m: 18
+      mast_height_range_m: [45, 85]
+      max_load_t: 8
+      max_load_radius_m: 18
+      tip_load_t: 2.5
+      rated_moment_t_m: 260
+      slew_speed_max_deg_s: 2.0
+      slew_acc_max_deg_s2: 0.8
+      trolley_r_min_m: 5
+      trolley_r_max_m: 78
+      trolley_speed_max_m_s: 0.9
+      trolley_acc_max_m_s2: 0.7
+      cable_length_min_m: 0.5
+      cable_length_max_m: 90
+      hoist_speed_max_m_s: 1.2
+      hoist_acc_max_m_s2: 0.8
+      min_clearance_below_jib_m: 2
+      load_chart_points:
+        - {radius_m: 18, capacity_t: 8.0}
+        - {radius_m: 40, capacity_t: 5.5}
+        - {radius_m: 60, capacity_t: 3.6}
+        - {radius_m: 80, capacity_t: 2.5}
+
+  layout:
+    mode: "manual"
+    num_cranes: 4
+    overlap_level: "high"
+    height_strategy: "staggered"
+    coverage_target: "dense_overlap"
+    slew_mode_default: "continuous"
+    max_sampling_attempts: 500
+
+  cranes:
+    - crane_id: "C1"
+      model_id: "urban_flat_top_80m"
+      base: [-62, -8, 0]
+      mast_height_m: 62
+      theta_init_deg: 150
+      slew:
+        mode: "continuous"
+    - crane_id: "C2"
+      model_id: "urban_flat_top_80m"
+      base: [64, -6, 0]
+      mast_height_m: 72
+      theta_init_deg: -140
+      slew:
+        mode: "continuous"
+    - crane_id: "C3"
+      model_id: "urban_flat_top_80m"
+      base: [-52, 66, 0]
+      mast_height_m: 64
+      theta_init_deg: 0
+      slew:
+        mode: "continuous"
+    - crane_id: "C4"
+      model_id: "urban_flat_top_80m"
+      base: [56, 66, 0]
+      mast_height_m: 76
+      theta_init_deg: 180
+      slew:
+        mode: "continuous"
+
+  tasks:
+    assignment_mode: "per_crane_queue"
+    generation_mode: "manual"
+    num_tasks_per_crane: 2
+    manual_tasks:
+      - task_id: "T1_C1_rebar_to_A10"
+        crane_id: "C1"
+        task_type: "easy_task"
+        pickup_zone_id: "ground_yard_west"
+        dropoff_zone_id: "tower_a_floor_10"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T2_C1_rebar_to_A15"
+        crane_id: "C1"
+        task_type: "overlap_task"
+        pickup_zone_id: "ground_yard_west"
+        dropoff_zone_id: "tower_a_floor_15"
+        load_type: "rebar_bundle"
+        priority: "high"
+      - task_id: "T1_C2_mep_to_B12"
+        crane_id: "C2"
+        task_type: "easy_task"
+        pickup_zone_id: "truck_bed_south"
+        dropoff_zone_id: "tower_b_floor_12"
+        load_type: "mep_box"
+        priority: "medium"
+      - task_id: "T2_C2_formwork_to_B18"
+        crane_id: "C2"
+        task_type: "overlap_task"
+        pickup_zone_id: "ground_yard_east"
+        dropoff_zone_id: "tower_b_floor_18"
+        load_type: "formwork_panel"
+        priority: "high"
+      - task_id: "T1_C3_rebar_to_C_roof"
+        crane_id: "C3"
+        task_type: "overlap_task"
+        pickup_zone_id: "ground_yard_west"
+        dropoff_zone_id: "tower_c_roof"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T2_C3_formwork_to_C_roof"
+        crane_id: "C3"
+        task_type: "easy_task"
+        pickup_zone_id: "ground_yard_west"
+        dropoff_zone_id: "tower_c_roof"
+        load_type: "formwork_panel"
+        priority: "medium"
+      - task_id: "T1_C4_mep_to_B18"
+        crane_id: "C4"
+        task_type: "overlap_task"
+        pickup_zone_id: "ground_yard_east"
+        dropoff_zone_id: "tower_b_floor_18"
+        load_type: "mep_box"
+        priority: "high"
+      - task_id: "T2_C4_formwork_to_B18"
+        crane_id: "C4"
+        task_type: "easy_task"
+        pickup_zone_id: "ground_yard_east"
+        dropoff_zone_id: "tower_b_floor_18"
+        load_type: "formwork_panel"
+        priority: "medium"
+    queue_policy:
+      start_mode: "simultaneous"
+      initial_start_jitter_s: [0, 0]
+      inter_task_delay_s: [0, 1]
+    task_type_distribution:
+      easy_task: 1.0
+      overlap_task: 0.0
+      stress_task: 0.0
+    fallback_pickup_z_m: 0.0
+    fallback_dropoff_z_range_m: [36.0, 64.8]
+    attach_delay_s: [0.5, 1.0]
+    release_delay_s: [0.5, 1.0]
+    priority_distribution:
+      low: 0.0
+      medium: 0.625
+      high: 0.375
+    deadline_policy:
+      enabled: true
+      deadline_miss_is_task_failure: false
+    state_machine:
+      align_xy_threshold_m: 2.5
+      attach_xy_threshold_m: 1.5
+      attach_height_threshold_m: 1.0
+      release_xy_threshold_m: 1.8
+      release_height_threshold_m: 1.0
+      attach_speed_threshold:
+        slew_deg_s: 1.0
+        trolley_m_s: 0.25
+        hoist_m_s: 0.25
+      release_speed_threshold:
+        slew_deg_s: 1.0
+        trolley_m_s: 0.25
+        hoist_m_s: 0.25
+      safe_transport_height_m: 58.0
+      lift_clearance_m: 2.0
+      attach_stage_timeout_s: 1200
+      release_stage_timeout_s: 1200
+      task_no_progress_timeout_s: 1200
+      recovery_release_timeout_s: 1200
+      stage_timeout_policy:
+        fail_current_task: true
+        terminate_episode: false
+    recovery:
+      enabled: true
+      policy: "attempt_safe_release"
+      emergency_drop_zones: []
+
+  weather:
+    mode: "constant"
+    wind:
+      base_speed_m_s: 3
+      gust_speed_m_s: 5
+      direction_deg: 90
+    visibility:
+      base_level: "good"
+
+  risk:
+    geometry_envelope:
+      jib_radius_m: 0.75
+      hook_radius_m: 0.5
+      load_radius_m: 1.0
+    thresholds_m:
+      low: 6.0
+      medium: 4.0
+      high: 2.5
+      near_miss: 1.5
+    ttc_threshold_level: "high"
+    wind_safe_distance_factor:
+      enabled: true
+      extra_clearance_per_10m_s_wind_m: 0.5
+
+experiment:
+  schema_version: "1.0"
+  experiment_id: "curated_dense_highrise_ground"
+  scenario_ref: "configs/curated_dense_highrise_ground.yaml"
+  seed: 20260619
+  sim:
+    dt: 0.2
+    duration_s: 7200
+    min_duration_s: 0
+    stop_when_all_tasks_done: true
+    completion_cooldown_s: 2
+    physics_hz: 5
+    controller_hz: 5
+    llm_decision_interval_s: 1.0
+  risk_prompt_mode: "R1"
+  safety_mode: "S1"
+  runtime:
+    mode: "offline_batch"
+    replay_mode: false
+    replay_file: null
+    llm_cache_enabled: true
+  operators:
+    assignment_mode: "random"
+    profile_distribution:
+      normal: 1.0
+      conservative: 0.0
+      aggressive: 0.0
+      novice: 0.0
+      fatigued: 0.0
+  llm:
+    enabled: true
+    provider: "deepseek"
+    model: "deepseek-v4-flash"
+    base_url: "https://api.deepseek.com/v1"
+    api_key: null
+    temperature: 0.2
+    timeout_s: 30
+    max_retries: 1
+    max_consecutive_failures: 10
+    fallback_policy: "neutral_stop"
+    command_duration:
+      default_s: 1.0
+      min_s: 0.5
+      max_s: 3.0
+    scheduling:
+      mode: "offline_wait"
+      stale_command_max_hold_s: 0.5
+      max_concurrent_requests: 4
+    structured_output:
+      mode: "json_object"
+    context:
+      history_mode: "short"
+      recent_decisions_full: 8
+      include_task_history_summary: true
+      include_completed_task_summary: true
+      include_failed_request_history: true
+      include_risk_event_history: true
+      summarizer:
+        mode: "none"
+        provider: "same_as_operator"
+        fallback: "rule"
+        trigger:
+          every_n_decisions: 20
+          context_over_tokens: 12000
+  output:
+    run_root: "runs/curated-dense-highrise-ground"
+    save_visual_frames: true
+    save_parquet: true
+    save_replay: true

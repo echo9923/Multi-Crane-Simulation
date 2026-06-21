@@ -134,3 +134,28 @@ export interface ExperimentSummary {
   durationS: number;
   llmProvider: string;
 }
+
+export interface ScenarioMetadata {
+  scenarioId: string;
+  name: string;
+  purpose: string;
+  buildingCount: number;
+  craneCount: number;
+  taskCount: number;
+  hasElevatedCrane: boolean;
+  primaryCrossRisk: string;
+}
+
+export interface ScenarioTaskPreview {
+  taskId: string;
+  craneId: string;
+  pickupZoneId: string;
+  dropoffZoneId: string;
+  loadType: string;
+  priority: string;
+  pickupHeightM: number | null;
+  dropoffHeightM: number | null;
+  reachabilityStatus: string;
+  blockingReasons: string[];
+  source: "yaml" | "validation";
+}

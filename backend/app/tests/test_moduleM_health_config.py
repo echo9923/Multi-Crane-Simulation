@@ -68,6 +68,42 @@ def test_validate_scenario_accepts_valid_demo_config() -> None:
     assert payload["data"]["errors"] == []
 
 
+def test_validate_scenario_returns_curated_manual_task_report() -> None:
+    client = _client()
+    repo_root = Path(__file__).resolve().parents[3]
+
+    response = client.post(
+        "/scenarios/validate",
+        json={
+            "config_path": str(
+                repo_root / "configs" / "curated_dense_highrise_ground.yaml"
+            ),
+            "overrides": {
+                "experiment": {
+                    "llm": {
+                        "provider": "mock",
+                        "model": "mock-curated",
+                        "api_key_env": None,
+                        "api_key": None,
+                    }
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    validation = payload["data"]["manual_task_validation"]
+    assert payload["data"]["valid"] is True
+    assert validation["valid"] is True
+    assert validation["task_count"] == 8
+    assert validation["blocking_reasons"] == []
+    assert len(validation["task_reports"]) == 8
+    assert validation["task_reports"][0]["task_id"] == "T1_C1_rebar_to_A10"
+    assert validation["task_reports"][0]["pickup_reachable"] is True
+    assert validation["task_reports"][0]["dropoff_reachable"] is True
+
+
 def test_validate_scenario_resolves_relative_config_path_from_project_root(
     tmp_path: Path,
 ) -> None:
@@ -330,3 +366,71 @@ def test_validate_scenario_rejects_unreachable_manual_task_height() -> None:
     assert payload["details"]["config_error_code"] == "TASK_E_001"
     assert payload["details"]["reason"] == "point_height_unreachable"
     assert payload["details"]["task_id"] == "T_TOO_HIGH"
+
+
+def test_validate_scenario_rejects_unreachable_manual_task_transport_height() -> None:
+    client = _client()
+    scenario = load_fixture("scenario_valid.yaml")
+    experiment = load_fixture("experiment_valid.yaml")
+    experiment["llm"]["provider"] = "mock"
+    experiment["llm"]["api_key_env"] = None
+    scenario["layout"]["mode"] = "manual"
+    scenario["layout"]["num_cranes"] = 1
+    scenario["cranes"] = [
+        {
+            "crane_id": "C1",
+            "model_id": "generic_flat_top_55m",
+            "base": [0.0, 0.0, 0.0],
+            "mast_height_m": 40.0,
+            "theta_init_deg": 0.0,
+            "slew": {"mode": "continuous"},
+        }
+    ]
+    scenario["site"]["forbidden_zones"] = []
+    scenario["site"]["material_zones"] = [
+        {
+            "zone_id": "ground",
+            "type": "box",
+            "center": [12.0, 0.0, 0.0],
+            "size": [6.0, 6.0, 0.4],
+            "surface_z_m": 0.0,
+            "load_types": ["rebar_bundle"],
+        }
+    ]
+    scenario["site"]["work_zones"] = [
+        {
+            "zone_id": "reachable_floor",
+            "type": "box",
+            "center": [18.0, 0.0, 24.0],
+            "size": [6.0, 6.0, 0.4],
+            "surface_z_m": 24.0,
+            "accepted_load_types": ["rebar_bundle"],
+        }
+    ]
+    scenario["tasks"]["generation_mode"] = "manual"
+    scenario["tasks"]["state_machine"]["safe_transport_height_m"] = 44.0
+    scenario["tasks"]["manual_tasks"] = [
+        {
+            "task_id": "T_TRANSPORT_TOO_HIGH",
+            "crane_id": "C1",
+            "task_type": "easy_task",
+            "pickup_zone_id": "ground",
+            "dropoff_zone_id": "reachable_floor",
+            "load_type": "rebar_bundle",
+            "priority": "medium",
+        }
+    ]
+
+    response = client.post(
+        "/scenarios/validate",
+        json={"scenario": scenario, "experiment": experiment},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "M_E_CONFIG_INVALID"
+    assert payload["message"] == "task point hook target height is unreachable"
+    assert payload["details"]["reason"] == "point_height_unreachable"
+    assert payload["details"]["task_id"] == "T_TRANSPORT_TOO_HIGH"
+    reports = payload["details"]["manual_task_validation"]["task_reports"]
+    assert reports[0]["blocking_reasons"] == ["transport_out_of_hook_height"]

@@ -78,9 +78,13 @@ def test_module_a_provider_config_supports_four_provider_names() -> None:
 def test_sample_resolved_config_and_metadata_do_not_persist_full_key(tmp_path: Path) -> None:
     scenario = load_fixture("scenario_valid.yaml")
     experiment = load_fixture("experiment_valid.yaml")
-    experiment["llm"]["api_key"] = "sk-inline-secret-123456"
+    experiment["llm"]["api_key"] = None
+    experiment["llm"]["api_key_env"] = None
     experiment_config = ExperimentConfig.model_validate(experiment)
-    provider_resolution = resolve_provider_secrets(experiment_config.llm)
+    provider_resolution = resolve_provider_secrets(
+        experiment_config.llm,
+        local_api_key="sk-local-secret-123456",
+    )
     resolved = resolve_config(
         scenario,
         experiment_config,
@@ -93,7 +97,7 @@ def test_sample_resolved_config_and_metadata_do_not_persist_full_key(tmp_path: P
     )
     persisted = "\n".join(path.read_text(encoding="utf-8") for path in workspace.created_files)
 
-    assert "sk-inline-secret-123456" not in persisted
+    assert "sk-local-secret-123456" not in persisted
     assert "key_masked" in persisted
 
 

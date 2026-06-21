@@ -60,6 +60,13 @@ def test_save_delete_and_list_provider_secret_masks_key(tmp_path: Path) -> None:
     assert resolve_local_api_key(tmp_path, provider=LLMProviderName.SILICONFLOW) is None
 
 
+def test_provider_summaries_do_not_advertise_environment_key_names(tmp_path: Path) -> None:
+    summaries = list_provider_summaries(tmp_path)
+
+    assert summaries
+    assert all(item.api_key_env is None for item in summaries)
+
+
 def test_provider_connectivity_uses_temp_key_and_reports_models(tmp_path: Path) -> None:
     client = FakeModelsClient(
         200,
@@ -100,6 +107,21 @@ def test_provider_connectivity_can_use_saved_key_without_leaking_it(tmp_path: Pa
     assert result.status_code == 401
     assert result.message == "authentication failed"
     assert "sf-saved-secret-123456" not in json.dumps(result.__dict__, sort_keys=True)
+
+
+def test_provider_connectivity_does_not_read_environment_key(tmp_path: Path) -> None:
+    client = FakeModelsClient(200, {"data": [{"id": "ignored"}]})
+
+    result = run_provider_connectivity(
+        tmp_path,
+        provider=LLMProviderName.DEEPSEEK,
+        env={"DEEPSEEK_API_KEY": "sk-env-secret-123456"},
+        http_client=client,
+    )
+
+    assert result.ok is False
+    assert result.message == "missing API key"
+    assert client.calls == []
 
 
 def test_provider_connectivity_reports_404_and_timeout(tmp_path: Path) -> None:

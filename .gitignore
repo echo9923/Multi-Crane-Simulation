@@ -25,3 +25,7 @@ pytest-cache-files-*
 
 # frontend release-data probe artifacts
 frontend/release-data-probe/
+
+# curated scenario handoff/package artifacts
+curated-scenarios-changes-*.zip
+package-curated-scenarios-*/

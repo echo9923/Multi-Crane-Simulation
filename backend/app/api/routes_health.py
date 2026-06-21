@@ -10,6 +10,10 @@ from backend.app.schemas.config import DatasetConfig, ExperimentConfig, Scenario
 from backend.app.schemas.crane import CraneConfig
 from backend.app.schemas.errors import ConfigError
 from backend.app.api.production_runner import scenario_config_from_resolved
+from backend.app.sim.manual_task_validation import (
+    ManualTaskValidationReport,
+    validate_manual_task_plan,
+)
 from backend.app.sim.task_generation import TaskGenerationError, generate_task_queues
 
 from .config_paths import resolve_config_path_for_request
@@ -47,10 +51,15 @@ def health() -> ApiResponse:
 @router.post("/scenarios/validate", response_model=ApiResponse)
 def validate_scenario(http_request: Request, request: ScenarioValidateRequest) -> ApiResponse:
     resolved = _resolve_request_config(request, http_request.app)
-    _validate_task_generation(resolved)
+    manual_task_validation = _validate_task_generation(resolved)
     result = ScenarioValidateResult(
         valid=True,
         resolved_config_hash=resolved.resolved_config_hash,
+        manual_task_validation=(
+            manual_task_validation.model_dump(mode="json")
+            if manual_task_validation is not None
+            else None
+        ),
     )
     return ApiResponse(data=result.model_dump(mode="json"))
 
@@ -132,15 +141,18 @@ def _inline_secret_values(experiment: Optional[dict[str, Any]]) -> list[str]:
     return [value] if isinstance(value, str) and value else []
 
 
-def _validate_task_generation(resolved_config: Any) -> None:
+def _validate_task_generation(resolved_config: Any) -> Optional[ManualTaskValidationReport]:
     try:
         scenario = scenario_config_from_resolved(resolved_config)
         if scenario.tasks.generation_mode.value != "manual":
-            return
+            return None
         crane_configs = [
             CraneConfig.model_validate(crane)
             for crane in resolved_config.layout.resolved_cranes
         ]
+        validation = validate_manual_task_plan(scenario, crane_configs)
+        if not validation.valid:
+            _raise_manual_task_validation_error(validation)
         result = generate_task_queues(
             scenario,
             crane_configs,
@@ -153,6 +165,7 @@ def _validate_task_generation(resolved_config: Any) -> None:
                 reason="no_tasks_generated",
                 details={"num_cranes": len(crane_configs)},
             )
+        return validation
     except TaskGenerationError as exc:
         raise config_api_error_from_config_error(
             ConfigError(
@@ -168,6 +181,85 @@ def _validate_task_generation(resolved_config: Any) -> None:
                 },
             )
         ) from exc
+
+
+def _raise_manual_task_validation_error(
+    validation: ManualTaskValidationReport,
+) -> None:
+    first_failure = next(
+        (
+            report
+            for report in validation.task_reports
+            if report.blocking_reasons
+        ),
+        None,
+    )
+    first_reason = (
+        first_failure.blocking_reasons[0]
+        if first_failure is not None and first_failure.blocking_reasons
+        else "manual_task_validation_failed"
+    )
+    error_code = "TASK_E_002" if first_reason == "load_over_capacity" else "TASK_E_001"
+    reason = _legacy_task_error_reason(first_reason)
+    raise config_api_error_from_config_error(
+        ConfigError(
+            error_code=error_code,
+            message=_manual_task_validation_message(first_reason),
+            field_path="scenario.tasks.manual_tasks",
+            source_file=None,
+            hint="Fix task zones, load types, crane reach, or manual_tasks before startup.",
+            details={
+                "config_kind": "scenario",
+                "reason": reason,
+                "task_id": first_failure.task_id if first_failure is not None else None,
+                "manual_task_validation": validation.model_dump(mode="json"),
+            },
+        )
+    )
+
+
+def _legacy_task_error_reason(reason: str) -> str:
+    if reason in {
+        "pickup_out_of_hook_height",
+        "dropoff_out_of_hook_height",
+        "transport_out_of_hook_height",
+    }:
+        return "point_height_unreachable"
+    if reason in {"pickup_out_of_radius", "dropoff_out_of_radius"}:
+        return "point_outside_radius"
+    if reason == "pickup_load_type_not_supported":
+        return "pickup_zone_rejects_load_type"
+    if reason == "dropoff_load_type_not_accepted":
+        return "dropoff_zone_rejects_load_type"
+    if reason == "unknown_crane_id":
+        return "unknown_crane"
+    if reason in {"unknown_pickup_zone", "unknown_dropoff_zone"}:
+        return "unknown_zone"
+    if reason == "load_over_capacity":
+        return "over_capacity"
+    return reason
+
+
+def _manual_task_validation_message(reason: str) -> str:
+    if reason in {
+        "pickup_out_of_hook_height",
+        "dropoff_out_of_hook_height",
+        "transport_out_of_hook_height",
+    }:
+        return "task point hook target height is unreachable"
+    if reason in {"pickup_out_of_radius", "dropoff_out_of_radius"}:
+        return "task point is outside crane radius"
+    if reason in {"pickup_load_type_not_supported", "dropoff_load_type_not_accepted"}:
+        return "task load type is not supported by zone"
+    if reason == "unknown_crane_id":
+        return "unknown crane id for manual task template"
+    if reason in {"unknown_pickup_zone", "unknown_dropoff_zone"}:
+        return "unknown zone id"
+    if reason == "unknown_load_type":
+        return "unknown load type"
+    if reason == "load_over_capacity":
+        return "task load is over crane capacity"
+    return "manual task plan validation failed"
 
 
 __all__ = ["router"]

@@ -35,6 +35,23 @@ def test_list_desktop_templates_reads_yaml_files(tmp_path: Path) -> None:
     assert templates[0].experiment_id == "demo_exp"
 
 
+def test_list_desktop_templates_includes_curated_scenarios() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+
+    templates = list_desktop_templates(project_root=repo_root)
+    by_id = {template.template_id: template for template in templates}
+
+    assert {
+        "curated_dense_highrise_ground",
+        "curated_elevated_crane_transfer",
+        "curated_complex_cross_lifting",
+    }.issubset(by_id)
+    assert by_id["curated_dense_highrise_ground"].scenario_id == "curated_dense_highrise_ground"
+    assert by_id["curated_elevated_crane_transfer"].scenario_id == "curated_elevated_crane_transfer"
+    assert by_id["curated_complex_cross_lifting"].scenario_id == "curated_complex_cross_lifting"
+    assert by_id["curated_complex_cross_lifting"].description
+
+
 def test_render_template_yaml_applies_core_overrides(tmp_path: Path) -> None:
     config_dir = tmp_path / "configs"
     config_dir.mkdir()

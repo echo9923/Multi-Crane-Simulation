@@ -6,11 +6,80 @@ import json
 import zipfile
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
+from backend.app.api.desktop_llm_settings import save_provider_secret
 from backend.app.main import create_app
+from backend.app.schemas.enums import LLMProviderName
 from backend.app.schemas.scheduler import EpisodeStatus
 from backend.app.tests.test_config_schema import FIXTURE_DIR
+
+
+@pytest.fixture(autouse=True)
+def _local_deepseek_secret_and_fake_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.sim.llm_provider import DeepSeekProvider
+
+    monkeypatch.chdir(tmp_path)
+    save_provider_secret(
+        tmp_path,
+        provider=LLMProviderName.DEEPSEEK,
+        api_key="sk-test-secret-123456",
+    )
+
+    def fake_init(self, *, http_client=None):
+        self._http_client = http_client or _FakeChatHTTPClient()
+
+    monkeypatch.setattr(DeepSeekProvider, "__init__", fake_init)
+
+
+class _FakeChatHTTPResponse:
+    status_code = 200
+
+    def json(self) -> dict:
+        return {
+            "id": "fake-chat-response",
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "left_joystick": {
+                                    "slew": {"direction": "left", "gear": 1},
+                                    "trolley": {"direction": "out", "gear": 1},
+                                },
+                                "right_joystick": {
+                                    "hoist": {"direction": "neutral", "gear": 0}
+                                },
+                                "deadman_pressed": True,
+                                "emergency_stop": False,
+                                "horn": False,
+                                "command_duration_s": 1.0,
+                                "task_action": "none",
+                                "attention_target": "current_target",
+                                "confidence": 0.75,
+                                "reason": "test fake provider command",
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+        }
+
+
+class _FakeChatHTTPClient:
+    def post(self, url: str, *, headers: dict, json: dict, timeout: float):
+        assert headers.get("Authorization") == "Bearer sk-test-secret-123456"
+        return _FakeChatHTTPResponse()
 
 
 def _short_payload(
@@ -54,8 +123,9 @@ def _short_payload(
                     "llm_decision_interval_s": 0.2,
                 },
                 "llm": {
-                    "provider": "mock",
-                    "model": "mock-api",
+                    "provider": "deepseek",
+                    "model": "deepseek-chat",
+                    "base_url": "https://api.deepseek.com/v1",
                     "api_key_env": None,
                     "api_key": None,
                     "timeout_s": 1,
@@ -102,34 +172,26 @@ def test_start_episode_defaults_to_production_runner_and_downloads_full_archive(
     assert "data/trajectories.parquet" in names
 
 
-def test_start_episode_runner_local_keeps_fast_smoke_runner(tmp_path: Path) -> None:
+def test_start_episode_runner_local_is_rejected_for_public_api(tmp_path: Path) -> None:
     client = TestClient(create_app())
 
     response = client.post("/episodes/start", json=_short_payload(tmp_path, runner="local"))
 
-    assert response.status_code == 200, response.text
-    run_dir = Path(response.json()["data"]["run_dir"])
-    assert (run_dir / "visual" / "frames.jsonl").is_file()
-    assert not (run_dir / "data" / "trajectories.parquet").is_file()
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "M_E_CONFIG_INVALID"
+    assert "production" in payload["message"]
 
 
-def test_start_episode_runner_local_records_site_payload_in_visual_frame(
+def test_start_episode_runner_local_never_records_site_payload_via_public_api(
     tmp_path: Path,
 ) -> None:
     client = TestClient(create_app())
 
     response = client.post("/episodes/start", json=_short_payload(tmp_path, runner="local"))
 
-    assert response.status_code == 200, response.text
-    run_dir = Path(response.json()["data"]["run_dir"])
-    first_frame = json.loads(
-        (run_dir / "visual" / "frames.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()[0]
-    )
-    assert first_frame["site"]["boundary"]
-    assert first_frame["site"]["material_zones"]
-    assert first_frame["site"]["work_zones"]
+    assert response.status_code == 422
+    assert not (tmp_path / "E-api-local").exists()
 
 
 def test_start_episode_default_production_broadcasts_live_sim_frame(

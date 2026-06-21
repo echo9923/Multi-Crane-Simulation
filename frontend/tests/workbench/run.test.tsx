@@ -28,11 +28,11 @@ function errorEnvelope(code: string, message: string) {
 
 const minimalYaml = [
   "scenario:",
-  "  scenario_id: demo_scenario",
+  "  scenario_id: curated_dense_highrise_ground",
   "  layout:",
   "    num_cranes: 4",
   "experiment:",
-  "  experiment_id: demo_experiment",
+  "  experiment_id: curated_dense_highrise_ground",
   "  sim:",
   "    duration_s: 7200",
   "  llm:",
@@ -41,11 +41,11 @@ const minimalYaml = [
 
 const yamlWithApiKey = [
   "scenario:",
-  "  scenario_id: demo_scenario",
+  "  scenario_id: curated_dense_highrise_ground",
   "  layout:",
   "    num_cranes: 4",
   "experiment:",
-  "  experiment_id: demo_experiment",
+  "  experiment_id: curated_dense_highrise_ground",
   "  sim:",
   "    duration_s: 7200",
   "  llm:",
@@ -80,11 +80,31 @@ function installFetchMock(
     validateResponse?: Promise<Response>;
     stopResponse?: Promise<Response> | (() => Promise<Response>);
     stateAfterStop?: EpisodeStateResponse;
+    providerHasSavedKey?: boolean;
+    provider?: string;
   } = {},
 ) {
   let currentState: EpisodeStateResponse = { ...runningState };
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("/desktop/llm/providers")) {
+      return ok({
+        items: [
+          {
+            provider: options.provider ?? "deepseek",
+            display_name: "DeepSeek",
+            default_base_url: "https://api.deepseek.com/v1",
+            default_model: "deepseek-chat",
+            api_key_env: null,
+            has_saved_key: options.providerHasSavedKey ?? true,
+            key_masked: (options.providerHasSavedKey ?? true) ? "ds-****1234" : null,
+            updated_at: (options.providerHasSavedKey ?? true)
+              ? "2026-06-20T00:00:00Z"
+              : null,
+          },
+        ],
+      });
+    }
     if (url.includes("/scenarios/validate")) {
       if (options.validateResponse) return options.validateResponse;
       return ok(
@@ -159,20 +179,61 @@ function fetchCallCount(fetchMock: ReturnType<typeof vi.mocked<typeof fetch>>, p
   return fetchMock.mock.calls.filter(([url]) => String(url).includes(path)).length;
 }
 
+function markValidationReady() {
+  useWorkbenchStore.getState().setValidation({
+    valid: true,
+    resolved_config_hash: "hash",
+    manual_task_validation: {
+      valid: true,
+      task_count: 1,
+      expected_task_count: 1,
+      task_reports: [],
+      warnings: [],
+      blocking_reasons: [],
+    },
+  });
+}
+
+async function clickStartWhenReady() {
+  await waitFor(() => {
+    expect(screen.getByText(/API Key .*配置/)).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "开始运行" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+  fireEvent.click(screen.getByRole("button", { name: "开始运行" }));
+}
+
 describe("workbench run controls", () => {
   beforeEach(() => {
     useStore.getState().reset();
     useWorkbenchStore.getState().resetWorkbench();
     useWorkbenchStore.getState().setYamlText(minimalYaml);
+    markValidationReady();
     vi.restoreAllMocks();
     installFetchMock();
+  });
+
+  it("does not start when a real provider only has api_key_env but no saved local key", async () => {
+    vi.restoreAllMocks();
+    const fetchMock = installFetchMock({ providerHasSavedKey: false });
+    useWorkbenchStore.getState().setFormPatch({ llmApiKeyEnv: "DEEPSEEK_API_KEY" });
+
+    renderRunPage();
+
+    await waitFor(() => expect(screen.getByText("API Key 未配置")).toBeTruthy());
+    const startButton = screen.getByRole("button", { name: "开始运行" }) as HTMLButtonElement;
+    expect(startButton.disabled).toBe(true);
+    fireEvent.click(startButton);
+    expect(fetchCallCount(fetchMock, "/episodes/start")).toBe(0);
   });
 
   it("starts an interactive server episode and syncs live runtime state", async () => {
     const fetchMock = vi.mocked(fetch);
     renderRunPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    expect(screen.queryByRole("button", { name: "校验" })).toBeNull();
+    await clickStartWhenReady();
 
     await waitFor(() => {
       expect(screen.getByText("E1")).toBeTruthy();
@@ -189,15 +250,15 @@ describe("workbench run controls", () => {
     expect(body.autostart).toBe(true);
     expect(body.config_path).toBeUndefined();
     expect(body.scenario).toMatchObject({
-      scenario_id: "demo_scenario",
+      scenario_id: "curated_dense_highrise_ground",
       layout: { num_cranes: 4 },
     });
     expect(body.experiment).toMatchObject({
-      experiment_id: "demo_experiment",
+      experiment_id: "curated_dense_highrise_ground",
       sim: { duration_s: 7200 },
       llm: { provider: "deepseek" },
     });
-    expect(screen.queryByText(/Config changed after this Episode started/)).toBeNull();
+    expect(screen.queryByText(/当前配置已在此 Episode 启动后发生变化/)).toBeNull();
   });
 
   it("shows completed episodes as terminal instead of stale config control errors", async () => {
@@ -220,43 +281,32 @@ describe("workbench run controls", () => {
 
     renderRunPage();
 
-    expect(screen.queryByText(/Config changed after this Episode started/)).toBeNull();
+    expect(screen.queryByText(/当前配置已在此 Episode 启动后发生变化/)).toBeNull();
     expect(screen.getByText(/运行已完成/)).toBeTruthy();
     expect(screen.getAllByText("completed").length).toBeGreaterThan(0);
   });
 
-  it("scrubs secrets for validation but preserves local start secrets", async () => {
+  it("removes inline and environment key fields from the start request", async () => {
     const fetchMock = vi.mocked(fetch);
     useWorkbenchStore.getState().setYamlText(yamlWithApiKey);
     renderRunPage();
 
-    fireEvent.click(screen.getByRole("button", { name: /校验|鏍￠獙/ }));
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/scenarios/validate"),
-        expect.anything(),
-      );
-    });
-    const validateBody = requestBodyFor(fetchMock, "/scenarios/validate");
-    expect(
-      ((validateBody.experiment as Record<string, unknown>).llm as Record<string, unknown>)
-        .api_key,
-    ).toBe("***");
-
-    fireEvent.click(screen.getByRole("button", { name: /启动|鍚姩/ }));
+    await clickStartWhenReady();
     await screen.findByText("frame 3");
     const startBody = requestBodyFor(fetchMock, "/episodes/start");
-    expect(
-      ((startBody.experiment as Record<string, unknown>).llm as Record<string, unknown>)
-        .api_key,
-    ).toBe("sk-real-secret-123456");
+    const llm = ((startBody.experiment as Record<string, unknown>).llm ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(llm.api_key).toBeUndefined();
+    expect(llm.api_key_env).toBeUndefined();
   });
 
   it("supports pause resume and stop controls with state refreshes", async () => {
     const fetchMock = vi.mocked(fetch);
     renderRunPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    await clickStartWhenReady();
     await screen.findByText("frame 3");
 
     fireEvent.click(screen.getByRole("button", { name: "暂停" }));
@@ -302,13 +352,18 @@ describe("workbench run controls", () => {
     const fetchMock = installFetchMock({ startResponse: pendingStart });
     renderRunPage();
 
-    const startButton = screen.getByRole("button", { name: "启动" }) as HTMLButtonElement;
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "开始运行" }) as HTMLButtonElement).disabled).toBe(
+        false,
+      );
+    });
+    const startButton = screen.getByRole("button", { name: "开始运行" }) as HTMLButtonElement;
     fireEvent.click(startButton);
     fireEvent.click(startButton);
 
     await waitFor(() => {
       expect(fetchCallCount(fetchMock, "/episodes/start")).toBe(1);
-      for (const label of ["校验", "启动", "暂停", "继续", "停止", "刷新状态"]) {
+      for (const label of ["开始运行", "暂停", "继续", "停止", "刷新状态"]) {
         expect(
           (screen.getByRole("button", { name: label }) as HTMLButtonElement)
             .disabled,
@@ -329,7 +384,7 @@ describe("workbench run controls", () => {
     const fetchMock = vi.mocked(fetch);
     renderRunPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    await clickStartWhenReady();
     await screen.findByText("frame 3");
     expect(useStore.getState().mode).toBe("live");
     expect(useStore.getState().episodeId).toBe("E1");
@@ -365,7 +420,7 @@ describe("workbench run controls", () => {
     });
     renderRunPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    await clickStartWhenReady();
     await screen.findByText("frame 3");
     fireEvent.click(screen.getByRole("button", { name: "停止" }));
 
@@ -382,7 +437,7 @@ describe("workbench run controls", () => {
     });
     renderRunPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    await clickStartWhenReady();
     await screen.findByText("frame 3");
     fireEvent.click(screen.getByRole("button", { name: "停止" }));
 
@@ -397,14 +452,15 @@ describe("workbench run controls", () => {
     expect(useStore.getState().episodeId).toBe("E1");
   });
 
-  it("shows an alert and does not start when YAML parsing fails", async () => {
+  it("keeps start disabled and does not parse-start when the selected scene is invalid", async () => {
     const fetchMock = vi.mocked(fetch);
     useWorkbenchStore.getState().setYamlText("scenario:\n  - broken: [");
     renderRunPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    const startButton = screen.getByRole("button", { name: "开始运行" }) as HTMLButtonElement;
+    expect(startButton.disabled).toBe(true);
+    fireEvent.click(startButton);
 
-    expect(await screen.findByRole("alert")).toBeTruthy();
     expect(fetchCallCount(fetchMock, "/episodes/start")).toBe(0);
   });
 
@@ -415,49 +471,21 @@ describe("workbench run controls", () => {
     });
     renderRunPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    await clickStartWhenReady();
 
     expect((await screen.findByRole("alert")).textContent).toContain(
       "M_E_CONFIG_INVALID: malformed",
     );
   });
 
-  it("validates YAML and shows module pipeline entries", async () => {
-    const fetchMock = vi.mocked(fetch);
+  it("shows module pipeline entries without exposing a validation action", () => {
     renderRunPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "校验" }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/scenarios/validate"),
-        expect.anything(),
-      );
-    });
+    expect(screen.queryByRole("button", { name: "校验" })).toBeNull();
     expect(screen.getByText("校验通过")).toBeTruthy();
     expect(useWorkbenchStore.getState().validation?.valid).toBe(true);
     for (const moduleId of ["C", "D", "E", "F", "G", "H", "I", "L"]) {
       expect(screen.getByText(`Module ${moduleId}`)).toBeTruthy();
     }
-  });
-
-  it("shows validation error details when backend validation fails", async () => {
-    vi.restoreAllMocks();
-    const fetchMock = installFetchMock({
-      validateResponse: errorEnvelope("M_E_CONFIG_INVALID", "bad boundary"),
-    });
-    renderRunPage();
-
-    fireEvent.click(screen.getByRole("button", { name: "校验" }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/scenarios/validate"),
-        expect.anything(),
-      );
-    });
-    expect(screen.getByRole("alert").textContent).toContain(
-      "M_E_CONFIG_INVALID: bad boundary",
-    );
   });
 });

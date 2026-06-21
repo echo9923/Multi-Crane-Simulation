@@ -7,14 +7,22 @@ import { DownloadBar } from "@/components/DownloadBar";
 import { craneColorCss } from "@/ui/colors";
 
 export function LeftControls() {
+  return (
+    <div>
+      <LoadEpisode />
+      <DownloadBar />
+      <ObservationControls />
+    </div>
+  );
+}
+
+export function ObservationControls() {
   const ui = useStore((s) => s.ui);
   const setUI = useStore((s) => s.setUI);
   const cranes = useStore((s) => s.latestFrame?.cranes ?? s.manifest?.cranes ?? []);
 
   return (
     <div>
-      <LoadEpisode />
-      <DownloadBar />
       <section className="panel" data-testid="display-toggles">
         <h3>显示</h3>
         <div className="panel-body">

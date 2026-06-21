@@ -153,7 +153,7 @@ export function DataExportPage() {
   return (
     <section className="workbench-page">
       <header className="workbench-page-header">
-        <h1>数据/导出</h1>
+        <h1>数据导出</h1>
         <p className="muted">汇总 Episode 数据、日志和导出产物。</p>
       </header>
 

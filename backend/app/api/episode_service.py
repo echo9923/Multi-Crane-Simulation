@@ -14,7 +14,7 @@ from backend.app.core.config_loader import apply_overrides, load_demo_config
 from backend.app.core.config_resolver import resolve_config
 from backend.app.core.secret_resolver import resolve_provider_secrets
 from backend.app.api.desktop_llm_settings import resolve_local_api_key
-from backend.app.schemas.enums import RuntimeMode
+from backend.app.schemas.enums import LLMProviderName, RuntimeMode
 from backend.app.sim.task_generation import TaskGenerationError
 from backend.app.schemas.config import DatasetConfig, ExperimentConfig, ScenarioConfig
 from backend.app.schemas.recorder import SimFrame
@@ -26,12 +26,18 @@ from .schemas import (
     EpisodeControlResponse,
     EpisodeStartRequest,
     EpisodeStartResponse,
+    M_E_CONFIG_INVALID,
     M_E_EPISODE_NOT_FOUND,
     M_E_EPISODE_START_FAILED,
     M_E_INVALID_EPISODE_STATE,
 )
 
 RunnerFactory = Callable[..., Any]
+DESKTOP_START_PROVIDERS = {
+    LLMProviderName.DEEPSEEK,
+    LLMProviderName.MINIMAX,
+    LLMProviderName.SILICONFLOW,
+}
 
 
 @dataclass
@@ -77,6 +83,7 @@ class EpisodeService:
 
     def start_episode(self, request: EpisodeStartRequest) -> EpisodeStartResponse:
         episode_id = request.episode_id or _new_episode_id()
+        _validate_public_start_request(request)
         with self._handles_lock:
             if episode_id in self.handles:
                 raise ApiException(
@@ -345,14 +352,17 @@ class EpisodeService:
                 )
             if experiment is None:
                 raise ValueError("episode start config must include experiment section")
+            _validate_public_start_experiment(experiment)
+            provider_summary = _provider_summary_for_desktop(
+                experiment,
+                project_root=self.data_root or self.project_root,
+                require_start_key=True,
+            )
             return resolve_config(
                 scenario,
                 experiment,
                 dataset,
-                provider_summary=_provider_summary_for_desktop(
-                    experiment,
-                    project_root=self.data_root or self.project_root,
-                ),
+                provider_summary=provider_summary,
             )
         except ApiException:
             raise
@@ -368,6 +378,33 @@ class EpisodeService:
 
 def _new_episode_id() -> str:
     return f"E-{uuid.uuid4().hex[:12]}"
+
+
+def _validate_public_start_request(request: EpisodeStartRequest) -> None:
+    if request.runner not in (None, "production"):
+        raise ApiException(
+            status_code=422,
+            code=M_E_CONFIG_INVALID,
+            message="普通启动入口只允许 production runner。",
+            details={"field_path": "runner", "runner": request.runner},
+        )
+
+
+def _validate_public_start_experiment(experiment: ExperimentConfig) -> None:
+    provider = experiment.llm.provider
+    if provider not in DESKTOP_START_PROVIDERS:
+        raise ApiException(
+            status_code=422,
+            code=M_E_CONFIG_INVALID,
+            message=(
+                f"普通启动入口不允许 provider {provider.value}。"
+                "请选择 DeepSeek、MiniMax 或 SiliconFlow 并保存本机 API Key。"
+            ),
+            details={
+                "field_path": "experiment.llm.provider",
+                "provider": provider.value,
+            },
+        )
 
 
 def _has_inline_start_config(request: EpisodeStartRequest) -> bool:
@@ -608,12 +645,17 @@ def _provider_summary_for_desktop(
     experiment: ExperimentConfig,
     *,
     project_root: Optional[Path],
+    require_start_key: bool = False,
 ) -> Any:
     if project_root is None:
         return None
     llm = experiment.llm
     local_api_key = resolve_local_api_key(project_root, provider=llm.provider)
-    return resolve_provider_secrets(llm, local_api_key=local_api_key).persisted_summary
+    llm_for_start = llm.model_copy(update={"enabled": True}) if require_start_key else llm
+    return resolve_provider_secrets(
+        llm_for_start,
+        local_api_key=local_api_key,
+    ).persisted_summary
 
 
 def local_runner_factory(

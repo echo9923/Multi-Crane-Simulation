@@ -37,8 +37,38 @@ export interface ScenarioValidateRequest {
 }
 
 export interface ScenarioValidateResult {
-  valid: true;
+  valid: boolean;
   resolved_config_hash: string | null;
+  manual_task_validation?: ManualTaskValidationReport | null;
+  warnings?: Array<Record<string, unknown>>;
+  errors?: ApiError[];
+}
+
+export interface ManualTaskValidationTaskReport {
+  task_id: string;
+  crane_id: string | null;
+  pickup_zone_id: string;
+  dropoff_zone_id: string;
+  load_type: string;
+  priority: string;
+  pickup_reachable: boolean;
+  dropoff_reachable: boolean;
+  pickup_radius_m?: number | null;
+  dropoff_radius_m?: number | null;
+  pickup_height_m?: number | null;
+  dropoff_height_m?: number | null;
+  required_transport_height_m?: number | null;
+  capacity_margin_t?: number | null;
+  blocking_reasons: string[];
+}
+
+export interface ManualTaskValidationReport {
+  valid: boolean;
+  task_count: number;
+  expected_task_count?: number | null;
+  task_reports: ManualTaskValidationTaskReport[];
+  warnings?: Array<Record<string, unknown>>;
+  blocking_reasons?: string[];
 }
 
 export interface EpisodeStateResponse {

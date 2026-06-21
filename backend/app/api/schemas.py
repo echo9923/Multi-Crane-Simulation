@@ -101,6 +101,7 @@ class ScenarioValidateRequest(ApiBaseModel):
 class ScenarioValidateResult(ApiBaseModel):
     valid: bool
     resolved_config_hash: Optional[str] = None
+    manual_task_validation: Optional[dict[str, Any]] = None
     warnings: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[ApiError] = Field(default_factory=list)
 

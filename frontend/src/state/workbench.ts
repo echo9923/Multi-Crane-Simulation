@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   ScenarioValidateResult,
   DesktopTemplate,
+  DesktopLLMProviderSummary,
   EpisodeStartResponse,
   EpisodeStateResponse,
 } from "@/types/api";
@@ -21,6 +22,7 @@ export interface WorkbenchState {
   configRevision: number;
   currentEpisodeConfigRevision: number | null;
   currentEpisodeStale: boolean;
+  providerSummaries: DesktopLLMProviderSummary[];
   busy: boolean;
   setTemplates(items: DesktopTemplate[]): void;
   setTemplate(id: string | null): void;
@@ -29,6 +31,8 @@ export interface WorkbenchState {
   setValidation(result: ScenarioValidateResult | null, error?: string | null): void;
   setCurrentEpisode(result: EpisodeStartResponse | null): void;
   setEpisodeState(result: EpisodeStateResponse | null): void;
+  setProviderSummaries(items: DesktopLLMProviderSummary[]): void;
+  clearCurrentEpisode(): void;
   setBusy(busy: boolean): void;
   resetWorkbench(): void;
 }
@@ -48,6 +52,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   configRevision: 0,
   currentEpisodeConfigRevision: null,
   currentEpisodeStale: false,
+  providerSummaries: [],
   busy: false,
   setTemplates: (items) => set({ templates: items }),
   setTemplate: (id) => set({ selectedTemplateId: id }),
@@ -79,6 +84,14 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
       currentEpisodeStale: false,
     })),
   setEpisodeState: (result) => set({ episodeState: result }),
+  setProviderSummaries: (items) => set({ providerSummaries: items }),
+  clearCurrentEpisode: () =>
+    set({
+      currentEpisode: null,
+      episodeState: null,
+      currentEpisodeConfigRevision: null,
+      currentEpisodeStale: false,
+    }),
   setBusy: (busy) => set({ busy }),
   resetWorkbench: () =>
     set({
@@ -94,6 +107,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
       configRevision: 0,
       currentEpisodeConfigRevision: null,
       currentEpisodeStale: false,
+      providerSummaries: [],
       busy: false,
     }),
 }));

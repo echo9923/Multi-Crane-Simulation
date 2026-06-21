@@ -86,6 +86,9 @@ export function SceneView() {
         ensureStatic();
         ctrl.applyFrame(s.latestFrame);
       }
+      if (s.latestFrame !== prev.latestFrame && !s.latestFrame) {
+        buildStaticForState();
+      }
       if (s.config !== prev.config || s.manifest !== prev.manifest) {
         // Explicit episode reload: rebuild the static scene.
         buildStaticForState();

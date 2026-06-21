@@ -1,0 +1,452 @@
+description: "Curated scenario 2: ground cranes feed a podium roof staging zone, then an elevated crane serves the main tower."
+
+scenario:
+  schema_version: "1.0"
+  scenario_id: "curated_elevated_crane_transfer"
+  seed: 20260620
+
+  site:
+    coordinate_system: "ENU"
+    boundary:
+      x_min: -100
+      x_max: 100
+      y_min: -90
+      y_max: 100
+      z_min: 0
+      z_max: 120
+    buildings:
+      - building_id: "main_tower"
+        name: "Main Tower"
+        footprint:
+          - [-24, -8]
+          - [28, -8]
+          - [28, 54]
+          - [-24, 54]
+        floors: 28
+        floor_height_m: 3.6
+        base_z_m: 0
+      - building_id: "podium"
+        name: "Shared Podium"
+        footprint:
+          - [-56, -48]
+          - [48, -48]
+          - [48, -10]
+          - [-56, -10]
+        floors: 8
+        floor_height_m: 3.6
+        base_z_m: 0
+      - building_id: "east_tower"
+        name: "East Tower"
+        footprint:
+          - [42, 4]
+          - [78, 4]
+          - [78, 60]
+          - [42, 60]
+        floors: 18
+        floor_height_m: 3.6
+        base_z_m: 0
+    forbidden_zones: []
+    material_zones:
+      - zone_id: "ground_yard_west"
+        type: "box"
+        center: [-82, -10, 0]
+        size: [18, 14, 0.4]
+        z_range_m: [0, 0.4]
+        surface_z_m: 0
+        zone_role: "ground_yard"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 3
+        load_types: ["rebar_bundle", "formwork_panel"]
+      - zone_id: "truck_bed_east"
+        type: "box"
+        center: [78, -54, 1.2]
+        size: [20, 10, 0.4]
+        z_range_m: [1.2, 1.6]
+        surface_z_m: 1.2
+        zone_role: "truck_bed"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 3
+        load_types: ["mep_box", "rebar_bundle"]
+      - zone_id: "podium_staging_roof"
+        type: "box"
+        center: [-12, -30, 28.8]
+        size: [18, 12, 0.4]
+        z_range_m: [28.8, 29.2]
+        surface_z_m: 28.8
+        floor_id: "podium_roof"
+        building_id: "podium"
+        level_index: 8
+        zone_role: "temporary_platform"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        load_types: ["rebar_bundle", "mep_box", "formwork_panel"]
+    work_zones:
+      - zone_id: "podium_roof_storage"
+        type: "box"
+        center: [-4, -22, 28.8]
+        size: [18, 12, 0.4]
+        z_range_m: [28.8, 29.2]
+        surface_z_m: 28.8
+        floor_id: "podium_roof"
+        building_id: "podium"
+        level_index: 8
+        zone_role: "unloading_platform"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        accepted_load_types: ["rebar_bundle", "formwork_panel", "mep_box"]
+      - zone_id: "main_tower_floor_18"
+        type: "box"
+        center: [0, 24, 64.8]
+        size: [12, 10, 0.4]
+        z_range_m: [64.8, 65.2]
+        surface_z_m: 64.8
+        floor_id: "floor_18"
+        building_id: "main_tower"
+        level_index: 18
+        zone_role: "floor_slab"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        accepted_load_types: ["rebar_bundle", "formwork_panel"]
+      - zone_id: "main_tower_floor_24"
+        type: "box"
+        center: [12, 42, 86.4]
+        size: [12, 10, 0.4]
+        z_range_m: [86.4, 86.8]
+        surface_z_m: 86.4
+        floor_id: "floor_24"
+        building_id: "main_tower"
+        level_index: 24
+        zone_role: "floor_slab"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        accepted_load_types: ["mep_box", "rebar_bundle"]
+      - zone_id: "main_tower_roof"
+        type: "box"
+        center: [4, 44, 100.8]
+        size: [12, 10, 0.4]
+        z_range_m: [100.8, 101.2]
+        surface_z_m: 100.8
+        floor_id: "roof"
+        building_id: "main_tower"
+        level_index: 28
+        zone_role: "roof"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        accepted_load_types: ["mep_box"]
+      - zone_id: "east_tower_floor_12"
+        type: "box"
+        center: [60, 34, 43.2]
+        size: [12, 10, 0.4]
+        z_range_m: [43.2, 43.6]
+        surface_z_m: 43.2
+        floor_id: "floor_12"
+        building_id: "east_tower"
+        level_index: 12
+        zone_role: "floor_slab"
+        hook_target_offset_m: 0.5
+        approach_clearance_m: 4
+        accepted_load_types: ["rebar_bundle", "formwork_panel"]
+    forbidden_zone_policy:
+      mode: "task_only"
+      record_violation: true
+
+  load_types:
+    rebar_bundle:
+      display_name: "Rebar bundle"
+      weight_range_t: [1.2, 2.0]
+      size_m: [5.0, 0.8, 0.8]
+      shape: "box_long"
+    formwork_panel:
+      display_name: "Formwork panel"
+      weight_range_t: [0.8, 1.5]
+      size_m: [3.0, 1.6, 0.4]
+      shape: "panel"
+    mep_box:
+      display_name: "MEP equipment box"
+      weight_range_t: [0.6, 1.2]
+      size_m: [1.6, 1.2, 1.2]
+      shape: "box"
+
+  crane_models:
+    - model_id: "urban_flat_top_90m"
+      jib_length_m: 90
+      counter_jib_length_m: 20
+      mast_height_range_m: [45, 90]
+      max_load_t: 8
+      max_load_radius_m: 18
+      tip_load_t: 2.3
+      rated_moment_t_m: 300
+      slew_speed_max_deg_s: 2.0
+      slew_acc_max_deg_s2: 0.8
+      trolley_r_min_m: 5
+      trolley_r_max_m: 88
+      trolley_speed_max_m_s: 0.9
+      trolley_acc_max_m_s2: 0.7
+      cable_length_min_m: 0.5
+      cable_length_max_m: 105
+      hoist_speed_max_m_s: 1.2
+      hoist_acc_max_m_s2: 0.8
+      min_clearance_below_jib_m: 2
+      load_chart_points:
+        - {radius_m: 18, capacity_t: 8.0}
+        - {radius_m: 45, capacity_t: 5.0}
+        - {radius_m: 70, capacity_t: 3.2}
+        - {radius_m: 90, capacity_t: 2.3}
+    - model_id: "elevated_flat_top_70m"
+      jib_length_m: 70
+      counter_jib_length_m: 16
+      mast_height_range_m: [70, 90]
+      max_load_t: 7
+      max_load_radius_m: 16
+      tip_load_t: 2.0
+      rated_moment_t_m: 260
+      slew_speed_max_deg_s: 2.0
+      slew_acc_max_deg_s2: 0.8
+      trolley_r_min_m: 4
+      trolley_r_max_m: 68
+      trolley_speed_max_m_s: 0.9
+      trolley_acc_max_m_s2: 0.7
+      cable_length_min_m: 0.5
+      cable_length_max_m: 120
+      hoist_speed_max_m_s: 1.1
+      hoist_acc_max_m_s2: 0.8
+      min_clearance_below_jib_m: 2
+      load_chart_points:
+        - {radius_m: 16, capacity_t: 7.0}
+        - {radius_m: 40, capacity_t: 4.5}
+        - {radius_m: 60, capacity_t: 2.8}
+        - {radius_m: 70, capacity_t: 2.0}
+
+  layout:
+    mode: "manual"
+    num_cranes: 3
+    overlap_level: "high"
+    height_strategy: "mixed"
+    coverage_target: "dense_overlap"
+    slew_mode_default: "continuous"
+    max_sampling_attempts: 500
+
+  cranes:
+    - crane_id: "C1_ground_west"
+      model_id: "urban_flat_top_90m"
+      base: [-70, -32, 0]
+      mast_height_m: 56
+      theta_init_deg: 20
+      slew:
+        mode: "continuous"
+    - crane_id: "C2_ground_east"
+      model_id: "urban_flat_top_90m"
+      base: [82, -22, 0]
+      mast_height_m: 64
+      theta_init_deg: 180
+      slew:
+        mode: "continuous"
+    - crane_id: "C3_podium_roof"
+      model_id: "elevated_flat_top_70m"
+      base: [6, -16, 28.8]
+      mast_height_m: 84
+      theta_init_deg: 90
+      slew:
+        mode: "continuous"
+
+  tasks:
+    assignment_mode: "per_crane_queue"
+    generation_mode: "manual"
+    num_tasks_per_crane: 3
+    manual_tasks:
+      - task_id: "T1_C1_rebar_to_podium"
+        crane_id: "C1_ground_west"
+        task_type: "easy_task"
+        pickup_zone_id: "ground_yard_west"
+        dropoff_zone_id: "podium_roof_storage"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T2_C1_formwork_to_podium"
+        crane_id: "C1_ground_west"
+        task_type: "overlap_task"
+        pickup_zone_id: "ground_yard_west"
+        dropoff_zone_id: "podium_roof_storage"
+        load_type: "formwork_panel"
+        priority: "high"
+      - task_id: "T1_C2_mep_to_podium"
+        crane_id: "C2_ground_east"
+        task_type: "overlap_task"
+        pickup_zone_id: "truck_bed_east"
+        dropoff_zone_id: "podium_roof_storage"
+        load_type: "mep_box"
+        priority: "medium"
+      - task_id: "T2_C2_rebar_to_east12"
+        crane_id: "C2_ground_east"
+        task_type: "easy_task"
+        pickup_zone_id: "truck_bed_east"
+        dropoff_zone_id: "east_tower_floor_12"
+        load_type: "rebar_bundle"
+        priority: "high"
+      - task_id: "T1_C3_rebar_to_main18"
+        crane_id: "C3_podium_roof"
+        task_type: "overlap_task"
+        pickup_zone_id: "podium_staging_roof"
+        dropoff_zone_id: "main_tower_floor_18"
+        load_type: "rebar_bundle"
+        priority: "medium"
+      - task_id: "T2_C3_rebar_to_main24"
+        crane_id: "C3_podium_roof"
+        task_type: "overlap_task"
+        pickup_zone_id: "podium_staging_roof"
+        dropoff_zone_id: "main_tower_floor_24"
+        load_type: "rebar_bundle"
+        priority: "high"
+      - task_id: "T3_C3_mep_to_main_roof"
+        crane_id: "C3_podium_roof"
+        task_type: "stress_task"
+        pickup_zone_id: "podium_staging_roof"
+        dropoff_zone_id: "main_tower_roof"
+        load_type: "mep_box"
+        priority: "high"
+      - task_id: "T4_C3_formwork_to_main18"
+        crane_id: "C3_podium_roof"
+        task_type: "easy_task"
+        pickup_zone_id: "podium_staging_roof"
+        dropoff_zone_id: "main_tower_floor_18"
+        load_type: "formwork_panel"
+        priority: "medium"
+    queue_policy:
+      start_mode: "simultaneous"
+      initial_start_jitter_s: [0, 0]
+      inter_task_delay_s: [0, 1]
+    task_type_distribution:
+      easy_task: 1.0
+      overlap_task: 0.0
+      stress_task: 0.0
+    fallback_pickup_z_m: 0.0
+    fallback_dropoff_z_range_m: [28.8, 100.8]
+    attach_delay_s: [0.5, 1.0]
+    release_delay_s: [0.5, 1.0]
+    priority_distribution:
+      low: 0.0
+      medium: 0.5
+      high: 0.5
+    deadline_policy:
+      enabled: true
+      deadline_miss_is_task_failure: false
+    state_machine:
+      align_xy_threshold_m: 2.5
+      attach_xy_threshold_m: 1.5
+      attach_height_threshold_m: 1.0
+      release_xy_threshold_m: 1.8
+      release_height_threshold_m: 1.0
+      attach_speed_threshold:
+        slew_deg_s: 1.0
+        trolley_m_s: 0.25
+        hoist_m_s: 0.25
+      release_speed_threshold:
+        slew_deg_s: 1.0
+        trolley_m_s: 0.25
+        hoist_m_s: 0.25
+      safe_transport_height_m: 40.0
+      lift_clearance_m: 2.0
+      attach_stage_timeout_s: 1200
+      release_stage_timeout_s: 1200
+      task_no_progress_timeout_s: 1200
+      recovery_release_timeout_s: 1200
+      stage_timeout_policy:
+        fail_current_task: true
+        terminate_episode: false
+    recovery:
+      enabled: true
+      policy: "attempt_safe_release"
+      emergency_drop_zones: []
+
+  weather:
+    mode: "constant"
+    wind:
+      base_speed_m_s: 3
+      gust_speed_m_s: 5
+      direction_deg: 90
+    visibility:
+      base_level: "good"
+
+  risk:
+    geometry_envelope:
+      jib_radius_m: 0.75
+      hook_radius_m: 0.5
+      load_radius_m: 1.0
+    thresholds_m:
+      low: 6.0
+      medium: 4.0
+      high: 2.5
+      near_miss: 1.5
+    ttc_threshold_level: "high"
+    wind_safe_distance_factor:
+      enabled: true
+      extra_clearance_per_10m_s_wind_m: 0.5
+
+experiment:
+  schema_version: "1.0"
+  experiment_id: "curated_elevated_crane_transfer"
+  scenario_ref: "configs/curated_elevated_crane_transfer.yaml"
+  seed: 20260620
+  sim:
+    dt: 0.2
+    duration_s: 7200
+    min_duration_s: 0
+    stop_when_all_tasks_done: true
+    completion_cooldown_s: 2
+    physics_hz: 5
+    controller_hz: 5
+    llm_decision_interval_s: 1.0
+  risk_prompt_mode: "R1"
+  safety_mode: "S1"
+  runtime:
+    mode: "offline_batch"
+    replay_mode: false
+    replay_file: null
+    llm_cache_enabled: true
+  operators:
+    assignment_mode: "random"
+    profile_distribution:
+      normal: 1.0
+      conservative: 0.0
+      aggressive: 0.0
+      novice: 0.0
+      fatigued: 0.0
+  llm:
+    enabled: true
+    provider: "deepseek"
+    model: "deepseek-v4-flash"
+    base_url: "https://api.deepseek.com/v1"
+    api_key: null
+    temperature: 0.2
+    timeout_s: 30
+    max_retries: 1
+    max_consecutive_failures: 10
+    fallback_policy: "neutral_stop"
+    command_duration:
+      default_s: 1.0
+      min_s: 0.5
+      max_s: 3.0
+    scheduling:
+      mode: "offline_wait"
+      stale_command_max_hold_s: 0.5
+      max_concurrent_requests: 4
+    structured_output:
+      mode: "json_object"
+    context:
+      history_mode: "short"
+      recent_decisions_full: 8
+      include_task_history_summary: true
+      include_completed_task_summary: true
+      include_failed_request_history: true
+      include_risk_event_history: true
+      summarizer:
+        mode: "none"
+        provider: "same_as_operator"
+        fallback: "rule"
+        trigger:
+          every_n_decisions: 20
+          context_over_tokens: 12000
+  output:
+    run_root: "runs/curated-elevated-crane-transfer"
+    save_visual_frames: true
+    save_parquet: true
+    save_replay: true

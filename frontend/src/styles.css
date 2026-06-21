@@ -692,6 +692,69 @@
     min-width: 0;
   }
 
+  .workbench-scenario-card {
+    display: grid;
+    gap: 12px;
+  }
+
+  .workbench-scenario-card.selected {
+    border-color: var(--accent);
+  }
+
+  .workbench-scenario-card-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: start;
+  }
+
+  .workbench-scenario-card-main h2 {
+    margin: 0 0 5px;
+    font-size: 18px;
+  }
+
+  .workbench-scenario-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .button-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--panel-2);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .button-link:hover {
+    border-color: var(--accent);
+  }
+
+  .button-link.disabled {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+
+  .workbench-advanced-provider {
+    margin-top: 12px;
+  }
+
+  .workbench-advanced-provider summary,
+  .workbench-yaml-preview summary {
+    cursor: pointer;
+    font-weight: 600;
+  }
+
   .workbench-zone-card {
     min-width: 0;
     border: 1px solid var(--line);
@@ -713,6 +776,16 @@
     gap: 8px;
     position: sticky;
     top: 14px;
+  }
+
+  .workbench-yaml-preview {
+    display: grid;
+    gap: 10px;
+  }
+
+  .workbench-yaml-preview textarea {
+    min-height: 320px;
+    resize: vertical;
   }
 
   .workbench-yaml-label {

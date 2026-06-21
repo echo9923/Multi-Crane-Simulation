@@ -31,7 +31,7 @@ def _experiment_with(provider: str, *, api_key=None, api_key_env=None, enabled=T
     return ExperimentConfig.model_validate(raw)
 
 
-def test_inline_api_key_wins_over_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inline_api_key_is_not_a_runtime_source(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-secret-123456")
     experiment = _experiment_with(
         "deepseek",
@@ -39,25 +39,27 @@ def test_inline_api_key_wins_over_env_key(monkeypatch: pytest.MonkeyPatch) -> No
         api_key_env="DEEPSEEK_API_KEY",
     )
 
-    resolved = resolve_provider_secrets(experiment.llm)
+    with pytest.raises(SecretGovernanceError) as exc_info:
+        resolve_provider_secrets(experiment.llm)
 
-    assert resolved.runtime_secret.full_api_key == "sk-inline-secret-123456"
-    assert resolved.persisted_summary.key_source == "inline"
-    assert resolved.persisted_summary.key_env_name is None
+    assert exc_info.value.provider == "deepseek"
+    assert exc_info.value.key_source == "inline"
+    assert "local desktop API Key" in (exc_info.value.hint or "")
 
 
-def test_env_api_key_can_be_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_env_api_key_is_not_a_runtime_source(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIMAX_API_KEY", "mk-env-secret-123456")
     experiment = _experiment_with(
         "minimax", api_key=None, api_key_env="MINIMAX_API_KEY"
     )
 
-    resolved = resolve_provider_secrets(experiment.llm)
+    with pytest.raises(SecretGovernanceError) as exc_info:
+        resolve_provider_secrets(experiment.llm)
 
-    assert resolved.runtime_secret.full_api_key == "mk-env-secret-123456"
-    assert resolved.persisted_summary.key_source == "env"
-    assert resolved.persisted_summary.key_env_name == "MINIMAX_API_KEY"
-    assert resolved.persisted_summary.key_masked == "mk-e****3456"
+    assert exc_info.value.provider == "minimax"
+    assert exc_info.value.key_source == "none"
+    assert exc_info.value.missing_env is None
+    assert "环境变量" not in str(exc_info.value)
 
 
 def test_local_settings_key_can_be_resolved_when_env_is_missing() -> None:
@@ -122,8 +124,11 @@ def test_mask_api_key_never_returns_original_short_key() -> None:
 
 
 def test_resolved_config_and_metadata_do_not_include_runtime_secret(tmp_path: Path) -> None:
-    experiment = _experiment_with("deepseek", api_key="sk-inline-secret-123456")
-    provider_resolution = resolve_provider_secrets(experiment.llm)
+    experiment = _experiment_with("deepseek")
+    provider_resolution = resolve_provider_secrets(
+        experiment.llm,
+        local_api_key="sk-local-secret-123456",
+    )
     resolved = resolve_config(
         load_fixture("scenario_valid.yaml"),
         experiment,
@@ -142,12 +147,15 @@ def test_resolved_config_and_metadata_do_not_include_runtime_secret(tmp_path: Pa
         resolved.model_dump(mode="json")
     )
     assert provider_resolution.runtime_secret.full_api_key not in persisted
-    assert resolved.provider.key_masked == "sk-i****3456"
+    assert resolved.provider.key_masked == "sk-l****3456"
 
 
 def test_key_masked_does_not_affect_resolved_config_hash() -> None:
-    experiment = _experiment_with("deepseek", api_key="sk-inline-secret-123456")
-    provider_resolution = resolve_provider_secrets(experiment.llm)
+    experiment = _experiment_with("deepseek")
+    provider_resolution = resolve_provider_secrets(
+        experiment.llm,
+        local_api_key="sk-local-secret-123456",
+    )
     resolved = resolve_config(
         load_fixture("scenario_valid.yaml"),
         experiment,
@@ -170,6 +178,9 @@ def test_demo_config_with_suspicious_inline_key_is_rejected() -> None:
 
     assert "demo" in str(exc_info.value).lower()
     assert "sk-real-looking-secret-123456" not in str(exc_info.value)
+    assert "api_key_env" not in str(exc_info.value)
+    assert "environment variable" not in (exc_info.value.hint or "")
+    assert "local desktop API Key" in (exc_info.value.hint or "")
 
 
 def test_demo_loader_rejects_suspicious_inline_key(tmp_path: Path) -> None:

@@ -49,7 +49,6 @@ function providerForm(provider: DesktopLLMProviderSummary): ProviderForm {
 }
 
 function providerStatusText(provider: DesktopLLMProviderSummary): string {
-  if (!isRealProvider(provider.provider)) return "无需 API Key";
   if (provider.has_saved_key && provider.key_masked) {
     return `已保存 ${provider.key_masked}`;
   }
@@ -105,16 +104,19 @@ export function SettingsPage() {
     setProviderBusy("load");
     try {
       const result = await listDesktopLLMProviders();
-      setProviders(result.items);
+      const realProviders = result.items.filter((provider) =>
+        isRealProvider(provider.provider),
+      );
+      setProviders(realProviders);
       setForms((current) => {
         const next = { ...current };
-        for (const provider of result.items) {
+        for (const provider of realProviders) {
           next[provider.provider] = next[provider.provider] ?? providerForm(provider);
         }
         return next;
       });
-      if (!result.items.some((item) => item.provider === selectedProvider)) {
-        setSelectedProvider(result.items[0]?.provider ?? "siliconflow");
+      if (!realProviders.some((item) => item.provider === selectedProvider)) {
+        setSelectedProvider(realProviders[0]?.provider ?? "siliconflow");
       }
       setStatus("已加载 LLM Provider 设置。");
     } catch (error) {
@@ -297,7 +299,7 @@ export function SettingsPage() {
               </option>
             ))}
           </select>
-          <p className="workbench-help">mock/replay 不需要 API Key。</p>
+          <p className="workbench-help">普通运行只开放 DeepSeek、MiniMax 和 SiliconFlow。</p>
         </div>
 
         {selectedSummary ? (
@@ -334,9 +336,7 @@ export function SettingsPage() {
                   selectedSummary.has_saved_key ? "留空则使用已保存 Key 测试" : "输入 API Key"
                 }
               />
-              <p className="workbench-help">
-                环境变量默认名：{displayValue(selectedSummary.api_key_env)}
-              </p>
+              <p className="workbench-help">保存后下次打开软件会自动读取本机 Key。</p>
             </div>
 
             <div className="workbench-field">
@@ -411,7 +411,7 @@ export function SettingsPage() {
             ) : null}
           </div>
         ) : (
-          <p className="muted">该 provider 不需要 API Key，也不会发起真实供应商连通性测试。</p>
+          <p className="muted">请选择真实模型供应商后保存 API Key。</p>
         )}
       </div>
     </section>

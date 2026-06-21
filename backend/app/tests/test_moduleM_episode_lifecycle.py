@@ -19,8 +19,19 @@ from backend.app.tests.test_config_schema import FIXTURE_DIR, load_fixture
 
 
 @pytest.fixture(autouse=True)
-def _deepseek_env_for_demo_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-secret-123456")
+def _local_deepseek_secret_for_demo_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.api.desktop_llm_settings import save_provider_secret
+    from backend.app.schemas.enums import LLMProviderName
+
+    monkeypatch.chdir(tmp_path)
+    save_provider_secret(
+        tmp_path,
+        provider=LLMProviderName.DEEPSEEK,
+        api_key="sk-test-secret-123456",
+    )
 
 
 @dataclass
@@ -146,6 +157,8 @@ def _client_with_factory(
     project_root: Path | None = None,
     data_root: Path | None = None,
 ) -> TestClient:
+    if project_root is not None or data_root is not None:
+        _save_test_deepseek_secret(data_root or project_root)
     app = create_app()
     app.state.runner_factory = factory
     if project_root is not None:
@@ -153,6 +166,20 @@ def _client_with_factory(
     if data_root is not None:
         app.state.data_root = data_root
     return TestClient(app)
+
+
+def _save_test_deepseek_secret(root: Path | None) -> None:
+    if root is None:
+        return
+    from backend.app.api.desktop_llm_settings import save_provider_secret
+    from backend.app.schemas.enums import LLMProviderName
+
+    root.mkdir(parents=True, exist_ok=True)
+    save_provider_secret(
+        root,
+        provider=LLMProviderName.DEEPSEEK,
+        api_key="sk-test-secret-123456",
+    )
 
 
 def _start_payload(episode_id: str = "E-life", *, autostart: bool = False) -> dict[str, Any]:
@@ -422,6 +449,107 @@ def test_start_episode_uses_cwd_local_llm_secret_when_project_root_state_is_miss
     assert provider.key_masked == "sf-c****3456"
 
 
+def test_start_episode_rejects_env_only_real_provider_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "sf-env-secret-123456")
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory, project_root=tmp_path)
+    payload = _inline_payload("E-env-only")
+    payload["experiment"]["llm"].update(
+        {
+            "provider": "siliconflow",
+            "model": "deepseek-ai/DeepSeek-V4-Flash",
+            "api_key": None,
+            "api_key_env": "SILICONFLOW_API_KEY",
+            "base_url": "https://api.siliconflow.cn/v1",
+        }
+    )
+
+    response = client.post("/episodes/start", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "M_E_CONFIG_INVALID"
+    assert "本机 API Key" in response.json()["message"]
+    assert factory.created == []
+
+
+def test_start_episode_rejects_disabled_llm_without_saved_real_provider_key(
+    tmp_path: Path,
+) -> None:
+    factory = FakeRunnerFactory()
+    root_without_secret = tmp_path / "root-without-secret"
+    app = create_app()
+    app.state.runner_factory = factory
+    app.state.project_root = root_without_secret
+    app.state.data_root = root_without_secret
+    client = TestClient(app)
+    payload = _inline_payload("E-disabled-no-key")
+    payload["experiment"]["llm"].update(
+        {
+            "enabled": False,
+            "provider": "deepseek",
+            "model": "deepseek-chat",
+            "api_key": None,
+            "api_key_env": None,
+            "base_url": "https://api.deepseek.com/v1",
+        }
+    )
+
+    response = client.post("/episodes/start", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "M_E_CONFIG_INVALID"
+    assert "本机 API Key" in response.json()["message"]
+    assert factory.created == []
+
+
+@pytest.mark.parametrize("provider", ["mock", "replay"])
+def test_start_episode_rejects_no_key_demo_providers(provider: str, tmp_path: Path) -> None:
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory, project_root=tmp_path)
+    payload = _inline_payload(f"E-{provider}")
+    payload["experiment"]["llm"].update(
+        {
+            "provider": provider,
+            "model": f"{provider}-model",
+            "api_key": None,
+            "api_key_env": None,
+        }
+    )
+
+    response = client.post("/episodes/start", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "M_E_CONFIG_INVALID"
+    assert "不允许" in response.json()["message"]
+    assert factory.created == []
+
+
+def test_start_episode_rejects_public_local_runner(tmp_path: Path) -> None:
+    from backend.app.api.desktop_llm_settings import save_provider_secret
+    from backend.app.schemas.enums import LLMProviderName
+
+    save_provider_secret(
+        tmp_path,
+        provider=LLMProviderName.DEEPSEEK,
+        api_key="sk-local-secret-123456",
+    )
+    factory = FakeRunnerFactory()
+    client = _client_with_factory(factory, project_root=tmp_path)
+
+    response = client.post(
+        "/episodes/start",
+        json={**_inline_payload("E-local-runner"), "runner": "local"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "M_E_CONFIG_INVALID"
+    assert "production" in response.json()["message"]
+    assert factory.created == []
+
+
 def test_start_episode_rejects_ambiguous_config_sources() -> None:
     factory = FakeRunnerFactory()
     client = _client_with_factory(factory)
@@ -480,16 +608,10 @@ def test_start_episode_default_runner_autostart_exposes_run_dir_and_frame(
         },
     )
 
-    assert response.status_code == 200
-    data = response.json()["data"]
-    run_dir = Path(data["run_dir"])
-    assert run_dir.name == "E-default"
-    frame_path = run_dir / "visual" / "frames.jsonl"
-    assert frame_path.is_file()
-
-    state = client.get("/episodes/E-default/state")
-    assert state.status_code == 200
-    assert state.json()["data"]["last_frame"]["type"] == "sim_frame"
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "M_E_CONFIG_INVALID"
+    assert "production" in payload["message"]
 
 
 def test_default_runner_stop_before_autostart_writes_terminal_summary(
@@ -510,18 +632,10 @@ def test_default_runner_stop_before_autostart_writes_terminal_summary(
             },
         },
     )
-    assert response.status_code == 200
-
-    stop = client.post("/episodes/E-stop-cold/stop")
-
-    assert stop.status_code == 200
-    assert stop.json()["data"]["status"] == "stopped_by_user"
-    run_dir = Path(client.app.state.episode_service.get_handle("E-stop-cold").run_dir)
-    summary_path = run_dir / "metadata" / "episode_summary.json"
-    assert summary_path.is_file()
-    assert json.loads(summary_path.read_text(encoding="utf-8"))["episode_status"] == (
-        "stopped_by_user"
-    )
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "M_E_CONFIG_INVALID"
+    assert "production" in payload["message"]
 
 
 def test_production_runner_stop_before_first_frame_writes_terminal_summary(
@@ -563,8 +677,9 @@ def test_production_runner_stop_before_first_frame_writes_terminal_summary(
                         "llm_decision_interval_s": 0.2,
                     },
                     "llm": {
-                        "provider": "mock",
-                        "model": "mock-production",
+                        "provider": "deepseek",
+                        "model": "deepseek-chat",
+                        "base_url": "https://api.deepseek.com/v1",
                         "api_key_env": None,
                         "api_key": None,
                         "timeout_s": 1,

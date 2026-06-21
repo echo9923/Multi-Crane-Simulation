@@ -7,7 +7,6 @@ import yaml from "js-yaml";
 import type { EpisodeStartRequest, ScenarioValidateRequest } from "@/types/api";
 
 const SECRET_KEY = /(^|[_-])(api[-_]?key|apikey|token|secret|authorization|password)([_-]|$)/i;
-const SECRET_ALLOWLIST = new Set(["api_key_env"]);
 
 /** Recursively replace secret-like values with "***". */
 export function scrubSecrets(obj: unknown): unknown {
@@ -15,7 +14,7 @@ export function scrubSecrets(obj: unknown): unknown {
   if (obj && typeof obj === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-      out[k] = SECRET_ALLOWLIST.has(k) ? scrubSecrets(v) : SECRET_KEY.test(k) ? "***" : scrubSecrets(v);
+      out[k] = SECRET_KEY.test(k) ? "***" : scrubSecrets(v);
     }
     return out;
   }
@@ -45,10 +44,10 @@ export function toValidateRequest(parsed: unknown): ScenarioValidateRequest {
     const rec = parsed as Record<string, unknown>;
     if (rec.scenario !== undefined || rec.experiment !== undefined || rec.dataset !== undefined) {
       return {
-        scenario: rec.scenario != null ? (scrubSecrets(rec.scenario) as Record<string, unknown>) : null,
-        experiment: rec.experiment != null ? (scrubSecrets(rec.experiment) as Record<string, unknown>) : null,
+        scenario: rec.scenario != null ? (stripRuntimeSecrets(rec.scenario) as Record<string, unknown>) : null,
+        experiment: rec.experiment != null ? (stripRuntimeSecrets(rec.experiment) as Record<string, unknown>) : null,
         dataset: rec.dataset != null ? (scrubSecrets(rec.dataset) as Record<string, unknown>) : null,
-        overrides: scrubSecrets(rec.overrides ?? {}) as Record<string, unknown>,
+        overrides: stripRuntimeSecrets(rec.overrides ?? {}) as Record<string, unknown>,
       };
     }
     return { scenario: scrubSecrets(rec) as Record<string, unknown> };
@@ -57,7 +56,7 @@ export function toValidateRequest(parsed: unknown): ScenarioValidateRequest {
 }
 
 export function buildValidateRequest(text: string): ScenarioValidateRequest {
-  return toValidateRequest(scrubSecrets(parseConfigText(text)));
+  return toValidateRequest(parseConfigText(text));
 }
 
 export function toStartRequest(parsed: unknown): EpisodeStartRequest {
@@ -65,17 +64,30 @@ export function toStartRequest(parsed: unknown): EpisodeStartRequest {
     const rec = parsed as Record<string, unknown>;
     if (rec.scenario !== undefined || rec.experiment !== undefined || rec.dataset !== undefined) {
       return {
-        scenario: rec.scenario != null ? (rec.scenario as Record<string, unknown>) : null,
-        experiment: rec.experiment != null ? (rec.experiment as Record<string, unknown>) : null,
-        dataset: rec.dataset != null ? (rec.dataset as Record<string, unknown>) : null,
-        overrides: (rec.overrides ?? {}) as Record<string, unknown>,
+        scenario: rec.scenario != null ? (stripRuntimeSecrets(rec.scenario) as Record<string, unknown>) : null,
+        experiment: rec.experiment != null ? (stripRuntimeSecrets(rec.experiment) as Record<string, unknown>) : null,
+        dataset: rec.dataset != null ? (stripRuntimeSecrets(rec.dataset) as Record<string, unknown>) : null,
+        overrides: stripRuntimeSecrets(rec.overrides ?? {}) as Record<string, unknown>,
       };
     }
-    return { scenario: rec };
+    return { scenario: stripRuntimeSecrets(rec) as Record<string, unknown> };
   }
   throw new Error("config root must be an object");
 }
 
 export function buildStartRequest(text: string): EpisodeStartRequest {
   return toStartRequest(parseConfigText(text));
+}
+
+function stripRuntimeSecrets(obj: unknown): unknown {
+  if (Array.isArray(obj)) return obj.map(stripRuntimeSecrets);
+  if (obj && typeof obj === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      if (SECRET_KEY.test(key)) continue;
+      out[key] = stripRuntimeSecrets(value);
+    }
+    return out;
+  }
+  return obj;
 }

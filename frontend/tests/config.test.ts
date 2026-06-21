@@ -21,13 +21,13 @@ describe("scrubSecrets", () => {
     expect((out.scenario.site as Record<string, unknown>).name).toBe("demo");
   });
 
-  it("keeps api_key_env visible while masking raw api_key", () => {
+  it("masks api_key_env with other key-like fields", () => {
     const out = scrubSecrets({
       api_key: "sk-real",
       api_key_env: "DEEPSEEK_API_KEY",
     }) as Record<string, unknown>;
     expect(out.api_key).toBe("***");
-    expect(out.api_key_env).toBe("DEEPSEEK_API_KEY");
+    expect(out.api_key_env).toBe("***");
   });
 
   it("walks arrays", () => {
@@ -52,10 +52,10 @@ describe("parseConfigText", () => {
 });
 
 describe("toValidateRequest / buildValidateRequest", () => {
-  it("splits a combined config and scrubs secrets", () => {
+  it("splits a combined config and strips runtime key fields", () => {
     const req = toValidateRequest({ scenario: { site: {} }, experiment: { api_key: "k", model: "m" } });
     expect(req.scenario).toEqual({ site: {} });
-    expect((req.experiment as Record<string, unknown>).api_key).toBe("***");
+    expect((req.experiment as Record<string, unknown>).api_key).toBeUndefined();
     expect((req.experiment as Record<string, unknown>).model).toBe("m");
   });
 
@@ -70,12 +70,32 @@ describe("toValidateRequest / buildValidateRequest", () => {
     expect(() => toValidateRequest("hello")).toThrow();
   });
 
-  it("buildValidateRequest parses YAML + scrubs in one step", () => {
+  it("buildValidateRequest parses YAML and strips runtime key fields", () => {
     const req = buildValidateRequest(
       "scenario:\n  site:\n    coordinate_system: ENU\nexperiment:\n  api_key: secret123\n  model: m\n",
     );
     expect((req.scenario as Record<string, unknown>).site).toBeDefined();
-    expect((req.experiment as Record<string, unknown>).api_key).toBe("***");
+    expect((req.experiment as Record<string, unknown>).api_key).toBeUndefined();
     expect((req.experiment as Record<string, unknown>).model).toBe("m");
+  });
+
+  it("strips runtime key fields from validation payloads", () => {
+    const req = buildValidateRequest(
+      [
+        "scenario:",
+        "  scenario_id: curated",
+        "experiment:",
+        "  llm:",
+        "    provider: deepseek",
+        "    model: deepseek-chat",
+        "    api_key: sk-real-secret-123456",
+        "    api_key_env: DEEPSEEK_API_KEY",
+      ].join("\n"),
+    );
+
+    const llm = ((req.experiment as Record<string, unknown>).llm ??
+      {}) as Record<string, unknown>;
+    expect(llm.api_key).toBeUndefined();
+    expect(llm.api_key_env).toBeUndefined();
   });
 });
