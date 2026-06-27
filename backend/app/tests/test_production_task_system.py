@@ -159,3 +159,33 @@ def test_production_task_system_refreshes_no_progress_clock_on_stage_progress() 
 
     assert result.states[0].task_stage == "align_pickup"
     assert system.failure_runtime[task.task_id].last_progress_at_s == 30.0
+
+
+def test_production_task_system_refreshes_no_progress_clock_on_hook_progress() -> None:
+    scenario, crane = _scenario_and_crane()
+    system = ProductionTaskSystem(scenario=scenario, crane_configs=[crane])
+    task = _task()
+    queue = schedule_task_queues.create_queue("C1", [task]).model_copy(
+        update={"active_task_id": task.task_id, "next_task_index": 1}
+    )
+    system.failure_runtime[task.task_id] = TaskFailureRuntimeState(
+        last_progress_at_s=0.0,
+    )
+    first = _state(crane, stage="move_to_pickup", x=16.0, y=0.0, z=10.0)
+    second = _state(crane, stage="move_to_pickup", x=16.5, y=0.0, z=10.0)
+
+    primed = system.update_after_physics(
+        states=[first],
+        commands={},
+        time_s=10.0,
+        task_queues=[queue],
+    )
+    result = system.update_after_physics(
+        states=[second],
+        commands={},
+        time_s=20.0,
+        task_queues=primed.queues,
+    )
+
+    assert result.states[0].task_stage == "move_to_pickup"
+    assert system.failure_runtime[task.task_id].last_progress_at_s == 20.0
